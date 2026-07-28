@@ -1,0 +1,151 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python:
+    name: Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    env:
+      PLATFORM_ALLOW_HOST_SCRIPT_EXECUTION: "false"
+      PLATFORM_ALLOW_TEST_EXECUTION: "false"
+      PLATFORM_CONFIG_PATH: config.example.json
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version:
+          - "3.12"
+          - "3.13"
+          - "3.14"
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install Python dependencies
+        run: python -m pip install --requirement requirements.txt
+
+      - name: Compile Python sources and tests
+        run: python -m compileall -q app.py test_plan_viewer tests
+
+      - name: Run Python tests
+        run: python -m unittest discover -s tests
+
+  javascript:
+    name: Node.js ${{ matrix.node-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version:
+          - "22"
+          - "24"
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+          cache-dependency-path: project-template/package-lock.json
+          package-manager-cache: true
+
+      - name: Install locked JavaScript dependencies
+        run: >-
+          npm ci
+          --prefix project-template
+          --ignore-scripts
+          --no-audit
+          --no-fund
+
+      - name: Audit JavaScript dependencies
+        run: >-
+          npm audit
+          --prefix project-template
+          --omit=optional
+          --audit-level=high
+
+      - name: Check JavaScript syntax
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          while IFS= read -r -d '' file; do
+            node --check "${file}" >/dev/null
+          done < <(find static tests/js -type f -name '*.js' -print0)
+
+      - name: Run JavaScript VM tests
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          for test_file in tests/js/*.vm.js; do
+            node "${test_file}"
+          done
+
+  container:
+    name: Linux container
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Validate shell scripts
+        run: >-
+          shellcheck deploy/entrypoint.sh deploy/healthcheck.sh
+          project-template/.opencode/run-playwright-mcp.sh
+
+      - name: Validate Compose configuration
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          PLATFORM_SESSION_SECRET="$(openssl rand -hex 32)"
+          PLATFORM_ADMIN_PASSWORD="$(openssl rand -hex 24)"
+          PLATFORM_DB_PASSWORD="$(openssl rand -hex 24)"
+          MYSQL_ROOT_PASSWORD="$(openssl rand -hex 24)"
+          OPENCODE_SERVER_PASSWORD="$(openssl rand -hex 24)"
+          export PLATFORM_SESSION_SECRET PLATFORM_ADMIN_PASSWORD
+          export PLATFORM_DB_PASSWORD MYSQL_ROOT_PASSWORD
+          export OPENCODE_SERVER_PASSWORD
+          docker compose -f deploy/compose.yaml config --quiet
+          test -f deploy/config.example.json
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build Linux image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: deploy/Dockerfile
+          platforms: linux/amd64
+          push: false
+          tags: playwright-test-platform:ci
+          cache-from: type=gha,scope=playwright-test-platform
+          cache-to: type=gha,mode=max,scope=playwright-test-platform

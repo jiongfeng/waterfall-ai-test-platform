@@ -1,0 +1,149 @@
+    <div class="modal-backdrop hidden" id="requirementModuleDetailModal" role="dialog" aria-modal="true" aria-labelledby="requirementModuleDetailTitle">
+      <div class="modal requirement-module-detail-modal">
+        <div class="modal-header">
+          <div>
+            <p class="modal-label">模块候选</p>
+            <h2 id="requirementModuleDetailTitle">模块详情</h2>
+            <p class="modal-description" id="requirementModuleDetailSubtitle"></p>
+          </div>
+          <button class="modal-close" id="requirementModuleDetailClose" type="button" aria-label="关闭">×</button>
+        </div>
+        <div class="modal-body requirement-module-detail-body" id="requirementModuleDetailBody"></div>
+      </div>
+    </div>
+
+    <div class="modal-backdrop hidden" id="planGenerationModal" role="dialog" aria-modal="true" aria-labelledby="planGenerationTitle">
+      <div class="modal">
+        <div class="modal-header">
+          <div>
+            <p class="modal-label">测试计划生成</p>
+            <h2 id="planGenerationTitle">新增计划</h2>
+          </div>
+          <button class="modal-close" id="planGenerationClose" type="button" aria-label="关闭">×</button>
+        </div>
+
+        <div class="modal-body">
+          <div class="form-field">
+            <div class="form-label-row">
+              <span>模块名</span>
+              <button class="inline-link-button" id="addModuleNameLink" type="button">新增模块名</button>
+            </div>
+            <select id="newModuleNameSelect"></select>
+            <input
+              class="hidden"
+              id="newModuleName"
+              type="text"
+              autocomplete="off"
+              placeholder="例如：行社人员每日清收"
+            />
+          </div>
+
+          <label class="form-field">
+            <span>计划名</span>
+            <input id="newPlanName" type="text" autocomplete="off" placeholder="默认与模块名一致" />
+          </label>
+
+          <div class="form-field">
+            <span>生成方式</span>
+            <div class="choice-group" role="radiogroup" aria-label="生成方式">
+              <label class="choice-option">
+                <input id="planModeMultiple" name="planGenerationMode" type="radio" value="multiple" checked />
+                <span>多个单用例计划</span>
+              </label>
+              <label class="choice-option">
+                <input id="planModeSingle" name="planGenerationMode" type="radio" value="single" />
+                <span>单个综合计划</span>
+              </label>
+            </div>
+          </div>
+
+          <label class="form-field">
+            <span>档位模板</span>
+            <select id="planCoverageProfile"></select>
+            <small id="planCoverageDescription"></small>
+          </label>
+
+          <label class="form-field">
+            <span>生成测试计划的语句 <small id="planPromptCustomized"></small></span>
+            <textarea id="planPrompt" spellcheck="false"></textarea>
+          </label>
+          <div class="modal-inline-actions">
+            <button class="secondary-button" id="planPromptReset" type="button">恢复当前档位模板</button>
+          </div>
+          <p class="modal-description">平台会只读追加保存路径、结构化输出、中文命名和数据库基线等技术约束。</p>
+
+          <div class="target-path-box">
+            <span>测试计划保存位置</span>
+            <code id="planTargetPath"></code>
+          </div>
+
+          <div class="job-output hidden" id="planJobOutput">
+            <div class="job-status" id="planJobStatus">任务进行中</div>
+            <pre id="planJobLogs"></pre>
+          </div>
+        </div>
+
+        <div class="modal-footer">
+          <button class="secondary-button" id="planGenerationCancel" type="button">取消</button>
+          <button class="primary-button" id="planGenerationSubmit" type="button">确认生成</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-backdrop hidden" id="requirementBatchPlanModal" role="dialog" aria-modal="true" aria-labelledby="requirementBatchPlanTitle">
+      <div class="modal">
+        <div class="modal-header">
+          <div>
+            <p class="modal-label">批量生成计划</p>
+            <h2 id="requirementBatchPlanTitle">确认批量生成</h2>
+          </div>
+          <button class="modal-close" id="requirementBatchPlanClose" type="button" aria-label="关闭">×</button>
+        </div>
+        <div class="modal-body">
+          <p id="requirementBatchPlanSummary"></p>
+          <label class="form-field">
+            <span>档位模板</span>
+            <select id="requirementBatchCoverageProfile"></select>
+          </label>
+          <label class="form-field">
+            <span>批量计划生成策略语句 <small id="requirementBatchPromptCustomized"></small></span>
+            <textarea id="requirementBatchCoveragePrompt" spellcheck="false"></textarea>
+          </label>
+          <button class="secondary-button" id="requirementBatchPromptReset" type="button">恢复当前档位模板</button>
+        </div>
+        <div class="modal-footer">
+          <button class="secondary-button" id="requirementBatchPlanCancel" type="button">取消</button>
+          <button class="primary-button" id="requirementBatchPlanSubmit" type="button">确认生成</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-backdrop hidden" id="scriptGenerationModal" role="dialog" aria-modal="true" aria-labelledby="scriptGenerationTitle">
+      <div class="modal">
+        <div class="modal-header">
+          <div>
+            <p class="modal-label">测试脚本生成</p>
+            <h2 id="scriptGenerationTitle">生成脚本</h2>
+          </div>
+          <button class="modal-close" id="scriptGenerationClose" type="button" aria-label="关闭">×</button>
+        </div>
+
+        <div class="modal-body">
+          <label class="form-field">
+            <span>生成测试脚本的语句</span>
+            <textarea id="scriptPromptFixed" spellcheck="false"></textarea>
+            <textarea id="scriptPromptNote" spellcheck="false"></textarea>
+          </label>
+
+          <div class="job-output hidden">
+            <div class="job-status" id="scriptJobStatus">任务进行中</div>
+            <pre id="scriptJobLogs"></pre>
+          </div>
+        </div>
+
+        <div class="modal-footer">
+          <button class="secondary-button" id="scriptGenerationCancel" type="button">取消</button>
+          <button class="primary-button" id="scriptGenerationSubmit" type="button">确认生成</button>
+        </div>
+      </div>
+    </div>

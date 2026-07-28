@@ -1,0 +1,587 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="csrf-token" content="{{ csrf_token }}" />
+    <title>测试资源编辑器</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/features/agent.css') }}" />
+  </head>
+  <body>
+    <div class="app-shell" id="appShell">
+      <header class="global-topbar">
+        <div class="topbar-brand">
+          <span class="topbar-brand-mark" aria-hidden="true">测</span>
+          <span class="topbar-brand-name">测试平台 DevOps</span>
+        </div>
+
+        <div class="topbar-project">
+          <span class="topbar-label">当前项目</span>
+          <div class="project-picker">
+            <select class="project-select" id="projectSelect" title="当前项目" aria-label="当前项目"></select>
+            <button class="secondary-button compact-button" id="createProjectButton" type="button">新增项目</button>
+            <button class="secondary-button compact-button hidden" id="exportProjectButton" type="button">导出项目</button>
+            <button class="secondary-button compact-button hidden" id="importProjectButton" type="button">导入项目</button>
+          </div>
+        </div>
+
+        <div class="account-actions">
+          <span class="account-avatar" aria-hidden="true">A</span>
+          <span id="currentUserName">未登录</span>
+          <button class="secondary-button account-logout" id="logoutButton" type="button">退出</button>
+        </div>
+      </header>
+
+      <div class="workspace-shell">
+        <nav class="nav-rail" id="navRail" aria-label="快捷导航">
+          <button class="nav-rail-button" id="requirementsNav" type="button" data-section="requirements" title="需求" aria-label="需求">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M6 3h9l3 3v15H6z" />
+              <path d="M14 3v4h4" />
+              <path d="M9 11h6M9 15h6M9 19h4" />
+            </svg>
+            <span>需求</span>
+          </button>
+          <button class="nav-rail-button active" id="plansNav" type="button" data-section="plans" title="测试计划" aria-label="测试计划">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M5 4h14v16H5z" />
+              <path d="M8 8h8M8 12h8M8 16h5" />
+            </svg>
+            <span>计划</span>
+          </button>
+          <button class="nav-rail-button" id="scriptsNav" type="button" data-section="scripts" title="测试脚本" aria-label="测试脚本">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M8 8 4 12l4 4" />
+              <path d="m16 8 4 4-4 4" />
+              <path d="m14 5-4 14" />
+            </svg>
+            <span>脚本</span>
+          </button>
+          <button class="nav-rail-button" id="testSuitesNav" type="button" data-section="testSuites" title="测试集" aria-label="测试集">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M4 6h16M4 12h16M4 18h16" />
+              <path d="M7 6v12" />
+            </svg>
+            <span>测试集</span>
+          </button>
+          <button class="nav-rail-button hidden" id="agentNav" type="button" data-section="agent" title="Agent 自动测试" aria-label="Agent 自动测试">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 3v4" />
+              <path d="M8 7h8a4 4 0 0 1 4 4v5a4 4 0 0 1-4 4H8a4 4 0 0 1-4-4v-5a4 4 0 0 1 4-4z" />
+              <path d="M9 13h.01M15 13h.01" />
+              <path d="M10 17h4" />
+            </svg>
+            <span>Agent</span>
+          </button>
+          <button class="nav-rail-button hidden" id="projectSettingsNav" type="button" data-section="projectSettings" title="项目配置" aria-label="项目配置">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8z" />
+              <path d="M4 12h2M18 12h2M12 4v2M12 18v2M6.3 6.3l1.4 1.4M16.3 16.3l1.4 1.4M17.7 6.3l-1.4 1.4M7.7 16.3l-1.4 1.4" />
+            </svg>
+            <span>配置</span>
+          </button>
+          <div class="nav-rail-spacer" aria-hidden="true"></div>
+          <button class="nav-rail-button hidden" id="usersNav" type="button" data-section="users" title="用户管理" aria-label="用户管理">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8z" />
+              <path d="M4 21a8 8 0 0 1 16 0" />
+            </svg>
+            <span>用户</span>
+          </button>
+          <button class="nav-rail-button hidden" id="rolesNav" type="button" data-section="roles" title="角色管理" aria-label="角色管理">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 3 5 6v5c0 4.2 2.8 8.1 7 10 4.2-1.9 7-5.8 7-10V6z" />
+              <path d="m9 12 2 2 4-4" />
+            </svg>
+            <span>角色</span>
+          </button>
+        </nav>
+
+        <aside class="sidebar">
+          <div class="sidebar-header">
+            <h1 id="appTitle">测试资源</h1>
+            <button class="icon-button" id="refreshButton" type="button" title="刷新列表" aria-label="刷新列表">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M20 12a8 8 0 0 1-13.5 5.8" />
+                <path d="M4 12A8 8 0 0 1 17.5 6.2" />
+                <path d="M16 3h3v3" />
+                <path d="M8 21H5v-3" />
+              </svg>
+            </button>
+          </div>
+          <div class="search-wrap">
+            <input id="moduleSearch" type="search" placeholder="搜索模块" autocomplete="off" />
+          </div>
+          <div class="sidebar-action" id="planCreateWrap">
+            <button class="create-module-button" id="createModuleButton" type="button">新增计划</button>
+          </div>
+          <div class="sidebar-action hidden" id="requirementUploadWrap">
+            <button class="create-module-button" id="uploadRequirementButton" type="button">上传需求</button>
+            <input class="visually-hidden-file" id="requirementFileInput" type="file" accept=".md,text/markdown,text/plain" />
+          </div>
+          <nav class="module-list" id="moduleList" aria-label="资源列表"></nav>
+        </aside>
+
+        <main class="content">
+          <div class="topbar content-header">
+            <div class="content-heading">
+              <p class="path-label" id="filePath">未选择文件</p>
+              <h2 id="moduleTitle">请选择模块</h2>
+            </div>
+            <div class="actions">
+              <div class="requirement-header-actions hidden" id="requirementHeaderActions">
+                <button class="secondary-button" id="importInventoryButton" type="button">导入 inventory</button>
+                <button class="primary-button" id="analyzeRequirementButton" type="button">解析需求</button>
+              </div>
+              <button class="secondary-button hidden" id="cancelButton" type="button">取消</button>
+              <button class="secondary-button hidden" id="generateScriptButton" type="button" disabled>生成脚本</button>
+              <button class="secondary-button hidden" id="recordScriptButton" type="button" disabled>录制脚本</button>
+              <button class="secondary-button hidden" id="executeScriptButton" type="button" disabled>执行脚本</button>
+              <button class="secondary-button hidden" id="runScriptButton" type="button" disabled>修复脚本</button>
+              <button class="primary-button" id="editSaveButton" type="button" disabled>编辑</button>
+            </div>
+          </div>
+
+          <div class="notice hidden" id="notice" role="status"></div>
+
+          <section class="viewer-area" id="viewerArea">
+          <div class="empty-state" id="emptyState">
+            <h3>暂无测试计划</h3>
+            <p>左侧会显示 specs 目录下符合规则的模块。</p>
+          </div>
+          <section class="admin-panel hidden" id="userAdminPanel"></section>
+          <section class="admin-panel hidden" id="roleAdminPanel"></section>
+          <section class="project-settings-panel hidden" id="projectSettingsPanel"></section>
+{% include "partials/agent_panel.html" %}
+          <div class="script-tabs hidden" id="scriptTabs" role="tablist" aria-label="测试脚本内容">
+            <button class="content-tab active" id="scriptContentTab" type="button" role="tab" aria-selected="true">脚本</button>
+            <button class="content-tab" id="executionRecordTab" type="button" role="tab" aria-selected="false">执行记录</button>
+            <button class="content-tab" id="repairRecordTab" type="button" role="tab" aria-selected="false">修复记录</button>
+          </div>
+          <div class="script-tabs hidden" id="planTabs" role="tablist" aria-label="测试计划内容">
+            <button class="content-tab active" id="planContentTab" type="button" role="tab" aria-selected="true">计划</button>
+            <button class="content-tab" id="planGenerationRecordTab" type="button" role="tab" aria-selected="false">生成测试计划记录</button>
+            <button class="content-tab" id="planScriptGenerationRecordTab" type="button" role="tab" aria-selected="false">生成脚本记录</button>
+            <button class="content-tab" id="planRelatedScriptsTab" type="button" role="tab" aria-selected="false">相关脚本</button>
+          </div>
+          <section class="test-suite-panel hidden" id="testSuiteListPanel">
+            <div class="test-suite-toolbar">
+              <div>
+                <h3>测试集列表</h3>
+                <p id="testSuiteListSummary">共 0 个测试集</p>
+              </div>
+              <button class="primary-button" id="createTestSuiteButton" type="button">新增测试集</button>
+            </div>
+            <div class="module-script-table-wrap">
+              <table class="module-script-table test-suite-table">
+                <thead>
+                  <tr>
+                    <th>测试集名字</th>
+                    <th>创建日期</th>
+                    <th>结果</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody id="testSuiteTableBody"></tbody>
+              </table>
+            </div>
+          </section>
+          <section class="test-suite-detail hidden" id="testSuiteDetailPanel">
+            <div class="test-suite-toolbar">
+              <div>
+                <h3 id="testSuiteDetailTitle">全部脚本</h3>
+                <p id="testSuiteDetailSummary">共 0 条脚本</p>
+              </div>
+              <div class="test-suite-actions">
+                <button class="secondary-button" id="backToTestSuiteListButton" type="button">返回列表</button>
+                <button class="primary-button" id="openAddSuiteScriptsButton" type="button">添加</button>
+                <button class="primary-button" id="executeTestSuiteButton" type="button">执行</button>
+              </div>
+            </div>
+            <div class="script-tabs test-suite-tabs" id="testSuiteTabs" role="tablist" aria-label="测试集详情">
+              <button class="content-tab active" id="testSuiteScriptsTab" type="button" role="tab" aria-selected="true">脚本</button>
+              <button class="content-tab" id="testSuiteExecutionTab" type="button" role="tab" aria-selected="false">执行记录</button>
+            </div>
+            <section class="test-suite-scripts-content" id="testSuiteScriptsContent">
+              <div class="test-suite-scripts-layout">
+                <aside class="test-suite-module-panel">
+                  <div class="test-suite-module-title">模块</div>
+                  <div class="test-suite-module-list" id="testSuiteModuleList"></div>
+                </aside>
+                <div class="test-suite-script-table-panel">
+                  <div class="module-script-table-wrap">
+                    <table class="module-script-table test-suite-script-table">
+                      <thead>
+                        <tr>
+                          <th>脚本名称</th>
+                          <th>模块</th>
+                          <th>操作</th>
+                        </tr>
+                      </thead>
+                      <tbody id="testSuiteScriptTableBody"></tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            </section>
+            <section class="test-suite-execution-record hidden" id="testSuiteExecutionRecord">
+              <div class="test-suite-execution-layout">
+                <aside class="test-suite-execution-history-panel">
+                  <div class="test-suite-module-title">历史执行记录</div>
+                  <div class="test-suite-execution-history-list" id="testSuiteExecutionHistoryList"></div>
+                </aside>
+                <div class="test-suite-execution-result-panel">
+                  <div class="test-suite-execution-result-header">
+                    <div>
+                      <h3 id="testSuiteExecutionResultTitle">执行结果</h3>
+                      <p id="testSuiteExecutionResultSummary">请选择一条执行记录。</p>
+                    </div>
+                    <a class="secondary-button compact-button hidden" id="testSuiteExecutionReportLink" href="#" target="_blank" rel="noreferrer">打开报告</a>
+                  </div>
+                  <div class="execution-empty" id="testSuiteExecutionEmpty">
+                    <h3>暂无测试集执行记录</h3>
+                    <p>点击右上角“执行”后，这里会展示历史执行记录和脚本结果。</p>
+                  </div>
+                  <div class="module-script-table-wrap hidden" id="testSuiteExecutionResultWrap">
+                    <table class="module-script-table test-suite-execution-result-table">
+                      <thead>
+                        <tr>
+                          <th>脚本名字</th>
+                          <th>结果</th>
+                          <th>报告</th>
+                          <th>视频</th>
+                        </tr>
+                      </thead>
+                      <tbody id="testSuiteExecutionResultTableBody"></tbody>
+                    </table>
+                  </div>
+                  <details class="test-suite-execution-log-panel hidden" id="testSuiteExecutionLogPanel">
+                    <summary>
+                      <span>执行日志</span>
+                      <span id="testSuiteExecutionLogStatus"></span>
+                    </summary>
+                    <pre class="execution-log" id="testSuiteExecutionLog"></pre>
+                  </details>
+                </div>
+              </div>
+            </section>
+          </section>
+          <section class="generation-record hidden" id="planGenerationRecord">
+            <div class="generation-record-empty" id="planGenerationRecordEmpty">
+              <h3>暂无生成测试计划记录</h3>
+              <p>通过“新增计划”生成测试计划后，这里会展示最近一次任务记录。</p>
+            </div>
+
+            <div class="generation-record-content hidden" id="planGenerationRecordContent">
+              <label class="form-field">
+                <span>生成测试计划的语句</span>
+                <textarea id="planRecordPrompt" spellcheck="false" readonly></textarea>
+              </label>
+
+              <div class="target-path-box">
+                <span>测试计划保存位置</span>
+                <code id="planRecordTargetPath"></code>
+              </div>
+
+              <div class="job-output hidden" id="planRecordJobOutput">
+                <div class="job-status" id="planRecordJobStatus">任务进行中</div>
+                <pre id="planRecordJobLogs"></pre>
+                <div class="repair-duration hidden" id="planRecordDuration">生成耗时：00:00</div>
+              </div>
+            </div>
+          </section>
+          <section class="generation-record hidden" id="planScriptGenerationRecord">
+            <label class="form-field">
+              <span>生成测试脚本的语句</span>
+              <textarea id="planScriptPromptFixed" spellcheck="false"></textarea>
+              <textarea id="planScriptPromptNote" spellcheck="false"></textarea>
+            </label>
+
+            <div class="target-path-box">
+              <span>测试脚本保存位置</span>
+              <code id="planScriptRecordTargetPath"></code>
+            </div>
+
+            <div class="script-repair-actions">
+              <button class="primary-button" id="planScriptGenerationSubmit" type="button">确认生成</button>
+            </div>
+
+            <div class="job-output hidden" id="planScriptJobOutput">
+              <div class="job-status" id="planScriptJobStatus">任务进行中</div>
+              <pre id="planScriptJobLogs"></pre>
+              <div class="repair-duration hidden" id="planScriptDuration">生成耗时：00:00</div>
+            </div>
+          </section>
+          <section class="module-script-panel hidden" id="modulePlanPanel">
+            <div class="module-script-toolbar" id="modulePlanToolbar">
+              <div class="module-script-summary" id="modulePlanSummary">共 0 条计划</div>
+              <div class="module-script-actions" id="modulePlanActions">
+                <button class="secondary-button" id="modulePlanBulkToggle" type="button">批量操作</button>
+              </div>
+              <div class="module-script-actions hidden" id="modulePlanBulkActions">
+                <span class="module-selection-count" id="modulePlanSelectionCount">已选择 0 条</span>
+                <button class="secondary-button" id="modulePlanBulkCancel" type="button">取消</button>
+                <button class="primary-button" id="modulePlanBulkGenerate" type="button" disabled>批量生成脚本</button>
+                <button class="secondary-button danger-button" id="modulePlanBulkDelete" type="button" disabled>批量删除</button>
+              </div>
+            </div>
+            <div class="module-script-table-wrap">
+              <table class="module-script-table">
+                <thead>
+                  <tr>
+                    <th class="module-select-cell hidden" id="modulePlanSelectHeader">
+                      <input id="modulePlanSelectAll" type="checkbox" aria-label="选择全部计划" />
+                    </th>
+                    <th>计划名称</th>
+                    <th>脚本生成状态</th>
+                    <th>对应脚本</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody id="modulePlanTableBody"></tbody>
+              </table>
+            </div>
+          </section>
+          <section class="module-repair-record hidden" id="modulePlanScriptBatchRecord">
+            <div class="module-repair-record-header hidden" id="modulePlanScriptBatchHeader">
+              <div class="module-repair-summary" id="modulePlanScriptBatchSummary">批量生成脚本进行中</div>
+            </div>
+            <div class="execution-empty" id="modulePlanScriptBatchEmpty">
+              <h3>暂无批量生成脚本记录</h3>
+              <p>在计划 tab 选择单用例计划并批量生成脚本后，这里会展示每条计划的生成状态和实时输出。</p>
+            </div>
+            <div class="module-repair-list hidden" id="modulePlanScriptBatchList"></div>
+          </section>
+          <section class="asset-info-panel hidden" id="assetInfoPanel"></section>
+          <section class="module-script-panel hidden" id="planRelatedScriptsPanel">
+            <div class="module-script-toolbar">
+              <div class="module-script-summary" id="planRelatedScriptsSummary">共 0 条相关脚本</div>
+            </div>
+            <div class="module-script-table-wrap">
+              <table class="module-script-table">
+                <thead>
+                  <tr>
+                    <th>脚本名称</th>
+                    <th>最近执行</th>
+                    <th>路径</th>
+                    <th>来源任务</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody id="planRelatedScriptsTableBody"></tbody>
+              </table>
+            </div>
+          </section>
+          <section class="requirements-panel hidden" id="requirementsPanel">
+            <div class="requirements-tabs" role="tablist" aria-label="需求内容">
+              <button class="content-tab active" id="requirementPreviewTab" type="button" role="tab" aria-selected="true">需求预览</button>
+              <button class="content-tab" id="requirementModulesTab" type="button" role="tab" aria-selected="false">
+                模块候选
+                <span id="requirementModuleSummary">共 0 个</span>
+              </button>
+              <button class="content-tab" id="requirementPlanGenerationBatchTab" type="button" role="tab" aria-selected="false">
+                批量生成计划
+              </button>
+            </div>
+            <div class="requirements-tab-panels">
+              <section class="requirement-tab-panel" id="requirementPreviewTabPanel" role="tabpanel" aria-labelledby="requirementPreviewTab">
+                <div class="requirement-pane-header">
+                  <div>
+                    <h3>需求预览</h3>
+                    <p id="requirementMeta">未选择需求</p>
+                  </div>
+                  <a class="secondary-button requirement-download-link" id="requirementDownloadLink" href="#" target="_blank" rel="noreferrer">下载</a>
+                </div>
+                <article class="markdown-preview requirement-preview" id="requirementPreview"></article>
+              </section>
+              <section class="requirement-tab-panel hidden" id="requirementModulesTabPanel" role="tabpanel" aria-labelledby="requirementModulesTab">
+                <div class="job-output hidden" id="requirementAnalysisOutput">
+                  <div class="job-status" id="requirementAnalysisStatus">任务进行中</div>
+                  <pre id="requirementAnalysisLogs"></pre>
+                </div>
+                <div class="module-script-toolbar requirement-module-toolbar" id="requirementModuleToolbar">
+                  <div class="module-script-summary" id="requirementModuleListSummary">共 0 个候选模块</div>
+                  <div class="module-script-actions" id="requirementModuleActions">
+                    <button class="secondary-button" id="requirementModuleBulkToggle" type="button">批量操作</button>
+                  </div>
+                  <div class="module-script-actions hidden" id="requirementModuleBulkActions">
+                    <span class="module-selection-count" id="requirementModuleSelectionCount">已选择 0 个</span>
+                    <button class="secondary-button" id="requirementModuleBulkCancel" type="button">取消</button>
+                    <button class="secondary-button danger-button" id="requirementModuleBulkDelete" type="button" disabled>批量删除</button>
+                    <button class="primary-button" id="requirementModuleBulkGenerate" type="button" disabled>批量生成计划</button>
+                  </div>
+                </div>
+                <div class="requirement-modules-list" id="requirementModulesList"></div>
+              </section>
+              <section class="requirement-tab-panel hidden" id="requirementPlanGenerationBatchTabPanel" role="tabpanel" aria-labelledby="requirementPlanGenerationBatchTab">
+                <div class="module-repair-record requirement-plan-batch-record" id="requirementPlanGenerationBatchRecord">
+                  <div class="module-repair-record-header hidden" id="requirementPlanGenerationBatchHeader">
+                    <div class="module-repair-summary" id="requirementPlanGenerationBatchSummary">批量生成计划进行中</div>
+                  </div>
+                  <div class="execution-empty" id="requirementPlanGenerationBatchEmpty">
+                    <h3>暂无批量生成计划记录</h3>
+                    <p>在模块候选 tab 选择候选模块并批量生成计划后，这里会展示每个模块的生成语句和实时输出。</p>
+                  </div>
+                  <div class="module-repair-list hidden" id="requirementPlanGenerationBatchList"></div>
+                </div>
+              </section>
+            </div>
+          </section>
+          <article class="markdown-preview hidden" id="preview"></article>
+          <pre class="script-preview hidden" id="scriptPreview"><code id="scriptCode"></code></pre>
+          <section class="module-script-panel hidden" id="moduleScriptPanel">
+            <div class="module-script-toolbar" id="moduleScriptToolbar">
+              <div class="module-script-summary" id="moduleScriptSummary">共 0 条脚本</div>
+              <div class="module-script-actions" id="moduleScriptActions">
+                <button class="secondary-button" id="moduleBulkToggle" type="button">批量操作</button>
+              </div>
+              <div class="module-script-actions hidden" id="moduleBulkActions">
+                <span class="module-selection-count" id="moduleSelectionCount">已选择 0 条</span>
+                <button class="secondary-button" id="moduleBulkCancel" type="button">取消</button>
+                <button class="primary-button" id="moduleBulkExecute" type="button" disabled>批量执行</button>
+                <button class="primary-button" id="moduleBulkRepair" type="button" disabled>批量修复</button>
+                <button class="secondary-button danger-button" id="moduleBulkDelete" type="button" disabled>批量删除</button>
+              </div>
+            </div>
+            <div class="module-script-table-wrap">
+              <table class="module-script-table">
+                <thead>
+                  <tr>
+                    <th class="module-select-cell hidden" id="moduleSelectHeader">
+                      <input id="moduleSelectAll" type="checkbox" aria-label="选择全部脚本" />
+                    </th>
+                    <th>脚本名称</th>
+                    <th>脚本执行状态</th>
+                    <th>修复状态</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody id="moduleScriptTableBody"></tbody>
+              </table>
+            </div>
+          </section>
+          <section class="module-execution-record hidden" id="moduleExecutionRecord">
+            <div class="execution-empty" id="moduleExecutionEmpty">
+              <h3>暂无模块执行记录</h3>
+              <p>在脚本 tab 选择脚本并批量执行后，这里会展示模块执行日志和 Playwright Report。</p>
+            </div>
+            <div class="execution-log-panel hidden" id="moduleExecutionLogPanel">
+              <div class="execution-log-header">
+                <span>执行日志</span>
+                <span id="moduleExecutionLogStatus"></span>
+              </div>
+              <pre class="execution-log" id="moduleExecutionLog"></pre>
+            </div>
+            <div class="execution-report-wrap hidden" id="moduleExecutionReportWrap">
+              <div class="execution-report-header">
+                <span>Playwright Report</span>
+                <a id="moduleExecutionReportLink" href="#" target="_blank" rel="noreferrer">新窗口打开</a>
+              </div>
+              <iframe class="execution-report-frame" id="moduleExecutionReportFrame" title="Module Playwright Test Report" sandbox="allow-scripts allow-downloads" referrerpolicy="no-referrer"></iframe>
+              <p class="execution-report-path" id="moduleExecutionReportPath"></p>
+            </div>
+          </section>
+          <section class="module-repair-record hidden" id="moduleRepairRecord">
+            <div class="module-repair-record-header hidden" id="moduleRepairRecordHeader">
+              <div class="module-repair-summary" id="moduleRepairSummary">批量修复进行中</div>
+              <button class="secondary-button danger-button" id="moduleRepairCancelButton" type="button">取消修复</button>
+            </div>
+            <div class="execution-empty" id="moduleRepairEmpty">
+              <h3>暂无模块修复记录</h3>
+              <p>在脚本 tab 选择脚本并批量修复后，这里会展示每条脚本的修复状态和实时输出。</p>
+            </div>
+            <div class="module-repair-list hidden" id="moduleRepairList"></div>
+          </section>
+          <section class="execution-record hidden" id="executionRecord">
+            <div class="execution-history-panel hidden" id="executionHistoryPanel">
+              <div class="module-script-toolbar">
+                <div class="module-script-summary" id="executionHistorySummary">最近执行记录</div>
+              </div>
+              <div class="module-script-table-wrap">
+                <table class="module-script-table">
+                  <thead>
+                    <tr>
+                      <th>状态</th>
+                      <th>执行模式</th>
+                      <th>运行时间</th>
+                      <th>脚本版本</th>
+                      <th>Run ID</th>
+                    </tr>
+                  </thead>
+                  <tbody id="executionHistoryTableBody"></tbody>
+                </table>
+              </div>
+            </div>
+            <div class="execution-empty" id="executionEmpty">
+              <h3>暂无执行记录</h3>
+              <p>点击右上角“执行脚本”或“修复脚本”后，这里会展示本条脚本的执行视频。</p>
+            </div>
+            <div class="execution-log-panel hidden" id="executionLogPanel">
+              <div class="execution-log-header">
+                <span>执行日志</span>
+                <span id="executionLogStatus"></span>
+              </div>
+              <pre class="execution-log" id="executionLog"></pre>
+            </div>
+            <div class="execution-report-wrap hidden" id="executionReportWrap">
+              <div class="execution-report-header">
+                <span>Playwright Report</span>
+                <a id="executionReportLink" href="#" target="_blank" rel="noreferrer">新窗口打开</a>
+              </div>
+              <iframe class="execution-report-frame" id="executionReportFrame" title="Playwright Test Report" sandbox="allow-scripts allow-downloads" referrerpolicy="no-referrer"></iframe>
+              <p class="execution-report-path" id="executionReportPath"></p>
+            </div>
+            <div class="execution-video-wrap hidden" id="executionVideoWrap">
+              <video class="execution-video" id="executionVideo" controls preload="metadata"></video>
+              <p class="execution-video-path" id="executionVideoPath"></p>
+            </div>
+          </section>
+          <section class="script-repair-record hidden" id="scriptRepairRecord">
+            <label class="form-field">
+              <span>修复测试脚本的语句</span>
+              <textarea id="scriptRunPromptFixed" spellcheck="false"></textarea>
+              <textarea id="scriptRunPromptNote" spellcheck="false"></textarea>
+            </label>
+
+            <div class="script-repair-actions">
+              <button class="primary-button" id="scriptRunSubmit" type="button">确认修复</button>
+            </div>
+
+            <div class="job-output hidden" id="scriptRunJobOutput">
+              <div class="job-status" id="scriptRunJobStatus">任务进行中</div>
+              <pre id="scriptRunJobLogs"></pre>
+              <div class="repair-duration hidden" id="scriptRunDuration">修复进行时间：00:00</div>
+            </div>
+          </section>
+          <textarea class="editor hidden" id="editor" spellcheck="false"></textarea>
+        </section>
+      </main>
+    </div>
+    </div>
+
+{% include "partials/generation_modals.html" %}
+
+{% include "partials/project_modals.html" %}
+
+{% include "partials/test_suite_modals.html" %}
+
+    <script src="{{ url_for('static', filename='js/core/api-client.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/core/sse.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/core/timers.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/features/test-suites.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/features/requirements.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/features/platform-record-store.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/features/generation.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/features/script-repair.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/features/module-execution.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/features/module-plan-generation.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/features/admin.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/features/projects.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/features/project-settings.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/features/setup-preparation.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/features/agent-failure-workspace.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/features/agent.js') }}"></script>
+    <script src="{{ url_for('static', filename='app.js') }}"></script>
+  </body>
+</html>

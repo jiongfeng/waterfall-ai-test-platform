@@ -1,0 +1,177 @@
+    <div class="modal-backdrop hidden" id="testSuiteCreateModal" role="dialog" aria-modal="true" aria-labelledby="testSuiteCreateTitle">
+      <div class="modal compact-modal">
+        <div class="modal-header">
+          <div>
+            <p class="modal-label">测试集管理</p>
+            <h2 id="testSuiteCreateTitle">新增测试集</h2>
+          </div>
+          <button class="modal-close" id="testSuiteCreateClose" type="button" aria-label="关闭">×</button>
+        </div>
+
+        <div class="modal-body">
+          <label class="form-field">
+            <span>测试集名字</span>
+            <input id="newTestSuiteName" type="text" autocomplete="off" placeholder="请输入测试集名字" />
+          </label>
+        </div>
+
+        <div class="modal-footer">
+          <button class="secondary-button" id="testSuiteCreateCancel" type="button">取消</button>
+          <button class="primary-button" id="testSuiteCreateSubmit" type="button">确定</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-backdrop hidden" id="testSuiteRenameModal" role="dialog" aria-modal="true" aria-labelledby="testSuiteRenameTitle">
+      <div class="modal compact-modal">
+        <div class="modal-header">
+          <div>
+            <p class="modal-label">测试集管理</p>
+            <h2 id="testSuiteRenameTitle">重命名测试集</h2>
+          </div>
+          <button class="modal-close" id="testSuiteRenameClose" type="button" aria-label="关闭">×</button>
+        </div>
+
+        <div class="modal-body">
+          <label class="form-field">
+            <span>测试集名字</span>
+            <input id="renameTestSuiteName" type="text" autocomplete="off" placeholder="请输入测试集名字" />
+          </label>
+        </div>
+
+        <div class="modal-footer">
+          <button class="secondary-button" id="testSuiteRenameCancel" type="button">取消</button>
+          <button class="primary-button" id="testSuiteRenameSubmit" type="button">确定</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-backdrop hidden" id="suiteScriptModal" role="dialog" aria-modal="true" aria-labelledby="suiteScriptModalTitle">
+      <div class="modal suite-script-modal">
+        <div class="modal-header">
+          <div>
+            <p class="modal-label">测试集脚本</p>
+            <h2 id="suiteScriptModalTitle">添加脚本</h2>
+          </div>
+          <button class="modal-close" id="suiteScriptModalClose" type="button" aria-label="关闭">×</button>
+        </div>
+
+        <div class="modal-body suite-script-modal-body">
+          <aside class="suite-script-module-picker" aria-label="脚本模块">
+            <div class="test-suite-module-title">模块</div>
+            <div class="test-suite-module-list" id="suiteScriptModuleList"></div>
+          </aside>
+          <section class="suite-script-picker">
+            <div class="suite-script-picker-header">
+              <span id="suiteScriptPickerTitle">全部脚本</span>
+              <span id="suiteScriptSelectionCount">已选择 0 条</span>
+            </div>
+            <div class="suite-script-list" id="suiteAvailableScriptList"></div>
+          </section>
+        </div>
+
+        <div class="modal-footer">
+          <button class="secondary-button" id="suiteScriptModalCancel" type="button">取消</button>
+          <button class="primary-button" id="suiteScriptModalSubmit" type="button">确定</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-backdrop hidden" id="executionModeModal" role="dialog" aria-modal="true" aria-labelledby="executionModeTitle">
+      <div class="modal compact-modal">
+        <div class="modal-header">
+          <div>
+            <p class="modal-label">执行模式</p>
+            <h2 id="executionModeTitle">选择批量执行模式</h2>
+          </div>
+          <button class="modal-close" id="executionModeClose" type="button" aria-label="关闭">×</button>
+        </div>
+
+        <div class="modal-body">
+          <p class="modal-description" id="executionModeSummary"></p>
+          <div class="form-field">
+            <span>模式</span>
+            <div class="choice-group execution-mode-options" role="radiogroup" aria-label="批量执行模式">
+              <label class="choice-option execution-mode-option">
+                <input id="executionModeBatch" name="executionMode" type="radio" value="batch" checked />
+                <span>
+                  <strong>当前批量执行</strong>
+                  <small>一次 Playwright 批量运行，开始前恢复一次数据库。</small>
+                </span>
+              </label>
+              <label class="choice-option execution-mode-option">
+                <input id="executionModeSerial" name="executionMode" type="radio" value="serial_per_file" />
+                <span>
+                  <strong>按文件串行执行</strong>
+                  <small>逐个脚本文件运行，每个文件执行前恢复数据库。</small>
+                </span>
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <div class="modal-footer">
+          <button class="secondary-button" id="executionModeCancel" type="button">取消</button>
+          <button class="primary-button" id="executionModeSubmit" type="button">开始执行</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-backdrop hidden" id="testSuiteProgressModal" role="dialog" aria-modal="true" aria-labelledby="testSuiteProgressTitle">
+      <div class="modal test-suite-progress-modal">
+        <div class="modal-header">
+          <div>
+            <p class="modal-label">测试集执行</p>
+            <h2 id="testSuiteProgressTitle">执行进度</h2>
+          </div>
+          <button class="modal-close" id="testSuiteProgressModalClose" type="button" aria-label="收起">×</button>
+        </div>
+        <div class="modal-body test-suite-progress-body">
+          <div class="execution-log-panel test-suite-progress-log-panel">
+            <div class="execution-log-header">
+              <span>命令行日志</span>
+              <span id="testSuiteProgressStatus">等待开始</span>
+            </div>
+            <pre class="execution-log" id="testSuiteProgressLog">等待执行输出...</pre>
+          </div>
+          <div class="test-suite-progress-summary" aria-live="polite">
+            <div class="test-suite-progress-bar" aria-hidden="true">
+              <span id="testSuiteProgressBar"></span>
+            </div>
+            <div class="test-suite-progress-stats">
+              <div>
+                <span>已执行</span>
+                <strong id="testSuiteProgressCompleted">0 / 0</strong>
+              </div>
+              <div>
+                <span>成功</span>
+                <strong id="testSuiteProgressPassed">0</strong>
+              </div>
+              <div>
+                <span>失败</span>
+                <strong id="testSuiteProgressFailed">0</strong>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="secondary-button" id="testSuiteProgressModalDismiss" type="button">收起</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-backdrop hidden" id="testSuiteVideoModal" role="dialog" aria-modal="true" aria-labelledby="testSuiteVideoModalTitle">
+      <div class="modal test-suite-video-modal">
+        <div class="modal-header">
+          <div>
+            <p class="modal-label">执行视频</p>
+            <h2 id="testSuiteVideoModalTitle">脚本执行视频</h2>
+          </div>
+          <button class="modal-close" id="testSuiteVideoModalClose" type="button" aria-label="关闭">×</button>
+        </div>
+        <div class="modal-body">
+          <video class="execution-video" id="testSuiteExecutionVideo" controls preload="metadata"></video>
+          <p class="execution-video-path" id="testSuiteExecutionVideoPath"></p>
+        </div>
+      </div>
+    </div>

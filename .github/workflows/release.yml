@@ -1,0 +1,142 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Verify release source
+    runs-on: ubuntu-latest
+    env:
+      PLATFORM_ALLOW_HOST_SCRIPT_EXECUTION: "false"
+      PLATFORM_ALLOW_TEST_EXECUTION: "false"
+      PLATFORM_CONFIG_PATH: config.example.json
+    steps:
+      - name: Validate release tag
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if [[ ! "${GITHUB_REF_NAME}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            printf 'Unsupported release tag: %s\n' "${GITHUB_REF_NAME}" >&2
+            exit 1
+          fi
+
+      - name: Check out tagged source
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install and test Python source
+        run: |
+          python -m pip install --requirement requirements.txt
+          python -m compileall -q app.py test_plan_viewer tests
+          python -m unittest discover -s tests
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: project-template/package-lock.json
+          package-manager-cache: true
+
+      - name: Install and test JavaScript source
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          npm ci \
+            --prefix project-template \
+            --ignore-scripts \
+            --no-audit \
+            --no-fund
+          npm audit \
+            --prefix project-template \
+            --omit=optional \
+            --audit-level=high
+          for test_file in tests/js/*.vm.js; do
+            node "${test_file}"
+          done
+
+      - name: Validate deployment files
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          shellcheck \
+            deploy/entrypoint.sh \
+            deploy/healthcheck.sh \
+            project-template/.opencode/run-playwright-mcp.sh
+          PLATFORM_SESSION_SECRET="$(openssl rand -hex 32)"
+          PLATFORM_ADMIN_PASSWORD="$(openssl rand -hex 24)"
+          PLATFORM_DB_PASSWORD="$(openssl rand -hex 24)"
+          MYSQL_ROOT_PASSWORD="$(openssl rand -hex 24)"
+          OPENCODE_SERVER_PASSWORD="$(openssl rand -hex 24)"
+          export PLATFORM_SESSION_SECRET PLATFORM_ADMIN_PASSWORD
+          export PLATFORM_DB_PASSWORD MYSQL_ROOT_PASSWORD
+          export OPENCODE_SERVER_PASSWORD
+          docker compose -f deploy/compose.yaml config --quiet
+          test -f deploy/config.example.json
+
+  github-release:
+    name: Create source release
+    needs:
+      - verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Create release assets
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sha256sum \
+            deploy/compose.yaml \
+            deploy/config.example.json \
+            LICENSE \
+            THIRD_PARTY_NOTICES.md \
+            > SHA256SUMS
+
+      - name: Publish GitHub release
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            printf 'Release %s already exists.\n' "${GITHUB_REF_NAME}"
+            exit 0
+          fi
+
+          release_flags=(--verify-tag --generate-notes)
+          if [[ "${GITHUB_REF_NAME}" == *-* ]]; then
+            release_flags+=(--prerelease)
+          fi
+          gh release create \
+            "${GITHUB_REF_NAME}" \
+            deploy/compose.yaml \
+            deploy/config.example.json \
+            LICENSE \
+            THIRD_PARTY_NOTICES.md \
+            SHA256SUMS \
+            --title "${GITHUB_REF_NAME}" \
+            "${release_flags[@]}"

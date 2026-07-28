@@ -1,0 +1,53 @@
+{
+  "project_workspace_root": "./workspaces",
+  "project_template_dependency_source_root": "",
+  "opencode_server_url": "http://127.0.0.1:4096",
+  "opencode_username": "opencode",
+  "opencode_password_env": "OPENCODE_SERVER_PASSWORD",
+  "opencode_task_timeout_seconds": 7200,
+  "script_execution_timeout_seconds": 7200,
+  "auth": {
+    "enabled": false,
+    "initial_admin_username": "admin"
+  },
+  "platform_database": {
+    "enabled": false,
+    "type": "mysql",
+    "host": "127.0.0.1",
+    "port": 3306,
+    "user": "",
+    "database": "",
+    "charset": "utf8mb4",
+    "table_prefix": "",
+    "create_database": true,
+    "connect_timeout": 5
+  },
+  "database_baseline": {
+    "enabled": false
+  },
+  "projects": [
+    {
+      "key": "demo",
+      "name": "Demo project",
+      "description": "Fictional local project used for the open-source quick start.",
+      "playwright_project_root": "./examples/demo-workspace",
+      "specs_dir": "specs",
+      "tests_dir": "tests",
+      "target_system": {
+        "base_url": "http://127.0.0.1:3000",
+        "login_url": "/login",
+        "username_env": "TARGET_SYSTEM_USERNAME",
+        "password_env": "TARGET_SYSTEM_PASSWORD"
+      },
+      "database_baseline": {
+        "enabled": false
+      },
+      "plan_generation": {
+        "default_coverage_profile": "core"
+      },
+      "is_default": true,
+      "status": "active"
+    }
+  ],
+  "default_project_key": "demo"
+}

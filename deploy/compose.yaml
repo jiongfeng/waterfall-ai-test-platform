@@ -1,0 +1,137 @@
+name: playwright-test-platform
+
+services:
+  mysql:
+    image: mysql:8.4
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: playwright_platform
+      MYSQL_USER: playwright
+      MYSQL_PASSWORD: ${PLATFORM_DB_PASSWORD:?Set PLATFORM_DB_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Set MYSQL_ROOT_PASSWORD}
+      TZ: ${TZ:-UTC}
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          MYSQL_PWD="$${MYSQL_ROOT_PASSWORD}"
+          mysqladmin ping --host=127.0.0.1 --user=root --silent
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    networks:
+      - backend
+
+  opencode:
+    image: ${PLATFORM_IMAGE:-playwright-test-platform:local}
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    command:
+      - opencode
+    restart: unless-stopped
+    environment:
+      OPENCODE_HOSTNAME: 0.0.0.0
+      OPENCODE_PORT: "4096"
+      OPENCODE_SERVER_USERNAME: opencode
+      OPENCODE_SERVER_PASSWORD: ${OPENCODE_SERVER_PASSWORD:?Set OPENCODE_SERVER_PASSWORD}
+      PLAYWRIGHT_BROWSERS_PATH: /ms-playwright
+      TZ: ${TZ:-UTC}
+    volumes:
+      - platform_projects:/data/playwright-projects
+      - platform_workspaces:/data/playwright-workspaces
+      - opencode_config:/home/pwuser/.config/opencode
+      - opencode_data:/home/pwuser/.local/share/opencode
+      - opencode_cache:/home/pwuser/.cache/opencode
+    tmpfs:
+      - /tmp:size=512m,mode=1777
+    shm_size: 1gb
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test:
+        - CMD
+        - /usr/local/bin/platform-healthcheck
+        - opencode
+      interval: 15s
+      timeout: 8s
+      retries: 8
+      start_period: 30s
+    networks:
+      - backend
+
+  platform:
+    image: ${PLATFORM_IMAGE:-playwright-test-platform:local}
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    command:
+      - platform
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+      opencode:
+        condition: service_healthy
+    environment:
+      PLATFORM_AUTH_ENABLED: "true"
+      PLATFORM_ALLOW_HOST_SCRIPT_EXECUTION: "false"
+      PLATFORM_ALLOW_TEST_EXECUTION: ${PLATFORM_ALLOW_TEST_EXECUTION:-false}
+      PLATFORM_CONFIG_PATH: /etc/playwright-platform/config.json
+      PLATFORM_COOKIE_SECURE: ${PLATFORM_COOKIE_SECURE:-false}
+      PLATFORM_PORT: "5000"
+      PLATFORM_SESSION_SECRET: ${PLATFORM_SESSION_SECRET:?Set PLATFORM_SESSION_SECRET}
+      PLATFORM_ADMIN_PASSWORD: ${PLATFORM_ADMIN_PASSWORD:?Set PLATFORM_ADMIN_PASSWORD}
+      PLATFORM_DB_PASSWORD: ${PLATFORM_DB_PASSWORD:?Set PLATFORM_DB_PASSWORD}
+      OPENCODE_SERVER_PASSWORD: ${OPENCODE_SERVER_PASSWORD:?Set OPENCODE_SERVER_PASSWORD}
+      TARGET_SYSTEM_USERNAME: ${TARGET_SYSTEM_USERNAME:-}
+      TARGET_SYSTEM_PASSWORD: ${TARGET_SYSTEM_PASSWORD:-}
+      PLAYWRIGHT_BROWSERS_PATH: /ms-playwright
+      TZ: ${TZ:-UTC}
+    ports:
+      - "${PLATFORM_BIND_ADDRESS:-127.0.0.1}:${PLATFORM_PORT:-5000}:5000"
+    volumes:
+      - type: bind
+        source: ${PLATFORM_CONFIG_FILE:-../config.json}
+        target: /etc/playwright-platform/config.json
+        read_only: true
+      - platform_projects:/data/playwright-projects
+      - platform_workspaces:/data/playwright-workspaces
+    tmpfs:
+      - /tmp:size=1g,mode=1777
+    shm_size: 1gb
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test:
+        - CMD
+        - /usr/local/bin/platform-healthcheck
+        - platform
+      interval: 15s
+      timeout: 8s
+      retries: 8
+      start_period: 30s
+    stop_grace_period: 30s
+    networks:
+      - backend
+
+networks:
+  backend:
+    driver: bridge
+
+volumes:
+  mysql_data:
+  opencode_cache:
+  opencode_config:
+  opencode_data:
+  platform_projects:
+  platform_workspaces:

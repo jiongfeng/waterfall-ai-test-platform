@@ -1,0 +1,87 @@
+    <div class="modal-backdrop hidden" id="projectCreateModal" role="dialog" aria-modal="true" aria-labelledby="projectCreateTitle">
+      <div class="modal compact-modal">
+        <div class="modal-header">
+          <div>
+            <p class="modal-label">项目管理</p>
+            <h2 id="projectCreateTitle">新增项目</h2>
+            <p class="modal-description">平台会自动创建 Playwright 工作区，计划、脚本、测试集和执行记录会按项目隔离。</p>
+          </div>
+          <button class="modal-close" id="projectCreateClose" type="button" aria-label="关闭">×</button>
+        </div>
+        <div class="modal-body">
+          <label class="form-field">
+            <span>项目标识</span>
+            <input id="newProjectKey" type="text" placeholder="huazai3-ui" autocomplete="off" />
+          </label>
+          <label class="form-field">
+            <span>项目名称</span>
+            <input id="newProjectName" type="text" placeholder="华债被测系统" autocomplete="off" />
+          </label>
+          <p class="form-help" id="projectCreateWorkspaceHint">项目目录将自动创建到配置的工作区根目录下。</p>
+          <div class="admin-form-grid">
+            <label class="form-field">
+              <span>计划目录</span>
+              <input id="newProjectSpecsDir" type="text" value="specs" autocomplete="off" />
+            </label>
+            <label class="form-field">
+              <span>脚本目录</span>
+              <input id="newProjectTestsDir" type="text" value="tests" autocomplete="off" />
+            </label>
+          </div>
+          <label class="form-field">
+            <span>描述</span>
+            <input id="newProjectDescription" type="text" placeholder="可选" autocomplete="off" />
+          </label>
+        </div>
+        <div class="modal-footer">
+          <button class="secondary-button" id="projectCreateCancel" type="button">取消</button>
+          <button class="primary-button" id="projectCreateSubmit" type="button">创建并切换</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-backdrop hidden" id="projectImportModal" role="dialog" aria-modal="true" aria-labelledby="projectImportTitle">
+      <div class="modal compact-modal">
+        <div class="modal-header">
+          <div>
+            <p class="modal-label">项目管理</p>
+            <h2 id="projectImportTitle">导入项目</h2>
+            <p class="modal-description">导入会新建项目，只迁移模块、测试计划、测试脚本和测试集。</p>
+          </div>
+          <button class="modal-close" id="projectImportClose" type="button" aria-label="关闭">×</button>
+        </div>
+        <div class="modal-body">
+          <label class="form-field">
+            <span>导入文件</span>
+            <input id="projectImportFile" type="file" accept=".zip,application/zip,application/x-zip-compressed" />
+          </label>
+          <label class="form-field">
+            <span>项目标识</span>
+            <input id="importProjectKey" type="text" placeholder="留空使用导出包中的项目标识" autocomplete="off" />
+          </label>
+          <label class="form-field">
+            <span>项目名称</span>
+            <input id="importProjectName" type="text" placeholder="留空使用导出包中的项目名称" autocomplete="off" />
+          </label>
+          <p class="form-help" id="projectImportWorkspaceHint">导入会在配置的工作区根目录下创建新项目。</p>
+          <div class="admin-form-grid">
+            <label class="form-field">
+              <span>计划目录</span>
+              <input id="importProjectSpecsDir" type="text" placeholder="specs" autocomplete="off" />
+            </label>
+            <label class="form-field">
+              <span>脚本目录</span>
+              <input id="importProjectTestsDir" type="text" placeholder="tests" autocomplete="off" />
+            </label>
+          </div>
+          <label class="form-field">
+            <span>描述</span>
+            <input id="importProjectDescription" type="text" placeholder="留空使用导出包中的描述" autocomplete="off" />
+          </label>
+        </div>
+        <div class="modal-footer">
+          <button class="secondary-button" id="projectImportCancel" type="button">取消</button>
+          <button class="primary-button" id="projectImportSubmit" type="button">导入并切换</button>
+        </div>
+      </div>
+    </div>

@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="csrf-token" content="{{ csrf_token }}" />
+    <title>登录 - 测试平台</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}" />
+  </head>
+  <body class="login-body">
+    <main class="login-shell">
+      <section class="login-panel" aria-labelledby="loginTitle">
+        <div class="login-brand">测</div>
+        <p class="login-label">测试平台</p>
+        <h1 id="loginTitle">账号登录</h1>
+        <form id="loginForm" class="login-form">
+          <label class="form-field">
+            <span>用户名</span>
+            <input id="loginUsername" name="username" type="text" autocomplete="username" required autofocus />
+          </label>
+          <label class="form-field">
+            <span>密码</span>
+            <input id="loginPassword" name="password" type="password" autocomplete="current-password" required />
+          </label>
+          <div class="notice error {% if not config_error %}hidden{% endif %}" id="loginError">
+            {{ config_error or "" }}
+          </div>
+          <button class="primary-button login-submit" id="loginSubmit" type="submit">登录</button>
+        </form>
+      </section>
+    </main>
+    <script src="{{ url_for('static', filename='js/login.js') }}"></script>
+  </body>
+</html>
