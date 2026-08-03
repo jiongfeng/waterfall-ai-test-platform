@@ -20,6 +20,9 @@ concurrency:
 
 jobs:
   codeql:
+    # GitHub code scanning is unavailable for this personal private staging
+    # repository. The job starts automatically after the repository is public.
+    if: github.event.repository.private == false
     name: CodeQL (${{ matrix.language }})
     runs-on: ubuntu-latest
     permissions:
