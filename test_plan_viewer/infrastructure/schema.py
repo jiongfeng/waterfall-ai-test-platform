@@ -10,11 +10,6 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from test_plan_viewer.setup.repository import (
-    scrub_legacy_setup_environment_rows,
-)
-
-
 @dataclass(frozen=True)
 class SchemaDependencies:
     get_platform_database_config: Callable[..., Any]
@@ -459,13 +454,6 @@ def ensure_platform_database_schema(config=None, *, dependencies, state=None):
                       INDEX idx_project_script_name (project_id, name)
                     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
                     """
-                )
-                # One-time, idempotent secret scrub. Legacy literal
-                # values are discarded; only child variable names and
-                # the migration-required marker remain.
-                scrub_legacy_setup_environment_rows(
-                    cursor,
-                    setup_scripts_table,
                 )
                 cursor.execute(
                     f"""

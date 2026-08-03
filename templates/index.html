@@ -7,6 +7,7 @@
     <title>测试资源编辑器</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}" />
     <link rel="stylesheet" href="{{ url_for('static', filename='css/features/agent.css') }}" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/features/agent-script-preparation.css', v=5) }}" />
   </head>
   <body>
     <div class="app-shell" id="appShell">
@@ -580,8 +581,8 @@
     <script src="{{ url_for('static', filename='js/features/projects.js') }}"></script>
     <script src="{{ url_for('static', filename='js/features/project-settings.js') }}"></script>
     <script src="{{ url_for('static', filename='js/features/setup-preparation.js') }}"></script>
-    <script src="{{ url_for('static', filename='js/features/agent-failure-workspace.js') }}"></script>
-    <script src="{{ url_for('static', filename='js/features/agent.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/features/agent-script-preparation.js', v=4) }}"></script>
+    <script src="{{ url_for('static', filename='js/features/agent.js', v=4) }}"></script>
     <script src="{{ url_for('static', filename='app.js') }}"></script>
   </body>
 </html>

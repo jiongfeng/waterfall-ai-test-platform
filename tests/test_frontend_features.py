@@ -91,10 +91,10 @@ class FrontendFeatureVmTests(unittest.TestCase):
             "project-settings feature VM smoke: ok",
         )
 
-    def test_setup_preparation_uses_environment_references_only(self):
+    def test_agent_script_preparation_list_history_and_actions(self):
         self.run_vm_test(
-            "setup-preparation.vm.js",
-            "setup preparation environment refs VM smoke: ok",
+            "agent-script-preparation.vm.js",
+            "agent script preparation VM smoke: ok",
         )
 
 

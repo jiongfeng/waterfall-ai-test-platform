@@ -247,55 +247,6 @@ class RequirementModelParityTests(unittest.TestCase):
                     ),
                 )
 
-    def test_module_model_output_is_redacted_before_persistence(self):
-        normalized = model.normalize_requirement_module_candidate(
-            {
-                "module_name": "登录",
-                "business_goal": "password=unknown-business-secret",
-                "test_points": [
-                    "Authorization: Bearer unknown-test-token"
-                ],
-                "planner_prompt": (
-                    "access_key=unknown-planner-access-key"
-                ),
-            },
-            dependencies=make_module_dependencies(
-                redact_value=app.redact_natural_language_value
-            ),
-        )
-        serialized = json.dumps(
-            normalized,
-            ensure_ascii=False,
-        )
-
-        self.assertNotIn("unknown-business-secret", serialized)
-        self.assertNotIn("unknown-test-token", serialized)
-        self.assertNotIn(
-            "unknown-planner-access-key",
-            serialized,
-        )
-
-        legacy = model.serialize_requirement_module(
-            {
-                "module_uid": "legacy-module",
-                "module_name": "登录",
-                "business_goal": (
-                    "password=unknown-legacy-secret"
-                ),
-                "test_points_json": "[]",
-                "requirement_refs_json": "[]",
-                "matched_inventory_json": "{}",
-                "open_questions_json": "[]",
-            },
-            dependencies=make_module_dependencies(
-                redact_value=app.redact_natural_language_value
-            ),
-        )
-        self.assertNotIn(
-            "unknown-legacy-secret",
-            json.dumps(legacy, ensure_ascii=False),
-        )
-
     def test_module_serialization_matches_legacy_plan_fallbacks(self):
         row = {
             "id": 5,
@@ -548,16 +499,13 @@ class RequirementRepositoryTests(unittest.TestCase):
             make_repository_dependencies(
                 connection,
                 get_requirement_module=get_module,
-                redact_value=app.redact_natural_language_value,
             )
         )
         normalized = {
             "module_name": "登录",
             "plan_name": "登录",
             "confidence": 0.8,
-            "business_goal": (
-                "登录系统 password=unknown-repository-secret"
-            ),
+            "business_goal": "登录系统",
             "requirement_refs": ["R1"],
             "test_points": ["成功"],
             "matched_inventory": {"page_name": "登录页"},
@@ -582,10 +530,6 @@ class RequirementRepositoryTests(unittest.TestCase):
             "confirmed",
             0.8,
         ))
-        self.assertNotIn(
-            "unknown-repository-secret",
-            json.dumps(parameters, ensure_ascii=False),
-        )
         self.assertEqual(parameters[5], '["R1"]')
         get_module.assert_called_once_with(3, "module-1")
 

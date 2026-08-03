@@ -18,7 +18,6 @@ class RequirementRepositoryDependencies:
     compact_json_dumps: Callable[[object], str]
     get_requirement_by_uid: Callable[[str], dict]
     get_requirement_module: Callable[[int, str], dict]
-    redact_value: Callable[[object], object] = lambda value: value
 
 
 class RequirementRepository:
@@ -245,7 +244,6 @@ class RequirementRepository:
         normalized,
         status,
     ):
-        normalized = self.dependencies.redact_value(normalized)
         config = self.dependencies.require_platform_database()
         table = self.dependencies.get_requirement_modules_table(
             config

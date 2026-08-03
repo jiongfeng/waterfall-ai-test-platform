@@ -1,61 +1,7 @@
-import json
 import uuid
 from dataclasses import dataclass, field
 
-from test_plan_viewer.setup.model import (
-    build_setup_environment_scrub_envelope,
-)
 from test_plan_viewer.setup.validation import SETUP_BINDING_TARGET_TYPES
-
-
-def serialize_setup_environment_envelope(environment_refs):
-    return {
-        "version": 2,
-        "environment_refs": dict(environment_refs or {}),
-    }
-
-
-def scrub_legacy_setup_environment_rows(
-    cursor,
-    setup_scripts_table,
-    *,
-    compact_json_dumps=None,
-):
-    dumps = compact_json_dumps or (
-        lambda value: json.dumps(
-            value,
-            ensure_ascii=False,
-            separators=(",", ":"),
-        )
-    )
-    cursor.execute(
-        (
-            "SELECT script_id, environment_json "
-            f"FROM {setup_scripts_table} "
-            "WHERE environment_json IS NOT NULL "
-            "AND environment_json <> ''"
-        )
-    )
-    rows = cursor.fetchall()
-    scrubbed = 0
-    for row in rows:
-        envelope = build_setup_environment_scrub_envelope(
-            row.get("environment_json")
-        )
-        if envelope is None:
-            continue
-        cursor.execute(
-            (
-                f"UPDATE {setup_scripts_table} "
-                "SET environment_json=%s WHERE script_id=%s"
-            ),
-            (
-                dumps(envelope),
-                row.get("script_id"),
-            ),
-        )
-        scrubbed += 1
-    return scrubbed
 
 
 @dataclass(frozen=True)
@@ -202,9 +148,7 @@ def save_setup_script(payload, script_uid, dependencies):
                         script["script_content"],
                         script["working_directory"],
                         dependencies.compact_json_dumps(
-                            serialize_setup_environment_envelope(
-                                script["environment_refs"]
-                            )
+                            script["environment_overrides"]
                         ),
                         script["timeout_seconds"],
                         script["concurrency_key"],
@@ -233,9 +177,7 @@ def save_setup_script(payload, script_uid, dependencies):
                         script["script_content"],
                         script["working_directory"],
                         dependencies.compact_json_dumps(
-                            serialize_setup_environment_envelope(
-                                script["environment_refs"]
-                            )
+                            script["environment_overrides"]
                         ),
                         script["timeout_seconds"],
                         script["concurrency_key"],

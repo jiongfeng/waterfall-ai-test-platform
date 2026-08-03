@@ -242,33 +242,31 @@ def build_seed_generation_prompt(target_system, target_file, dependencies):
     target_system = dependencies.parse_target_system_config(target_system)
     base_url = target_system.get("base_url")
     login_url = dependencies.build_target_login_url(target_system)
-    username_env = target_system.get("username_env")
-    password_env = target_system.get("password_env")
+    username = target_system.get("username")
+    password = target_system.get("password")
     if not base_url:
         raise ValueError("请先配置被测系统地址。")
     if not login_url:
         raise ValueError("请先配置登录页地址。")
-    if not username_env:
-        raise ValueError("请先配置登录用户名环境变量。")
-    if not password_env:
-        raise ValueError("请先配置登录密码环境变量。")
+    if not username:
+        raise ValueError("请先配置登录用户名。")
+    if not password:
+        raise ValueError("请先配置登录密码。")
 
     relative_path = dependencies.get_seed_script_relative_path()
     return (
         "@playwright-test-generator\n"
         f"请使用 Playwright MCP 打开登录页：{login_url}\n"
         f"被测系统 baseURL：{base_url}\n"
-        f"登录用户名只能在测试运行时从 process.env.{username_env} 读取。\n"
-        f"登录密码只能在测试运行时从 process.env.{password_env} 读取。\n"
-        "不得请求、猜测、输出或硬编码真实账号和密码；不得把凭据写入日志、注释、截图名称或测试产物。\n"
-        "生成脚本时先校验两个环境变量存在，再使用变量完成登录；环境变量缺失时应安全失败。\n"
-        "使用可访问名称或稳定定位器识别用户名输入框、密码输入框和登录按钮。\n"
+        f"使用用户名：{username}\n"
+        f"使用密码：{password}\n"
+        "自动识别用户名输入框、密码输入框和登录按钮，完成登录。\n"
         "登录成功后选择一个稳定的页面状态作为 expect 断言，例如 URL、导航、标题、菜单或主内容可见。\n"
         f"请生成完整 Playwright 测试脚本到：{target_file}\n"
         f"脚本 workspace 相对路径：{relative_path}\n"
         "要求：脚本只能包含一个 test(...)；必须导入 @playwright/test 的 test 和 expect；"
         "不要使用 page.waitForTimeout、page.waitForNavigation、page.waitForLoadState 或 page.evaluate；"
-        "账号和密码只能保存在运行时环境变量中。"
+        "现阶段允许把账号和密码直接写入 seed 脚本。"
     )
 
 

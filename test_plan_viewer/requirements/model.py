@@ -44,7 +44,6 @@ class RequirementModuleModelDependencies:
     get_test_asset_by_id: Callable[[int], dict]
     serialize_asset: Callable[[dict], dict]
     dedupe_chinese_artifact_naming_notice: Callable[[str], str]
-    redact_value: Callable[[object], object] = lambda value: value
 
 
 def extract_requirement_title(markdown_text, filename):
@@ -281,7 +280,7 @@ def normalize_requirement_module_candidate(
         )
     )
     module_data["planner_prompt"] = planner_prompt
-    return dependencies.redact_value(module_data)
+    return module_data
 
 
 def serialize_requirement_module(row, *, dependencies):
@@ -329,7 +328,7 @@ def serialize_requirement_module(row, *, dependencies):
             if not generated_plan:
                 generated_plan = legacy_generated_plan
                 generated_plans = [legacy_generated_plan]
-    return dependencies.redact_value({
+    return {
         "id": row.get("id"),
         "requirement_id": row.get("requirement_id"),
         "module_uid": row.get("module_uid"),
@@ -374,4 +373,4 @@ def serialize_requirement_module(row, *, dependencies):
         "generated_plans": generated_plans,
         "created_at": row.get("created_at"),
         "updated_at": row.get("updated_at"),
-    })
+    }

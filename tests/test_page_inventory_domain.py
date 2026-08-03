@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from collections import deque
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
 
 import app
 from test_plan_viewer.page_inventory import model
@@ -118,17 +118,16 @@ def normalized_item(**overrides):
         "roles": ["管理员"],
         "accounts": [
             {
-                "username_ref": "TARGET_ADMIN_USERNAME",
-                "password_ref": "TARGET_ADMIN_PASSWORD",
+                "username": "admin",
+                "password_ref": "ADMIN_PASSWORD",
                 "purpose": "登录",
-                "credentials_migration_required": False,
             }
         ],
         "stable_selectors": ["#username"],
         "actions": ["登录"],
         "read_only_actions": [],
         "write_actions": ["登录"],
-        "sample_data": {"query": "demo"},
+        "sample_data": {"username": "admin"},
         "write_risk": True,
         "baseline_required": True,
         "notes": "保存会写库",
@@ -151,8 +150,7 @@ class PageInventoryModelParityTests(unittest.TestCase):
             "menu_path_json": '["系统","登录"]',
             "roles_json": '["管理员"]',
             "accounts_json": (
-                '[{"username":"admin","password":"secret",'
-                '"password_ref":"ADMIN"}]'
+                '[{"username":"admin","password_ref":"ADMIN"}]'
             ),
             "stable_selectors_json": '["#username"]',
             "actions_json": '["登录"]',
@@ -170,23 +168,13 @@ class PageInventoryModelParityTests(unittest.TestCase):
             "updated_at": 13,
         }
 
-        serialized = model.serialize_page_inventory(
-            row,
-            make_model_dependencies(),
-        )
         self.assertEqual(
-            serialized,
+            model.serialize_page_inventory(
+                row,
+                make_model_dependencies(),
+            ),
             app.serialize_page_inventory(row),
         )
-        self.assertTrue(
-            serialized["credentials_migration_required"]
-        )
-        self.assertNotIn("username", serialized["accounts"][0])
-        self.assertNotIn("password", serialized["accounts"][0])
-        self.assertNotIn("admin", repr(serialized["accounts"]))
-        self.assertNotIn("secret", repr(serialized["accounts"]))
-        self.assertEqual(serialized["sample_data"], {})
-        self.assertNotIn("admin", repr(serialized["sample_data"]))
 
     def test_account_and_payload_normalization_match_legacy(self):
         dependencies = make_model_dependencies()
@@ -194,10 +182,12 @@ class PageInventoryModelParityTests(unittest.TestCase):
             "admin, viewer",
             [
                 {
-                    "username_ref": " TARGET_ADMIN_USERNAME ",
-                    "password_ref": " TARGET_ADMIN_PASSWORD ",
+                    "username": " admin ",
+                    "password_ref": " ADMIN_PASSWORD ",
                     "purpose": " login ",
                 },
+                " `viewer` ",
+                {},
             ],
             None,
         ]
@@ -215,12 +205,7 @@ class PageInventoryModelParityTests(unittest.TestCase):
             {
                 "page_name": " 登录页 ",
                 "url": " /login ",
-                "accounts": [
-                    {
-                        "username_ref": "TARGET_ADMIN_USERNAME",
-                        "password_ref": "TARGET_ADMIN_PASSWORD",
-                    }
-                ],
+                "accounts": "admin、viewer",
                 "write_risk": True,
                 "source": "invalid",
                 "confidence": 2,
@@ -244,66 +229,6 @@ class PageInventoryModelParityTests(unittest.TestCase):
                     ),
                 )
 
-    def test_plaintext_account_payload_is_rejected_and_legacy_is_sanitized(self):
-        dependencies = make_model_dependencies()
-        with self.assertRaisesRegex(
-            ValueError,
-            "username_ref/password_ref",
-        ):
-            model.normalize_page_inventory_payload(
-                {
-                    "page_name": "登录页",
-                    "accounts": [
-                        {
-                            "username": "real-user",
-                            "password": "real-password",
-                        }
-                    ],
-                },
-                dependencies,
-            )
-
-        with self.assertRaisesRegex(
-            ValueError,
-            "sample_data.*plaintext",
-        ):
-            model.normalize_page_inventory_payload(
-                {
-                    "page_name": "登录页",
-                    "sample_data": {
-                        "nested": {
-                            "username": "real-user",
-                            "password": "real-password",
-                        }
-                    },
-                },
-                dependencies,
-            )
-
-        legacy = model.normalize_accounts(
-            [
-                {
-                    "username": "real-user",
-                    "password": "real-password",
-                    "purpose": "管理员登录",
-                }
-            ],
-            dependencies,
-        )
-        self.assertEqual(
-            legacy,
-            [
-                {
-                    "username_ref": "",
-                    "password_ref": "",
-                    "purpose": "管理员登录",
-                    "credentials_migration_required": True,
-                }
-            ],
-        )
-        self.assertNotIn("real-user", repr(legacy))
-        self.assertNotIn("real-password", repr(legacy))
-
     def test_markdown_parser_matches_legacy_table_rules(self):
         markdown_text = """
 说明
@@ -324,27 +249,6 @@ class PageInventoryModelParityTests(unittest.TestCase):
                 markdown_text
             ),
         )
-
-    def test_prompt_summary_never_sends_legacy_account_values(self):
-        row = {
-            "inventory_uid": "inventory-legacy",
-            "page_name": "登录页",
-            "roles_json": '["管理员"]',
-            "accounts_json": (
-                '[{"username":"real-user",'
-                '"password":"real-password"}]'
-            ),
-        }
-        with patch.object(
-            app,
-            "list_page_inventory_rows",
-            return_value=[row],
-        ):
-            summary = app.summarize_page_inventory_for_prompt()
-
-        self.assertNotIn("real-user", summary)
-        self.assertNotIn("real-password", summary)
-        self.assertIn("账号：管理员", summary)
 
 
 class PageInventoryRepositoryTests(unittest.TestCase):
@@ -404,11 +308,6 @@ class PageInventoryRepositoryTests(unittest.TestCase):
         self.assertEqual(parameters[0], 7)
         self.assertEqual(parameters[1], "inventory-new")
         self.assertEqual(parameters[4], '["系统","登录"]')
-        self.assertNotIn("admin", parameters[6])
-        self.assertNotIn("secret", parameters[6])
-        self.assertIn("TARGET_ADMIN_USERNAME", parameters[6])
-        self.assertNotIn("username", parameters[11])
-        self.assertNotIn("password", parameters[11])
         self.assertEqual(parameters[12], 1)
         self.assertEqual(parameters[13], 1)
         self.assertEqual(connection.commit_count, 1)

@@ -45,7 +45,7 @@ The supported deployment assumes:
 
 Playwright tests and setup scripts execute code. They share the application
 container's operating-system boundary and are **not** isolated from the
-platform as hostile code. Environment allowlists and default-off switches
+platform as hostile code. Default-off switches and container restrictions
 reduce accidental exposure; they do not turn the container into a sandbox.
 Do not give untrusted users execution permissions, mount a Docker socket, or
 connect the platform to production credentials or production data.
@@ -84,14 +84,18 @@ chmod 600 config.json .env
 ```
 
 Generate independent quickstart secrets without putting their values in command
-arguments:
+arguments. The snippet also copies the database and OpenCode service passwords
+into the local `config.json`, matching the application's file-based password
+fields:
 
 ```bash
 python3 - <<'PY'
 from pathlib import Path
 from secrets import token_urlsafe
+import json
 
 path = Path(".env")
+config_path = Path("config.json")
 secret_names = {
     "PLATFORM_SESSION_SECRET",
     "PLATFORM_ADMIN_PASSWORD",
@@ -100,18 +104,29 @@ secret_names = {
     "MYSQL_ROOT_PASSWORD",
 }
 result = []
+secrets = {}
 for line in path.read_text(encoding="utf-8").splitlines():
     name, separator, value = line.partition("=")
-    if separator and name in secret_names and not value:
-        line = f"{name}={token_urlsafe(36)}"
+    if separator and name in secret_names:
+        value = value or token_urlsafe(36)
+        secrets[name] = value
+        line = f"{name}={value}"
     result.append(line)
 path.write_text("\n".join(result) + "\n", encoding="utf-8")
+
+config = json.loads(config_path.read_text(encoding="utf-8"))
+config["opencode_password"] = secrets["OPENCODE_SERVER_PASSWORD"]
+config["platform_database"]["password"] = secrets["PLATFORM_DB_PASSWORD"]
+config_path.write_text(
+    json.dumps(config, ensure_ascii=False, indent=2) + "\n",
+    encoding="utf-8",
+)
 PY
 ```
 
 The generated administrator username is `admin`; its password is the local
-`PLATFORM_ADMIN_PASSWORD` value in `.env`. Do not commit, paste, or upload this
-file.
+`PLATFORM_ADMIN_PASSWORD` value in `.env`. Both `.env` and `config.json` now
+contain secrets. Do not commit, paste, or upload either file.
 
 ### 2. Validate and start
 
@@ -126,7 +141,8 @@ When all three services are healthy, open
 
 The Docker example deliberately uses `https://test.example.invalid` as the
 target. Replace it in `config.json` with an authorized test-system URL before
-running or generating browser automation.
+running or generating browser automation, then set that project's `username`
+and `password` fields to a dedicated test account.
 
 Useful commands:
 
@@ -161,26 +177,27 @@ execution, not a sandbox guarantee.
 
 ## Configuration and secrets
 
-`config.json` contains structure and environment-variable references. Secret
-values belong in a runtime secret store or environment injection, never in
-JSON, source control, prompts, scripts, screenshots, logs, or Issues.
+For compatibility, `config.json` stores the OpenCode password, platform database
+password, and each target system's login username and password. Keep the file
+outside source control, restrict it to the service account, and include it only
+in encrypted, access-controlled backups.
 
 | Variable | Purpose |
 | --- | --- |
-| `PLATFORM_SESSION_SECRET` | Session signing secret |
-| `PLATFORM_ADMIN_PASSWORD` | Initial administrator password |
-| `PLATFORM_DB_PASSWORD` | Platform MySQL account password |
+| `PLATFORM_SESSION_SECRET` | Overrides the `auth.session_secret` file value |
+| `PLATFORM_ADMIN_PASSWORD` | Overrides the `auth.initial_admin_password` file value |
+| `PLATFORM_DB_PASSWORD` | Compose MySQL account password; copy the same value to `platform_database.password` |
 | `MYSQL_ROOT_PASSWORD` | Compose MySQL bootstrap password |
-| `OPENCODE_SERVER_PASSWORD` | OpenCode service password |
-| `TARGET_SYSTEM_USERNAME` | Example target-system username reference |
-| `TARGET_SYSTEM_PASSWORD` | Example target-system password reference |
+| `OPENCODE_SERVER_PASSWORD` | Compose OpenCode service password; copy the same value to `opencode_password` |
 | `PLATFORM_COOKIE_SECURE` | Set to `true` behind HTTPS |
 | `PLATFORM_ALLOW_TEST_EXECUTION` | Explicit opt-in for trusted Playwright code |
 | `PLATFORM_ALLOW_HOST_SCRIPT_EXECUTION` | Explicit opt-in for trusted setup shell code; disabled by the published Compose stack |
 
-Target credential references must use a `TARGET_` prefix. Custom names must be
-explicitly injected into the platform container. The model may see reference
-names, but it must never receive their concrete values.
+The platform may include target-system usernames and passwords in planning or
+generation prompts and generated seed scripts. Use only disposable,
+least-privilege credentials for an isolated non-production target. Treat the
+model provider, workspace Git history, logs, and execution artifacts as being
+inside that credential's exposure boundary.
 
 The Compose quickstart fixes the MySQL database and application account to the
 values in `deploy/config.example.json`. To customize either identifier, update
@@ -227,8 +244,8 @@ least-privilege test credentials if reset automation is required.
 
 Playwright reports, screenshots, video, trace, browser downloads, workspace Git
 history, logs, and diagnostic bundles can contain cookies, form values,
-personal information, page content, or internal URLs. Automatic text redaction
-cannot reliably sanitize binary artifacts.
+personal information, page content, or internal URLs. There is no reliable
+automatic sanitizer for every text field or binary artifact.
 
 - restrict artifact access to trusted users;
 - define retention and deletion limits;
@@ -243,15 +260,16 @@ cannot reliably sanitize binary artifacts.
    recoverable snapshot.
 2. Rotate any secret that has ever appeared in `config.json`, scripts, logs,
    documentation, archives, or Git history.
-3. Replace file passwords with the environment references documented above.
-4. Replace target literal usernames/passwords with `TARGET_*` references.
-5. Replace setup `environment_overrides` with `environment_refs`. The schema
-   upgrade scrubs concrete legacy values from the live setup table and retains
-   only variable names plus a migration marker; rebind those variables before
-   running the script. Pre-upgrade backups can still contain the old values.
-6. Remove database-baseline command fields. Use file mode or a reviewed setup
+3. Restore `opencode_password`, `platform_database.password`, project
+   `target_system.username` / `target_system.password`, and setup-script
+   `environment_overrides` if upgrading from an environment-reference build.
+4. An intermediate environment-reference release may already have overwritten
+   project credentials or scrubbed setup environment values in MySQL. A code
+   rollback cannot reconstruct them; recover from a pre-upgrade backup or enter
+   the values again.
+5. Remove database-baseline command fields. Use file mode or a reviewed setup
    workflow; do not restore deleted batch helpers.
-7. Validate the upgrade on an isolated copy before running the new image.
+6. Validate the upgrade on an isolated copy before running the new image.
 
 Deleting a secret from the latest file does not remove it from Git history,
 database backups, exported projects, or prior images.

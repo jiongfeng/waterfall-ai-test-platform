@@ -79,8 +79,7 @@ jobs:
           set -Eeuo pipefail
           shellcheck \
             deploy/entrypoint.sh \
-            deploy/healthcheck.sh \
-            project-template/.opencode/run-playwright-mcp.sh
+            deploy/healthcheck.sh
           PLATFORM_SESSION_SECRET="$(openssl rand -hex 32)"
           PLATFORM_ADMIN_PASSWORD="$(openssl rand -hex 24)"
           PLATFORM_DB_PASSWORD="$(openssl rand -hex 24)"

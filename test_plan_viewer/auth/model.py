@@ -231,6 +231,22 @@ AUTH_API_PERMISSION_POLICY = _build_api_permission_policy(
         ("menu.agent",),
         (
             ("get_project_agent_item_retry_flows_api", "GET"),
+            (
+                "agent_script_preparation.get_script_preparation",
+                "GET",
+            ),
+            (
+                "agent_script_preparation.get_script_item",
+                "GET",
+            ),
+            (
+                "agent_script_preparation.apply_script_item_action",
+                "POST",
+            ),
+            (
+                "agent_script_preparation.apply_script_item_batch_action",
+                "POST",
+            ),
             ("list_agent_runs", "GET"),
             ("create_agent_run_api", "POST"),
             ("get_agent_run_api", "GET"),
@@ -241,17 +257,8 @@ AUTH_API_PERMISSION_POLICY = _build_api_permission_policy(
             ),
             ("retry_agent_generation_attempt_api", "POST"),
             ("cancel_agent_run_api", "POST"),
-            ("agent_failures.continue_failure_checkpoint", "POST"),
             ("get_agent_run_events_api", "GET"),
             ("stream_agent_run_events_api", "GET"),
-            ("agent_failures.get_failure_item", "GET"),
-            ("agent_failures.delete_failure_item", "DELETE"),
-            ("agent_failures.analyze_failure_item", "POST"),
-            ("agent_failures.execute_failure_item", "POST"),
-            ("agent_failures.ignore_failure_item", "POST"),
-            ("agent_failures.retry_failure_item", "POST"),
-            ("agent_failures.get_failure_item_script", "GET"),
-            ("agent_failures.save_failure_item_script", "PATCH"),
             (
                 "download_legacy_agent_failure_diagnostic_bundle",
                 "POST",

@@ -6,11 +6,6 @@ from urllib.parse import urlsplit
 
 from flask import jsonify, request, session
 
-from test_plan_viewer.security.runtime import (
-    redact_public_response_value,
-)
-
-
 CSRF_HEADER_NAME = "X-CSRF-Token"
 CSRF_SESSION_KEY = "_csrf_token"
 UNSAFE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
@@ -143,14 +138,6 @@ def install_web_security(application):
 
     @application.after_request
     def add_security_headers(response):
-        if response.is_json and not response.is_streamed:
-            payload = response.get_json(silent=True)
-            if payload is not None:
-                response.set_data(
-                    application.json.dumps(
-                        redact_public_response_value(payload)
-                    )
-                )
         for name, value in SECURITY_HEADERS.items():
             response.headers[name] = value
         if request.endpoint == "get_playwright_report":

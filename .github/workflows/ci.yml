@@ -119,7 +119,6 @@ jobs:
       - name: Validate shell scripts
         run: >-
           shellcheck deploy/entrypoint.sh deploy/healthcheck.sh
-          project-template/.opencode/run-playwright-mcp.sh
 
       - name: Validate Compose configuration
         shell: bash

@@ -4,23 +4,8 @@ from dataclasses import dataclass
 import re
 from typing import Callable
 
-from test_plan_viewer.execution.environment import (
-    validate_target_credential_environment_name,
-)
-
-
 PAGE_INVENTORY_SOURCES = frozenset(
     {"manual", "doc", "scanner", "plan", "script"}
-)
-PAGE_INVENTORY_LITERAL_CREDENTIAL_KEYS = frozenset(
-    {
-        "loginpassword",
-        "loginusername",
-        "passwd",
-        "password",
-        "pwd",
-        "username",
-    }
 )
 
 
@@ -47,48 +32,6 @@ def _require_dependencies(dependencies):
     return dependencies
 
 
-def sanitize_page_inventory_sample_data(value):
-    if isinstance(value, dict):
-        result = {}
-        migration_required = False
-        for key, item in value.items():
-            normalized_key = re.sub(
-                r"[^a-z0-9]",
-                "",
-                str(key).lower(),
-            )
-            if (
-                normalized_key
-                in PAGE_INVENTORY_LITERAL_CREDENTIAL_KEYS
-            ):
-                migration_required = (
-                    migration_required
-                    or item not in (None, "")
-                )
-                continue
-            sanitized, child_migration = (
-                sanitize_page_inventory_sample_data(item)
-            )
-            result[key] = sanitized
-            migration_required = (
-                migration_required or child_migration
-            )
-        return result, migration_required
-    if isinstance(value, list):
-        result = []
-        migration_required = False
-        for item in value:
-            sanitized, child_migration = (
-                sanitize_page_inventory_sample_data(item)
-            )
-            result.append(sanitized)
-            migration_required = (
-                migration_required or child_migration
-            )
-        return result, migration_required
-    return value, False
-
-
 def serialize_page_inventory(row, dependencies):
     """Serialize one database row to the browser-facing contract."""
 
@@ -96,21 +39,6 @@ def serialize_page_inventory(row, dependencies):
         return None
     dependencies = _require_dependencies(dependencies)
     load_json_column = dependencies.load_json_column
-    accounts = normalize_accounts(
-        load_json_column(
-            row.get("accounts_json"),
-            [],
-        ),
-        dependencies,
-    )
-    sample_data, sample_migration_required = (
-        sanitize_page_inventory_sample_data(
-            load_json_column(
-                row.get("sample_data_json"),
-                [],
-            )
-        )
-    )
     return {
         "id": row.get("id"),
         "inventory_uid": row.get("inventory_uid"),
@@ -121,14 +49,9 @@ def serialize_page_inventory(row, dependencies):
             [],
         ),
         "roles": load_json_column(row.get("roles_json"), []),
-        "accounts": accounts,
-        "credentials_migration_required": bool(
-            row.get("credentials_migration_required")
-            or sample_migration_required
-            or any(
-                account.get("credentials_migration_required")
-                for account in accounts
-            )
+        "accounts": load_json_column(
+            row.get("accounts_json"),
+            [],
         ),
         "stable_selectors": load_json_column(
             row.get("stable_selectors_json"),
@@ -146,7 +69,10 @@ def serialize_page_inventory(row, dependencies):
             row.get("write_actions_json"),
             [],
         ),
-        "sample_data": sample_data,
+        "sample_data": load_json_column(
+            row.get("sample_data_json"),
+            [],
+        ),
         "write_risk": bool(row.get("write_risk")),
         "baseline_required": bool(
             row.get("baseline_required")
@@ -163,131 +89,45 @@ def serialize_page_inventory(row, dependencies):
     }
 
 
-def _normalize_account_reference(
-    value,
-    field_name,
-    *,
-    strict,
-):
-    reference = str(value or "").strip()
-    if reference.startswith("env://"):
-        reference = reference[6:]
-    if not reference:
-        return "", False
-    try:
-        return (
-            validate_target_credential_environment_name(
-                reference
-            ),
-            False,
-        )
-    except ValueError as exc:
-        if strict:
-            raise ValueError(
-                f"accounts[].{field_name} must reference a "
-                "TARGET_ environment variable."
-            ) from exc
-        return "", True
-
-
-def normalize_accounts(
-    value,
-    dependencies,
-    *,
-    reject_plaintext=False,
-):
-    """Normalize account references without exposing stored secrets."""
+def normalize_accounts(value, dependencies):
+    """Normalize account records used by page inventory."""
 
     dependencies = _require_dependencies(dependencies)
     if isinstance(value, list):
         accounts = []
         for item in value:
             if isinstance(item, dict):
-                has_plaintext = bool(
-                    item.get("username")
-                    or item.get("password")
-                )
-                if has_plaintext and reject_plaintext:
-                    raise ValueError(
-                        "accounts must use username_ref/password_ref; "
-                        "plaintext username/password is not accepted."
-                    )
-                username_ref, invalid_username_ref = (
-                    _normalize_account_reference(
-                        item.get("username_ref")
-                        or item.get("username_env"),
-                        "username_ref",
-                        strict=reject_plaintext,
-                    )
-                )
-                password_ref, invalid_password_ref = (
-                    _normalize_account_reference(
-                        item.get("password_ref")
-                        or item.get("password_env"),
-                        "password_ref",
-                        strict=reject_plaintext,
-                    )
-                )
-                migration_required = bool(
-                    has_plaintext
-                    or invalid_username_ref
-                    or invalid_password_ref
-                    or item.get(
-                        "credentials_migration_required"
-                    )
-                )
-                purpose = str(
-                    item.get("purpose") or ""
-                ).strip()
-                if (
-                    username_ref
-                    or password_ref
-                    or purpose
-                    or migration_required
-                ):
+                username = str(item.get("username") or "").strip()
+                if username:
                     accounts.append(
                         {
-                            "username_ref": username_ref,
-                            "password_ref": password_ref,
-                            "purpose": purpose,
-                            "credentials_migration_required": (
-                                migration_required
-                            ),
+                            "username": username,
+                            "password_ref": str(
+                                item.get("password_ref") or ""
+                            ).strip(),
+                            "purpose": str(
+                                item.get("purpose") or ""
+                            ).strip(),
                         }
                     )
             else:
-                legacy_value = str(
-                    item or ""
-                ).strip().strip("`")
-                if legacy_value and reject_plaintext:
-                    raise ValueError(
-                        "accounts must use username_ref/password_ref; "
-                        "plaintext account labels are not accepted."
-                    )
-                if legacy_value:
+                username = str(item or "").strip().strip("`")
+                if username:
                     accounts.append(
                         {
-                            "username_ref": "",
+                            "username": username,
                             "password_ref": "",
                             "purpose": "",
-                            "credentials_migration_required": True,
                         }
                     )
         return accounts
-    legacy_accounts = dependencies.normalize_string_list(value)
-    if legacy_accounts and reject_plaintext:
-        raise ValueError(
-            "accounts must use username_ref/password_ref; "
-            "plaintext account labels are not accepted."
-        )
     return [
         {
-            "username_ref": "",
+            "username": item,
             "password_ref": "",
             "purpose": "",
-            "credentials_migration_required": True,
         }
-        for _item in legacy_accounts
+        for item in dependencies.normalize_string_list(value)
     ]
 
 
@@ -311,23 +151,6 @@ def normalize_page_inventory_payload(payload, dependencies):
         bool(payload.get("baseline_required")) or write_risk
     )
     normalize_string_list = dependencies.normalize_string_list
-    accounts = normalize_accounts(
-        payload.get("accounts"),
-        dependencies,
-        reject_plaintext=True,
-    )
-    sample_data = dependencies.normalize_json_object_or_array(
-        payload.get("sample_data"),
-        [],
-    )
-    sample_data, sample_migration_required = (
-        sanitize_page_inventory_sample_data(sample_data)
-    )
-    if sample_migration_required:
-        raise ValueError(
-            "sample_data must not contain plaintext username/password "
-            "fields; use account references."
-        )
     return {
         "page_name": page_name[:255],
         "url": str(payload.get("url") or "").strip()[:512],
@@ -335,15 +158,7 @@ def normalize_page_inventory_payload(payload, dependencies):
             payload.get("menu_path")
         ),
         "roles": normalize_string_list(payload.get("roles")),
-        "accounts": accounts,
-        "credentials_migration_required": bool(
-            payload.get("credentials_migration_required")
-            or sample_migration_required
-            or any(
-                account.get("credentials_migration_required")
-                for account in accounts
-            )
-        ),
+        "accounts": normalize_accounts(payload.get("accounts"), dependencies),
         "stable_selectors": normalize_string_list(
             payload.get("stable_selectors")
         ),
@@ -356,7 +171,12 @@ def normalize_page_inventory_payload(payload, dependencies):
         "write_actions": normalize_string_list(
             payload.get("write_actions")
         ),
-        "sample_data": sample_data,
+        "sample_data": (
+            dependencies.normalize_json_object_or_array(
+                payload.get("sample_data"),
+                [],
+            )
+        ),
         "write_risk": write_risk,
         "baseline_required": baseline_required,
         "notes": str(payload.get("notes") or "").strip(),

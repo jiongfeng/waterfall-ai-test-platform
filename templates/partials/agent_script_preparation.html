@@ -1,0 +1,266 @@
+<section
+  class="artifact-panel script-preparation-panel hidden"
+  data-script-preparation-id="root"
+  aria-labelledby="agentScriptPreparationTitle"
+>
+  <header class="script-preparation-header">
+    <div class="script-preparation-heading">
+      <p class="path-label" data-script-preparation-id="stageMeta">脚本准备</p>
+      <h2 id="agentScriptPreparationTitle" data-script-preparation-id="stageTitle">脚本准备</h2>
+      <p data-script-preparation-id="stageSummary">系统依次完成生成、执行和一次自动修复；待人工脚本不阻塞后续处理。</p>
+    </div>
+    <div class="script-preparation-header-actions">
+      <span class="status-badge" data-script-preparation-id="stageStatus">等待中</span>
+      <button
+        class="secondary-button"
+        data-script-preparation-id="bulkToggle"
+        data-script-preparation-action="bulk-toggle"
+        type="button"
+      >批量操作</button>
+      <button
+        class="secondary-button hidden"
+        data-script-preparation-id="bulkExit"
+        data-script-preparation-action="bulk-exit"
+        type="button"
+      >退出批量</button>
+    </div>
+  </header>
+
+  <section class="script-preparation-stats" aria-label="脚本准备进度">
+    <article class="script-preparation-stat script-preparation-progress-stat">
+      <span>准备完成</span>
+      <strong data-script-preparation-id="progressValue">0 / 0</strong>
+      <div class="script-preparation-progress-track" aria-hidden="true">
+        <span data-script-preparation-id="progressBar"></span>
+      </div>
+    </article>
+    <article class="script-preparation-stat"><span>处理中</span><strong data-script-preparation-id="processingCount">0</strong></article>
+    <article class="script-preparation-stat"><span>已通过</span><strong data-script-preparation-id="readyCount">0</strong></article>
+    <article class="script-preparation-stat"><span>待人工</span><strong data-script-preparation-id="awaitingCount">0</strong></article>
+    <article class="script-preparation-stat"><span>已放弃</span><strong data-script-preparation-id="abandonedCount">0</strong></article>
+  </section>
+
+  <div class="script-preparation-filterbar">
+    <div data-script-preparation-id="filterBar" role="group" aria-label="筛选脚本">
+      <button class="active" data-script-preparation-filter="all" type="button" aria-pressed="true">全部 0</button>
+      <button data-script-preparation-filter="processing" type="button" aria-pressed="false">处理中 0</button>
+      <button data-script-preparation-filter="ready" type="button" aria-pressed="false">已通过 0</button>
+      <button data-script-preparation-filter="awaiting_human" type="button" aria-pressed="false">待人工 0</button>
+      <button data-script-preparation-filter="abandoned" type="button" aria-pressed="false">已放弃 0</button>
+    </div>
+    <input
+      data-script-preparation-id="searchInput"
+      type="search"
+      placeholder="搜索脚本、模块或文件"
+      aria-label="搜索脚本"
+      autocomplete="off"
+    />
+  </div>
+
+  <section class="script-preparation-batchbar hidden" data-script-preparation-id="batchBar" aria-label="批量操作">
+    <strong data-script-preparation-id="selectedCount">已选择 0 条脚本</strong>
+    <span data-script-preparation-id="batchHint">选择脚本后执行批量操作</span>
+    <span class="script-preparation-flex-fill"></span>
+    <button
+      class="secondary-button compact-button"
+      data-script-preparation-id="clearSelection"
+      data-script-preparation-action="clear-selection"
+      type="button"
+    >清空选择</button>
+    <div class="script-preparation-batch-menu-wrap">
+      <button
+        class="primary-button compact-button"
+        data-script-preparation-id="batchMenuToggle"
+        data-script-preparation-action="batch-menu-toggle"
+        type="button"
+        aria-haspopup="menu"
+        aria-expanded="false"
+      >执行批量操作</button>
+      <div class="script-preparation-batch-menu hidden" data-script-preparation-id="batchMenu" role="menu">
+        <button data-script-preparation-id="batchExecute" data-script-preparation-action="batch-execute" type="button" role="menuitem">执行最新版本</button>
+        <button data-script-preparation-action="batch-regenerate" type="button" role="menuitem">重新生成</button>
+        <button data-script-preparation-id="batchRepair" data-script-preparation-action="batch-repair" type="button" role="menuitem">重新修复</button>
+        <button class="danger" data-script-preparation-action="batch-abandon" type="button" role="menuitem">忽略脚本</button>
+        <p>重新生成和重新修复会分别使用每个脚本保存的原 Prompt 与 AI 补充 Prompt。</p>
+      </div>
+    </div>
+  </section>
+
+  <div class="script-preparation-table-wrap">
+    <table class="script-preparation-table">
+      <colgroup>
+        <col class="script-preparation-select-column" />
+        <col class="script-preparation-name-column" />
+        <col class="script-preparation-module-column" />
+        <col class="script-preparation-status-column" />
+        <col class="script-preparation-version-column" />
+        <col />
+        <col class="script-preparation-time-column" />
+        <col class="script-preparation-action-column" />
+      </colgroup>
+      <thead>
+        <tr>
+          <th class="script-preparation-select-cell">
+            <input
+              data-script-preparation-id="selectAll"
+              data-script-preparation-action="select-all"
+              type="checkbox"
+              aria-label="选择当前筛选结果"
+            />
+          </th>
+          <th>脚本 / 测试计划</th>
+          <th>模块</th>
+          <th>状态</th>
+          <th>当前版本</th>
+          <th>最新进展</th>
+          <th>更新时间</th>
+          <th>操作</th>
+        </tr>
+      </thead>
+      <tbody data-script-preparation-id="tableBody"></tbody>
+    </table>
+    <div class="script-preparation-empty hidden" data-script-preparation-id="tableEmpty">
+      <strong>没有符合条件的脚本</strong>
+      <span>请调整筛选条件或搜索内容。</span>
+    </div>
+  </div>
+
+  <footer class="script-preparation-table-footer">
+    <span data-script-preparation-id="tableFooterTotal">共 0 条脚本</span>
+    <span data-script-preparation-id="tableFooterHint">只有执行成功的脚本会进入测试集</span>
+  </footer>
+  <div class="notice script-preparation-notice hidden" data-script-preparation-id="localNotice" role="status"></div>
+
+  <div
+    class="script-preparation-modal hidden"
+    data-script-preparation-id="detailModal"
+    role="dialog"
+    aria-modal="true"
+    aria-hidden="true"
+    aria-labelledby="agentScriptPreparationDetailTitle"
+  >
+    <button
+      class="script-preparation-modal-backdrop"
+      data-script-preparation-id="detailBackdrop"
+      data-script-preparation-action="detail-backdrop"
+      type="button"
+      tabindex="-1"
+      aria-label="关闭脚本详情"
+    ></button>
+    <section class="script-preparation-detail-dialog">
+      <header class="script-preparation-detail-header">
+        <div>
+          <p data-script-preparation-id="detailMeta">脚本准备</p>
+          <h2 id="agentScriptPreparationDetailTitle" data-script-preparation-id="detailTitle">脚本详情</h2>
+          <div data-script-preparation-id="detailBadges"></div>
+        </div>
+        <button
+          class="icon-button"
+          data-script-preparation-id="detailClose"
+          data-script-preparation-action="detail-close"
+          type="button"
+          title="关闭"
+          aria-label="关闭脚本详情"
+        >×</button>
+      </header>
+      <div class="script-preparation-detail-layout">
+        <aside class="script-preparation-history-column">
+          <h3>处理历史</h3>
+          <div class="script-preparation-history-list" data-script-preparation-id="historyList"></div>
+        </aside>
+        <article class="script-preparation-detail-content" data-script-preparation-id="detailContent"></article>
+        <aside class="script-preparation-action-panel" data-script-preparation-id="actionPanel"></aside>
+      </div>
+    </section>
+  </div>
+
+  <div
+    class="script-preparation-modal script-preparation-editor-modal hidden"
+    data-script-preparation-id="editorModal"
+    role="dialog"
+    aria-modal="true"
+    aria-hidden="true"
+    aria-labelledby="agentScriptPreparationEditorTitle"
+  >
+    <button
+      class="script-preparation-modal-backdrop"
+      data-script-preparation-id="editorBackdrop"
+      data-script-preparation-action="editor-backdrop"
+      type="button"
+      tabindex="-1"
+      aria-label="关闭编辑弹窗"
+    ></button>
+    <section class="script-preparation-editor-dialog">
+      <header class="script-preparation-detail-header">
+        <div>
+          <p data-script-preparation-id="editorMeta">脚本准备</p>
+          <h2 id="agentScriptPreparationEditorTitle" data-script-preparation-id="editorTitle">编辑脚本</h2>
+          <p data-script-preparation-id="editorDescription"></p>
+        </div>
+        <button
+          class="icon-button"
+          data-script-preparation-id="editorClose"
+          data-script-preparation-action="editor-close"
+          type="button"
+          title="关闭"
+          aria-label="关闭编辑弹窗"
+        >×</button>
+      </header>
+      <div class="script-preparation-editor-body">
+        <div class="script-preparation-version-flow" aria-label="版本继承关系">
+          <div><span>基线</span><strong data-script-preparation-id="editorBaseline">候选版本</strong></div>
+          <i aria-hidden="true">→</i>
+          <div><span>操作后</span><strong data-script-preparation-id="editorTarget">新候选版本</strong></div>
+        </div>
+        <section data-script-preparation-id="editSection">
+          <label class="script-preparation-field">
+            <span>脚本内容</span>
+            <textarea
+              class="script-preparation-script-editor"
+              data-script-preparation-id="scriptEditor"
+              spellcheck="false"
+              aria-label="脚本内容"
+            ></textarea>
+          </label>
+        </section>
+        <section class="hidden" data-script-preparation-id="promptSection">
+          <label class="script-preparation-field">
+            <span>原 Prompt <small>保留任务最初的上下文，可直接编辑</small></span>
+            <textarea data-script-preparation-id="originalPrompt" spellcheck="false"></textarea>
+          </label>
+          <label class="script-preparation-field">
+            <span>补充 Prompt <small>由 AI 预生成，可按实际情况调整</small></span>
+            <textarea class="script-preparation-supplemental-prompt" data-script-preparation-id="supplementalPrompt" spellcheck="false"></textarea>
+          </label>
+        </section>
+      </div>
+      <footer class="script-preparation-editor-footer">
+        <button
+          class="secondary-button"
+          data-script-preparation-id="editorCancel"
+          data-script-preparation-action="editor-cancel"
+          type="button"
+        >取消</button>
+        <span class="script-preparation-flex-fill"></span>
+        <button
+          class="secondary-button"
+          data-script-preparation-id="editorSave"
+          data-script-preparation-action="editor-save"
+          type="button"
+        >仅保存</button>
+        <button
+          class="primary-button"
+          data-script-preparation-id="editorSaveExecute"
+          data-script-preparation-action="editor-save-execute"
+          type="button"
+        >保存并执行</button>
+        <button
+          class="primary-button hidden"
+          data-script-preparation-id="editorConfirm"
+          data-script-preparation-action="editor-confirm"
+          type="button"
+        >确认</button>
+      </footer>
+    </section>
+  </div>
+</section>

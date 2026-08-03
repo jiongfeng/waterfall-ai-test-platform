@@ -122,7 +122,7 @@ class ProjectModelTests(unittest.TestCase):
             },
         )
 
-    def test_project_serialization_never_exposes_literal_credentials(self):
+    def test_public_serialization_redacts_only_the_password(self):
         project = {
             "project_id": 7,
             "project_key": "demo",
@@ -131,22 +131,6 @@ class ProjectModelTests(unittest.TestCase):
                 "base_url": "https://example.test",
                 "username": "tester",
                 "password": "secret",
-                "username_env": "TARGET_DEMO_USERNAME",
-                "password_env": "TARGET_DEMO_PASSWORD",
-            },
-            "opencode_config": {
-                "opencode_server_url": "http://127.0.0.1:4096",
-                "opencode_username": "opencode",
-                "opencode_password": "legacy-opencode-secret",
-                "opencode_password_env": "DEMO_OPENCODE_PASSWORD",
-            },
-            "database_baseline": {
-                "enabled": True,
-                "mode": "file",
-                "backup_command": [
-                    "backup",
-                    "--password=legacy-database-secret",
-                ],
             },
         }
 
@@ -156,41 +140,10 @@ class ProjectModelTests(unittest.TestCase):
             include_sensitive=True,
         )
 
-        self.assertNotIn("username", public["target_system"])
-        self.assertNotIn("password", public["target_system"])
-        self.assertNotIn("username", sensitive["target_system"])
-        self.assertNotIn("password", sensitive["target_system"])
+        self.assertEqual(public["target_system"]["password"], "")
         self.assertEqual(
-            public["target_system"]["password_env"],
-            "TARGET_DEMO_PASSWORD",
-        )
-        self.assertTrue(
-            public["target_system"]["credentials_migration_required"]
-        )
-        self.assertNotIn(
-            "opencode_password",
-            public["opencode_config"],
-        )
-        self.assertNotIn(
-            "opencode_password",
-            sensitive["opencode_config"],
-        )
-        self.assertEqual(
-            public["opencode_config"]["opencode_password_env"],
-            "DEMO_OPENCODE_PASSWORD",
-        )
-        self.assertTrue(
-            public["opencode_config"][
-                "credentials_migration_required"
-            ]
-        )
-        self.assertEqual(
-            public["database_baseline"],
-            {"enabled": True, "mode": "file"},
-        )
-        self.assertNotIn(
-            "backup_command",
-            public["database_baseline"],
+            sensitive["target_system"]["password"],
+            "secret",
         )
         self.assertEqual(public["key"], "demo")
 
@@ -205,7 +158,7 @@ class ProjectModelTests(unittest.TestCase):
         )
 
         self.assertEqual(project["project_key"], "broken")
-        self.assertNotIn("password", project["target_system"])
+        self.assertEqual(project["target_system"]["password"], "")
         self.assertEqual(
             project["plan_generation"]["default_coverage_profile"],
             "core",
@@ -681,11 +634,7 @@ class ProjectRouteTests(unittest.TestCase):
             "project_key": "demo",
             "name": "Demo",
             "playwright_project_root": "/workspace/demo",
-            "target_system": {
-                "password": "secret",
-                "username_env": "TARGET_DEMO_USERNAME",
-                "password_env": "TARGET_DEMO_PASSWORD",
-            },
+            "target_system": {"password": "secret"},
             "is_default": True,
         }
         with (
@@ -711,9 +660,9 @@ class ProjectRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         payload = response.get_json()
         self.assertEqual(payload["projects"][0]["project_key"], "demo")
-        self.assertNotIn(
-            "password",
-            payload["projects"][0]["target_system"],
+        self.assertEqual(
+            payload["projects"][0]["target_system"]["password"],
+            "",
         )
         self.assertEqual(payload["project_workspace_root"], "/workspace")
         list_projects.assert_called_once_with()
@@ -745,8 +694,8 @@ class ProjectRouteTests(unittest.TestCase):
             "project_key": "demo",
             "target_system": {
                 "base_url": "https://example.test",
-                "username_env": "TARGET_DEMO_USERNAME",
-                "password_env": "TARGET_DEMO_PASSWORD",
+                "username": "tester",
+                "password": "secret",
             },
             "database_baseline": {"enabled": False},
             "plan_generation": {
@@ -775,12 +724,8 @@ class ProjectRouteTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(
-            response.get_json()["target_system"]["password_env"],
-            "TARGET_DEMO_PASSWORD",
-        )
-        self.assertNotIn(
-            "password",
-            response.get_json()["target_system"],
+            response.get_json()["target_system"]["password"],
+            "secret",
         )
 
         with (
@@ -794,11 +739,6 @@ class ProjectRouteTests(unittest.TestCase):
                 "update_current_project_settings_in_mysql",
                 return_value=project,
             ) as update_settings,
-            patch.object(
-                app,
-                "get_seed_script_relative_path",
-                return_value="tests/seed/seed.spec.ts",
-            ),
         ):
             response = self.client.put(
                 "/api/project-settings",
@@ -811,12 +751,8 @@ class ProjectRouteTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(
-            response.get_json()["project"]["target_system"]["password_env"],
-            "TARGET_DEMO_PASSWORD",
-        )
-        self.assertNotIn(
-            "password",
-            response.get_json()["project"]["target_system"],
+            response.get_json()["project"]["target_system"]["password"],
+            "secret",
         )
         update_settings.assert_called_once()
 
@@ -824,15 +760,15 @@ class ProjectRouteTests(unittest.TestCase):
         with patch.object(
             app,
             "parse_target_system_config",
-            return_value={"password_env": "PATCHED_PASSWORD"},
+            return_value={"password": "patched"},
         ):
             serialized = app.serialize_project(
                 {"project_key": "demo"},
                 include_sensitive=True,
             )
         self.assertEqual(
-            serialized["target_system"]["password_env"],
-            "PATCHED_PASSWORD",
+            serialized["target_system"]["password"],
+            "patched",
         )
 
         with patch.object(

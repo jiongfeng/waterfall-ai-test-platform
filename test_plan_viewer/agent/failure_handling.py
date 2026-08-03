@@ -8,6 +8,7 @@ from dataclasses import dataclass
 import json
 from pathlib import Path
 import threading
+import traceback
 from typing import Any, Callable
 
 from test_plan_viewer.core.validation import normalize_string_list, validate_uid
@@ -1204,12 +1205,9 @@ def retry_agent_failure_item(run_id, item_id, instructions=""):
             result_id=failure_context["result_id"],
             asset_id=failure_context["asset_id"],
             error_type=failure_context["error_type"],
-            error_message=safe_error,
-            error_stack="",
-            output_summary={
-                "failure_item_id": item_id,
-                "error": safe_error,
-            },
+            error_message=str(exc),
+            error_stack=traceback.format_exc(),
+            output_summary={"failure_item_id": item_id, "error": str(exc)},
             artifact_refs=[
                 {"source": "partial", "path": path}
                 for path in failure_context["partial_artifacts"]
@@ -1222,7 +1220,7 @@ def retry_agent_failure_item(run_id, item_id, instructions=""):
             {
                 "attempt_id": attempt_id,
                 "error_type": failure_context["error_type"],
-                "error": safe_error,
+                "error": str(exc),
                 "job_id": failure_context["job_id"],
                 "test_run_id": failure_context["test_run_id"],
                 "result_id": failure_context["result_id"],
@@ -1355,12 +1353,9 @@ def execute_agent_failure_item(run_id, item_id):
             test_run_id=failure_context["test_run_id"],
             result_id=failure_context["result_id"],
             error_type=failure_context["error_type"],
-            error_message=safe_error,
-            error_stack="",
-            output_summary={
-                "failure_item_id": item_id,
-                "error": safe_error,
-            },
+            error_message=str(exc),
+            error_stack=traceback.format_exc(),
+            output_summary={"failure_item_id": item_id, "error": str(exc)},
         )
         updated = agent_failure_item_with_evidence(
             claimed,
@@ -1369,7 +1364,7 @@ def execute_agent_failure_item(run_id, item_id):
             {
                 "attempt_id": attempt_id,
                 "error_type": failure_context["error_type"],
-                "error": safe_error,
+                "error": str(exc),
                 "job_id": failure_context["job_id"],
                 "test_run_id": failure_context["test_run_id"],
                 "result_id": failure_context["result_id"],

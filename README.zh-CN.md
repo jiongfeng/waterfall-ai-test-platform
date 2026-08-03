@@ -38,7 +38,7 @@ Playwright 测试平台是一个自托管工作台，用于管理测试需求、
 - 平台前方配置 TLS 和外部访问控制。
 
 Playwright 测试和准备脚本会执行代码。它们与平台共享应用容器的操作系统边界，
-**不能**作为敌对代码运行沙箱。环境变量白名单和默认关闭开关只能减少误暴露，
+**不能**作为敌对代码运行沙箱。默认关闭开关和容器限制只能减少误暴露，
 不能把容器变成沙箱。不要给不可信用户执行权限，不要挂载 Docker Socket，也
 不要连接生产凭据或生产数据。
 
@@ -72,14 +72,18 @@ cp .env.example .env
 chmod 600 config.json .env
 ```
 
-生成相互独立的快速开始秘密，秘密值不会出现在进程命令参数中：
+生成相互独立的快速开始秘密，秘密值不会出现在进程命令参数中。脚本还会把数据
+库和 OpenCode 服务密码复制到本地 `config.json`，与应用恢复后的文件密码字段
+保持一致：
 
 ```bash
 python3 - <<'PY'
 from pathlib import Path
 from secrets import token_urlsafe
+import json
 
 path = Path(".env")
+config_path = Path("config.json")
 secret_names = {
     "PLATFORM_SESSION_SECRET",
     "PLATFORM_ADMIN_PASSWORD",
@@ -88,17 +92,29 @@ secret_names = {
     "MYSQL_ROOT_PASSWORD",
 }
 result = []
+secrets = {}
 for line in path.read_text(encoding="utf-8").splitlines():
     name, separator, value = line.partition("=")
-    if separator and name in secret_names and not value:
-        line = f"{name}={token_urlsafe(36)}"
+    if separator and name in secret_names:
+        value = value or token_urlsafe(36)
+        secrets[name] = value
+        line = f"{name}={value}"
     result.append(line)
 path.write_text("\n".join(result) + "\n", encoding="utf-8")
+
+config = json.loads(config_path.read_text(encoding="utf-8"))
+config["opencode_password"] = secrets["OPENCODE_SERVER_PASSWORD"]
+config["platform_database"]["password"] = secrets["PLATFORM_DB_PASSWORD"]
+config_path.write_text(
+    json.dumps(config, ensure_ascii=False, indent=2) + "\n",
+    encoding="utf-8",
+)
 PY
 ```
 
 初始管理员用户名是 `admin`，密码是本机 `.env` 中的
-`PLATFORM_ADMIN_PASSWORD`。不要提交、粘贴或上传该文件。
+`PLATFORM_ADMIN_PASSWORD`。此时 `.env` 与 `config.json` 都含秘密，不要提交、
+粘贴或上传其中任何一个文件。
 
 ### 2. 校验并启动
 
@@ -113,7 +129,8 @@ docker compose --env-file .env -f deploy/compose.yaml ps
 
 Docker 示例故意把被测地址设为保留域名
 `https://test.example.invalid`。运行或生成浏览器自动化前，必须在
-`config.json` 中替换为已获授权的测试系统地址。
+`config.json` 中替换为已获授权的测试系统地址，并把该项目的 `username` 和
+`password` 设置为专用测试账号。
 
 常用命令：
 
@@ -147,24 +164,24 @@ docker compose --env-file .env -f deploy/compose.yaml up --detach --force-recrea
 
 ## 配置与秘密
 
-`config.json` 只保存结构和环境变量引用。秘密值应由运行时 secret store
-或环境注入提供，不能进入 JSON、源码仓库、Prompt、脚本、截图、日志或 Issue。
+为兼容原有行为，`config.json` 保存 OpenCode 密码、平台数据库密码，以及各被测
+系统的登录用户名和密码。该文件不得进入源码仓库，只允许服务账号读取，并且只
+能进入加密且访问受限的备份。
 
 | 环境变量 | 用途 |
 | --- | --- |
-| `PLATFORM_SESSION_SECRET` | 会话签名秘密 |
-| `PLATFORM_ADMIN_PASSWORD` | 初始管理员密码 |
-| `PLATFORM_DB_PASSWORD` | 平台 MySQL 账号密码 |
+| `PLATFORM_SESSION_SECRET` | 覆盖文件中的 `auth.session_secret` |
+| `PLATFORM_ADMIN_PASSWORD` | 覆盖文件中的 `auth.initial_admin_password` |
+| `PLATFORM_DB_PASSWORD` | Compose 的 MySQL 账号密码；同一值还要写入 `platform_database.password` |
 | `MYSQL_ROOT_PASSWORD` | Compose 初始化 MySQL 的 root 密码 |
-| `OPENCODE_SERVER_PASSWORD` | OpenCode 服务密码 |
-| `TARGET_SYSTEM_USERNAME` | 示例被测系统用户名引用 |
-| `TARGET_SYSTEM_PASSWORD` | 示例被测系统密码引用 |
+| `OPENCODE_SERVER_PASSWORD` | Compose 的 OpenCode 服务密码；同一值还要写入 `opencode_password` |
 | `PLATFORM_COOKIE_SECURE` | HTTPS 部署时设为 `true` |
 | `PLATFORM_ALLOW_TEST_EXECUTION` | 显式允许执行可信 Playwright 代码 |
 | `PLATFORM_ALLOW_HOST_SCRIPT_EXECUTION` | 显式允许可信准备 shell；公开 Compose 中保持禁用 |
 
-被测系统凭据引用必须使用 `TARGET_` 前缀。自定义变量名还必须显式注入平台
-容器。模型可以看到引用名称，但不能接收实际值。
+平台可能把被测系统用户名和密码放入规划/生成 Prompt 或生成的 seed 脚本。只能
+使用隔离非生产环境中的可撤销、最小权限测试账号，并把模型提供方、工作区 Git、
+日志和执行产物都视为该凭据的暴露边界。
 
 Compose 快速开始固定使用 `deploy/config.example.json` 中的数据库名和应用
 账号。如需修改任一标识，必须同时更新 `deploy/compose.yaml` 的 MySQL 服务，
@@ -203,8 +220,8 @@ Compose 快速开始固定使用 `deploy/config.example.json` 中的数据库名
 ## 敏感产物
 
 Playwright 报告、截图、视频、trace、浏览器下载、工作区 Git 历史、日志和
-诊断包都可能包含 Cookie、表单值、个人信息、页面内容或内部 URL。自动文本
-脱敏无法可靠处理二进制产物。
+诊断包都可能包含 Cookie、表单值、个人信息、页面内容或内部 URL。不存在能够
+可靠覆盖所有自由文本和二进制产物的自动清理机制。
 
 - 只允许可信用户访问产物；
 - 配置保留期限和安全删除；
@@ -216,14 +233,14 @@ Playwright 报告、截图、视频、trace、浏览器下载、工作区 Git �
 
 1. 将 MySQL 和每个项目工作区（包括 `.git`）备份为同一个可恢复快照。
 2. 轮换所有曾进入 `config.json`、脚本、日志、文档、归档或 Git 历史的秘密。
-3. 按本文把文件密码改成环境变量引用。
-4. 把被测系统明文用户名/密码改成 `TARGET_*` 引用。
-5. 把准备脚本的 `environment_overrides` 改成 `environment_refs`。schema
-   升级会从当前准备脚本表中清除旧实际值，只保留变量名和迁移标记；重新绑定后
-   才能执行。升级前备份仍可能包含旧值。
-6. 删除 database baseline 的命令字段，改用 file 模式或经过评审的准备流程，
+3. 如果来自环境引用版本，恢复 `opencode_password`、
+   `platform_database.password`、项目的 `target_system.username` /
+   `target_system.password`，以及准备脚本的 `environment_overrides`。
+4. 中间版本可能已经在 MySQL 中覆写项目凭据或清除了准备脚本环境值。代码回退
+   无法重建这些值，只能从升级前备份恢复或重新录入。
+5. 删除 database baseline 的命令字段，改用 file 模式或经过评审的准备流程，
    不要恢复已删除的批处理脚本。
-7. 在隔离副本上完成升级验证后再运行新镜像。
+6. 在隔离副本上完成升级验证后再运行新镜像。
 
 只删除最新文件中的秘密，不会清除 Git 历史、数据库备份、项目导出包或旧镜像。
 
