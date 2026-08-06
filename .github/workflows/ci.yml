@@ -33,12 +33,13 @@ jobs:
           - "3.14"
     steps:
       - name: Check out source
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
+          ref: ${{ github.sha }}
           persist-credentials: false
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
@@ -48,10 +49,14 @@ jobs:
         run: python -m pip install --requirement requirements.txt
 
       - name: Compile Python sources and tests
-        run: python -m compileall -q app.py test_plan_viewer tests
+        run: python -m compileall -q app.py test_plan_viewer tests scripts/release
 
       - name: Run Python tests
         run: python -m unittest discover -s tests
+
+      - name: Test immutable release-chain validators
+        run: |
+          python -m unittest discover -s scripts/release/tests -p 'test_*.py'
 
   javascript:
     name: Node.js ${{ matrix.node-version }}
@@ -64,12 +69,13 @@ jobs:
           - "24"
     steps:
       - name: Check out source
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
+          ref: ${{ github.sha }}
           persist-credentials: false
 
       - name: Set up Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: ${{ matrix.node-version }}
           cache: npm
@@ -112,18 +118,78 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out source
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
+          ref: ${{ github.sha }}
           persist-credentials: false
 
-      - name: Validate shell scripts
-        run: >-
-          shellcheck deploy/entrypoint.sh deploy/healthcheck.sh
+      - name: Install checksum-pinned actionlint
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          archive="${RUNNER_TEMP}/actionlint.tar.gz"
+          curl --fail --location --proto '=https' --tlsv1.2 \
+            --output "${archive}" \
+            https://github.com/rhysd/actionlint/releases/download/v1.7.9/actionlint_1.7.9_linux_amd64.tar.gz
+          printf '%s  %s\n' \
+            233b280d05e100837f4af1433c7b40a5dcb306e3aa68fb4f17f8a7f45a7df7b4 \
+            "${archive}" | sha256sum --check --strict
+          tar --extract --gzip --file "${archive}" \
+            --directory "${RUNNER_TEMP}" actionlint
+          chmod 0755 "${RUNNER_TEMP}/actionlint"
+          "${RUNNER_TEMP}/actionlint" -version
+
+      - name: Validate workflow syntax and embedded shell
+        shell: bash
+        run: '"${RUNNER_TEMP}/actionlint" -color=false .github/workflows/*.yml'
+
+      - name: Validate shell and release scripts
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          shellcheck -x \
+            deploy/entrypoint.sh \
+            deploy/healthcheck.sh \
+            deploy/platform-compose \
+            scripts/release/build-bundle.sh \
+            scripts/release/smoke-bundle.sh \
+            scripts/release/verify-bundle.sh \
+            scripts/release/tests/test-release-scripts.sh \
+            scripts/release/tests/test-runtime-wrapper.sh \
+            scripts/release/runtime/.release-common \
+            scripts/release/runtime/install \
+            scripts/release/runtime/logs \
+            scripts/release/runtime/platform-compose \
+            scripts/release/runtime/preflight \
+            scripts/release/runtime/stop \
+            scripts/release/runtime/verify
+          bash scripts/release/tests/test-runtime-wrapper.sh
+          bash scripts/release/tests/test-release-scripts.sh
+
+      - name: Require immutable action references
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          import pathlib, re
+          failures = []
+          for path in pathlib.Path(".github/workflows").glob("*.yml"):
+              for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+                  match = re.match(r"\s*uses:\s*([^\s#]+)", line)
+                  if match and not re.fullmatch(r"[^@]+@[0-9a-f]{40}", match.group(1)):
+                      failures.append(f"{path}:{number}: mutable action reference {match.group(1)}")
+          if failures:
+              raise SystemExit("\n".join(failures))
+          PY
 
       - name: Validate Compose configuration
         shell: bash
         run: |
           set -Eeuo pipefail
+          runtime_config="${RUNNER_TEMP}/platform-config.json"
+          cp deploy/config.example.json "${runtime_config}"
+          chmod 0444 "${runtime_config}"
+          export PLATFORM_RUNTIME_CONFIG_FILE="${runtime_config}"
           PLATFORM_SESSION_SECRET="$(openssl rand -hex 32)"
           PLATFORM_ADMIN_PASSWORD="$(openssl rand -hex 24)"
           PLATFORM_DB_PASSWORD="$(openssl rand -hex 24)"
@@ -132,14 +198,23 @@ jobs:
           export PLATFORM_SESSION_SECRET PLATFORM_ADMIN_PASSWORD
           export PLATFORM_DB_PASSWORD MYSQL_ROOT_PASSWORD
           export OPENCODE_SERVER_PASSWORD
-          docker compose -f deploy/compose.yaml config --quiet
+          docker compose --project-directory "${GITHUB_WORKSPACE}" \
+            -f deploy/compose.yaml config --quiet
+          docker compose --project-directory "${GITHUB_WORKSPACE}" \
+            -f deploy/compose.yaml -f deploy/compose.build.yaml config --quiet
+          docker compose --project-directory "${GITHUB_WORKSPACE}" \
+            -f deploy/compose.yaml config --format json \
+            | python3 -c 'import json,sys; value=json.load(sys.stdin); assert all("build" not in service for service in value["services"].values())'
+          docker compose --project-directory "${GITHUB_WORKSPACE}" \
+            -f deploy/compose.yaml -f deploy/compose.build.yaml config --format json \
+            | python3 -c 'import json,os,sys; value=json.load(sys.stdin); root=os.path.realpath(os.environ["GITHUB_WORKSPACE"]); built={name for name, service in value["services"].items() if "build" in service}; assert built == {"platform"}; assert value["services"]["platform"]["build"]["context"] == root; assert value["services"]["platform"]["build"]["dockerfile"] == "deploy/Dockerfile"'
           test -f deploy/config.example.json
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
       - name: Build Linux image
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           file: deploy/Dockerfile

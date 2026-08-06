@@ -1,14 +1,17 @@
 # 配置参考
 
-本文说明公开 Beta 的配置结构、凭据保存方式和迁移边界。安全假设与部署要求分别
+本文说明公开 Beta 候选的配置结构、凭据保存方式和迁移边界。安全假设与部署要求分别
 见[安全模型](./security-model.md)和[部署指南](./deployment.md)。
 
 ## 配置文件
 
 应用从 JSON 文件读取项目和连接配置，其中可能包含密码：
 
-- 默认路径是应用目录下的 `config.json`；
-- 推荐通过 `PLATFORM_CONFIG_PATH` 指向部署者维护的只读文件；
+- 本地开发默认读取应用目录下的 `config.json`，也可通过
+  `PLATFORM_CONFIG_PATH` 指定其他路径；
+- 源码检出只通过 `./deploy/platform-compose` 操作；经过验证的 Release 安装副本只
+  通过 `./bin/platform-compose` 操作。两条路径最终都委托同一部署包装脚本，读取
+  模式为 `0600` 的宿主配置，严格校验后暂存为 Compose file-backed secret；
 - `config.json`、`.env`、secret 文件和私有 runbook 不得提交到平台源码仓库
   或项目工作区 Git；
 - URL 只接受 HTTP(S)，并拒绝 `user:password@host` 形式的内嵌凭据；
@@ -17,6 +20,26 @@
 本地无数据库示例见 [`config.example.json`](../config.example.json)，Docker
 Compose 示例见 [`deploy/config.example.json`](../deploy/config.example.json)。
 两者都不包含可用秘密。
+
+Docker 包装脚本默认读取仓库根目录 `config.json`，也可用
+`PLATFORM_CONFIG_FILE` 指定宿主源文件。它将规范化副本写入
+`deploy/.runtime/secrets/platform-config.json`：两个私有目录模式为 `0700`，
+副本模式为 `0444`，再以只读 secret 挂载到容器。`0444` 只在无法被其他用户遍历
+的私有父目录内使用，用于兼容容器非 root UID；宿主源文件仍必须保持 `0600`。
+
+`.runtime` 已被 Git 忽略但仍是含秘密的持久运行数据，不得提交、公开分享或进入
+未加密/公开备份。不要直接编辑暂存副本。修改源文件后运行对应入口（不要混用）：
+
+```bash
+# 源码检出
+./deploy/platform-compose apply-config
+
+# 已安装的 Release bundle
+./bin/platform-compose apply-config
+```
+
+直接调用 `docker compose` 会缺少包装脚本生成的运行时 secret 路径，属于不支持
+的操作方式。
 
 ## Docker 示例结构
 
@@ -78,7 +101,9 @@ Compose 示例见 [`deploy/config.example.json`](../deploy/config.example.json)�
 
 | 名称 | 必需条件 | 用途 |
 | --- | --- | --- |
-| `PLATFORM_CONFIG_PATH` | 推荐 | 指向仓库外或只读挂载的 JSON |
+| `PLATFORM_CONFIG_FILE` | Docker 可选 | 包装脚本读取的宿主 `0600` JSON；默认根目录 `config.json` |
+| `PLATFORM_RUNTIME_DIR` | Docker 可选 | 私有暂存目录；默认 `deploy/.runtime` |
+| `PLATFORM_CONFIG_PATH` | 本地开发可选 | 应用读取的 JSON；公开 Compose 固定为容器 secret 路径 |
 | `PLATFORM_AUTH_ENABLED` | 可选 | 覆盖 `auth.enabled` |
 | `PLATFORM_SESSION_SECRET` | 启用认证时必需 | 会话签名；至少 32 字符高熵值 |
 | `PLATFORM_ADMIN_PASSWORD` | 初始化管理员时必需 | 独立强密码 |
@@ -245,22 +270,26 @@ URL 不得内嵌用户名或密码。OpenCode/模型属于外部数据处理边�
   值作为 `PLATFORM_DB_PASSWORD` 提供给 MySQL 容器初始化账号；
 - 推荐预先创建数据库并设 `create_database: false`；
 - 数据库名和表前缀必须符合解析器标识符规则；
-- 备份必须同时覆盖 MySQL、项目工作区和每个工作区的 `.git`。
+- 备份必须把 `mysql_data`、`platform_projects`（含 file baseline）、
+  `platform_workspaces` 及每个工作区的 `.git`、OpenCode config/data/cache/state 四卷
+  和 `config.json`/`.env`/Release 元数据作为同一恢复点。
 
-## 旧版迁移
+## 旧版配置边界
 
-升级前：
+任何未来的首个公开 Beta 都不支持旧环境原地升级，也不支持把旧数据库或工作区直接挂到新
+环境。旧内部安装包及其配置转换逻辑已退役；未知来源必须按
+[安装与升级策略](./upgrade-policy.md)拒绝。
 
-1. 停止新的生成和执行任务。
-2. 一致备份 MySQL 与工作区。
-3. 轮换所有历史明文秘密。
-4. 若来自环境引用版本，恢复 `opencode_password`、
-   `platform_database.password`、`target_system.username` /
-   `target_system.password` 和准备脚本的 `environment_overrides`。
-5. 中间版本可能已经覆写项目凭据或清除准备脚本实际值。代码回退不会恢复这些
-   数据；从升级前备份恢复或重新录入。
-6. 删除数据库基线旧命令字段，只保留 file 配置。
-7. 在隔离副本验证 schema、登录、授权、项目读取和执行默认关闭。
+如需在全新环境手工重建配置：
+
+1. 先把旧 `mysql_data`、`platform_projects`、`platform_workspaces` 及其 `.git`、
+   OpenCode 四个 XDG 卷和 `config.json`/`.env`/Release 元数据保存为同一个加密、
+   只读恢复点，但不要让新版本迁移它。
+2. 轮换历史明文秘密，不要复制旧 `.env`、SSH 文件、Provider 认证文件或平台会话秘密。
+3. 只按当前 `deploy/config.example.json` 重新录入经过批准的字段。
+4. 删除 database baseline 的旧命令字段，只保留 file 配置。
+5. 准备脚本和环境绑定必须重新人工评审，不能自动带入旧内网命令。
+6. 分别验证平台健康和 Provider 认证推理，后者不能由 OpenCode 健康检查替代。
 
 ## 启动前检查
 
@@ -280,4 +309,5 @@ URL 不得内嵌用户名或密码。OpenCode/模型属于外部数据处理边�
 - [架构概览](./architecture.md)
 - [安全模型](./security-model.md)
 - [部署指南](./deployment.md)
+- [安装与升级策略](./upgrade-policy.md)
 - [支持矩阵](./support-matrix.md)

@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+readonly SCRIPT_DIR
+# shellcheck source=scripts/release/runtime/.release-common
+source "${SCRIPT_DIR}/.release-common"
+BUNDLE_ROOT="$(release_bundle_root)"
+readonly BUNDLE_ROOT
+
+release_import_image_environment "${BUNDLE_ROOT}/.env.images"
+[[ -x "${BUNDLE_ROOT}/deploy/platform-compose" ]] \
+    || release_fail "packaged deploy/platform-compose is missing or not executable"
+expect_pull_value="false"
+for argument in "$@"; do
+    if [[ "${expect_pull_value}" == "true" ]]; then
+        [[ "${argument}" == "never" ]] \
+            || release_fail "release bundles require --pull never"
+        expect_pull_value="false"
+        continue
+    fi
+    case "${argument}" in
+        --build|--build=*)
+            release_fail "release bundles forbid source builds; use the signed image digest"
+            ;;
+        --pull)
+            expect_pull_value="true"
+            ;;
+        --pull=never) ;;
+        --pull=*)
+            release_fail "release bundles require --pull never"
+            ;;
+    esac
+done
+[[ "${expect_pull_value}" == "false" ]] || release_fail "--pull requires the value never"
+
+cd -- "${BUNDLE_ROOT}"
+if [[ "${1:-}" == "up" ]]; then
+    shift
+    exec "${BUNDLE_ROOT}/deploy/platform-compose" \
+        up --no-build --pull never "$@"
+fi
+exec "${BUNDLE_ROOT}/deploy/platform-compose" "$@"

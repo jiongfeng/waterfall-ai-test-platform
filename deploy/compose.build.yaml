@@ -1,0 +1,6 @@
+services:
+  platform:
+    image: ${PLATFORM_IMAGE:-playwright-test-platform:local}
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile

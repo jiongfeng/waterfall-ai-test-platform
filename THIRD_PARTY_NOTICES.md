@@ -52,8 +52,10 @@ Dockerfile 还基于固定摘要的 Microsoft Playwright
 
 ## 二进制制品中的传递组件
 
-当前官方 release 流程只发布源代码和源代码配套材料，不发布 GHCR 或其他预构建
-容器镜像。`deploy/Dockerfile` 是供部署者本地构建和审查的构建清单。
+源码仓库本身只构成源码和源码配套材料，不代表已经发布 GHCR 镜像或安装包。
+只有某个具体 GitHub Release 同时附带经过审核、attest 和验证的制品时，才能按该
+Release 的元数据使用预构建镜像。`deploy/Dockerfile` 仍是源码部署者本地构建和
+审查的构建清单；本地重建结果不得冒充 Release 镜像。
 
 如果维护者或下游分发方今后公开发布容器镜像或离线包，制品可能包含：
 

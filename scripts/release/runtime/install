@@ -1,0 +1,135 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+readonly SCRIPT_DIR
+# shellcheck source=scripts/release/runtime/.release-common
+source "${SCRIPT_DIR}/.release-common"
+BUNDLE_ROOT="$(release_bundle_root)"
+readonly BUNDLE_ROOT
+
+usage() {
+    printf 'Usage: %s --target ABSOLUTE_PATH [--compose-project NAME]\n' "$0"
+}
+
+target=""
+compose_project="playwright-test-platform"
+while (($#)); do
+    case "$1" in
+        --target)
+            (($# >= 2)) || release_fail "--target requires a path"
+            target="$2"
+            shift 2
+            ;;
+        --compose-project)
+            (($# >= 2)) || release_fail "--compose-project requires a name"
+            compose_project="$2"
+            shift 2
+            ;;
+        --help|-h)
+            usage
+            exit 0
+            ;;
+        *)
+            usage >&2
+            release_fail "unknown install argument: $1"
+            ;;
+    esac
+done
+
+[[ "${target}" == /* ]] || release_fail "--target must be an absolute path"
+[[ "${target}" != "/" ]] || release_fail "refusing to install into /"
+target="${target%/}"
+[[ "${target}" != "${BUNDLE_ROOT}" ]] || release_fail "target must differ from the extracted bundle"
+[[ ! -e "${target}" && ! -L "${target}" ]] \
+    || release_fail "install target must not already exist (remove an empty directory explicitly)"
+python3 - "${BUNDLE_ROOT}" "${target}" <<'PY'
+import os
+import pathlib
+import sys
+
+source = pathlib.Path(sys.argv[1]).resolve()
+target = pathlib.Path(sys.argv[2]).resolve()
+if source in target.parents or target in source.parents:
+    raise SystemExit("install target and extracted bundle must not contain one another")
+for parent in target.parents:
+    if parent == pathlib.Path("/"):
+        break
+    if parent.is_symlink():
+        raise SystemExit(f"install target parent must not be a symlink: {parent}")
+if not target.parent.is_dir():
+    raise SystemExit("install target parent must already exist")
+PY
+
+"${SCRIPT_DIR}/preflight"
+[[ -f "${BUNDLE_ROOT}/deploy/preflight-install.py" ]] \
+    || release_fail "packaged fresh-install preflight is missing"
+python3 "${BUNDLE_ROOT}/deploy/preflight-install.py" \
+    --target "${target}" \
+    --release-metadata "${BUNDLE_ROOT}/RELEASE-METADATA.json" \
+    --compose-project "${compose_project}"
+
+bundle_type="$(release_metadata_value "${BUNDLE_ROOT}/RELEASE-METADATA.json" bundleType)"
+release_import_image_environment "${BUNDLE_ROOT}/.env.images"
+if [[ "${bundle_type}" == "offline" ]]; then
+    command -v zstd >/dev/null 2>&1 || release_fail "zstd is required to load offline images"
+    zstd --decompress --stdout "${BUNDLE_ROOT}/images/platform-linux-amd64.tar.zst" | docker load
+    zstd --decompress --stdout "${BUNDLE_ROOT}/images/mysql-linux-amd64.tar.zst" | docker load
+else
+    docker pull --platform linux/amd64 "${PLATFORM_IMAGE}"
+    docker pull --platform linux/amd64 "${MYSQL_IMAGE}"
+fi
+
+docker image inspect "${PLATFORM_IMAGE}" >/dev/null
+docker image inspect "${MYSQL_IMAGE}" >/dev/null
+expected_platform_id="$(release_metadata_value "${BUNDLE_ROOT}/RELEASE-METADATA.json" images.platform.configDigest)"
+expected_mysql_id="$(release_metadata_value "${BUNDLE_ROOT}/RELEASE-METADATA.json" images.mysql.configDigest)"
+[[ "$(python3 "${BUNDLE_ROOT}/scripts/release/docker_image_config_digest.py" "${PLATFORM_IMAGE}")" \
+    == "${expected_platform_id}" ]] \
+    || release_fail "loaded platform image does not match the approved config digest"
+[[ "$(python3 "${BUNDLE_ROOT}/scripts/release/docker_image_config_digest.py" "${MYSQL_IMAGE}")" \
+    == "${expected_mysql_id}" ]] \
+    || release_fail "loaded MySQL image does not match the approved config digest"
+[[ "$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "${PLATFORM_IMAGE}")" == "linux/amd64" ]] \
+    || release_fail "platform image is not linux/amd64"
+[[ "$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "${MYSQL_IMAGE}")" == "linux/amd64" ]] \
+    || release_fail "MySQL image is not linux/amd64"
+
+python3 "${BUNDLE_ROOT}/deploy/preflight-install.py" \
+    --target "${target}" \
+    --release-metadata "${BUNDLE_ROOT}/RELEASE-METADATA.json" \
+    --compose-project "${compose_project}"
+
+target_parent="$(dirname -- "${target}")"
+target_name="$(basename -- "${target}")"
+staging="$(mktemp -d "${target_parent}/.${target_name}.install.XXXXXXXX")"
+cleanup_staging() {
+    if [[ -n "${staging:-}" && -d "${staging}" ]]; then
+        rm -rf -- "${staging}"
+    fi
+}
+trap cleanup_staging EXIT
+chmod 0700 "${staging}"
+cp -a "${BUNDLE_ROOT}/." "${staging}/"
+chmod 0755 "${staging}/bin/"* "${staging}/deploy/platform-compose"
+
+if [[ ! -f "${staging}/.env" ]]; then
+    cp "${staging}/.env.example" "${staging}/.env"
+fi
+python3 "${SCRIPT_DIR}/set_compose_project.py" "${staging}/.env" "${compose_project}"
+chmod 0600 "${staging}/.env"
+if [[ ! -f "${staging}/config.json" ]]; then
+    cp "${staging}/deploy/config.example.json" "${staging}/config.json"
+    chmod 0600 "${staging}/config.json"
+fi
+
+python3 "${BUNDLE_ROOT}/deploy/preflight-install.py" \
+    --target "${target}" \
+    --release-metadata "${BUNDLE_ROOT}/RELEASE-METADATA.json" \
+    --compose-project "${compose_project}"
+[[ ! -e "${target}" && ! -L "${target}" ]] \
+    || release_fail "install target appeared during installation; refusing to merge or overwrite"
+mv --no-target-directory -- "${staging}" "${target}"
+staging=""
+
+printf 'Installed release files and images at %s. Configure .env and config.json, then run bin/platform-compose up -d --no-build --pull never.\n' "${target}"

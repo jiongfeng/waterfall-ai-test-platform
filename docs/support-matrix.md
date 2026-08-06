@@ -1,6 +1,7 @@
 # Support Matrix
 
-测试资源编辑器目前处于公开 Beta。社区支持边界是可信环境、单租户、单应用实例和 Linux Docker。
+测试资源编辑器目前处于公开 Beta 准备阶段。社区支持边界是可信环境、单租户、
+单应用实例和 Linux/amd64 Docker。
 
 本页描述技术兼容边界；问题处理方式见 [SUPPORT.md](../SUPPORT.md)。
 
@@ -9,10 +10,10 @@
 | 场景 | 状态 | 说明 |
 | --- | --- | --- |
 | 单一组织、受控网络、可信账号 | 支持 | 当前安全模型的基础假设 |
-| Linux Docker 单实例 | 支持 | 从对应 source release 的 Dockerfile 本地构建 |
+| Linux/amd64 Docker 单实例 | 支持 | 使用确实存在且已验证的对应 Release bundle/digest，或从固定 source release 构建 |
 | TLS 反向代理 | 必需 | 平台不直接向公网暴露 |
 | Linux 本地开发与测试 | 尽力支持 | 不等同于生产部署承诺 |
-| Windows/macOS 原生生产部署 | 不支持 | 可用于个人开发，但不作为发行门槛 |
+| Linux/arm64、Windows/macOS 原生生产部署 | 不支持 | 可用于个人开发或模拟，但不作为发行门槛 |
 | 公网开放注册或匿名访问 | 不支持 | 无不可信用户安全承诺 |
 | 多租户共享实例 | 不支持 | 无租户级隔离保证 |
 | 多副本或高可用 | 不支持 | 当前存在进程内锁和任务状态 |
@@ -25,7 +26,7 @@
 
 | 组件 | 支持范围 |
 | --- | --- |
-| 应用镜像 | 从 source release 本地构建并由部署者记录摘要的镜像 |
+| 应用镜像 | Release 元数据固定的 GHCR digest；源码重建镜像须另行记录摘要 |
 | Python | 当前 source release 的构建清单所选版本 |
 | Node.js | 当前 source release 的构建清单所选版本 |
 | Playwright | 当前 release 锁定的包和浏览器组合 |
@@ -38,6 +39,10 @@
 精确版本以 release notes、依赖锁文件，以及部署者从最终镜像生成的元数据和
 SBOM 为准。主分支上的偶然可运行组合不自动成为受支持组合。
 
+平台容器与 OpenCode 服务显示健康，仅表示进程和本地服务检查通过。Agent 能力还
+要求单独配置组织批准的模型 Provider，并成功完成最小认证推理冒烟；两种状态不能
+合并报告。
+
 ## 存储
 
 | 存储形态 | 状态 | 说明 |
@@ -48,7 +53,9 @@ SBOM 为准。主分支上的偶然可运行组合不自动成为受支持组合
 | 多实例共享网络文件系统 | 未验证 | 锁、原子替换和 Git 语义可能不同 |
 | 对象存储直接替代工作区 | 不支持 | 当前实现需要文件系统和 Git |
 
-MySQL 与工作区必须作为一致恢复点备份。只恢复其中一项可能造成 revision 和文件内容不一致。
+`mysql_data`、`platform_projects`、`platform_workspaces` 及其 `.git`、OpenCode
+config/data/cache/state 四卷和 `config.json`/`.env`/Release 元数据必须作为一致
+恢复点加密备份。只恢复其中一部分可能造成 revision、文件和会话状态不一致。
 
 ## 被测系统和模型
 
@@ -69,7 +76,7 @@ MySQL 与工作区必须作为一致恢复点备份。只恢复其中一项可�
 
 | 版本或修改 | 状态 |
 | --- | --- |
-| 最新受支持 Beta release | 支持 |
+| 最新受支持 Beta release | 仅在公开 Release 实际存在且 Minisign 签名与附件验证通过时支持；Draft 不算公开发行 |
 | 默认分支最新提交 | 尽力支持 |
 | 历史标签 | 不支持 |
 | 自定义基础镜像 | 不支持 |
@@ -78,6 +85,21 @@ MySQL 与工作区必须作为一致恢复点备份。只恢复其中一项可�
 | 本地补丁或长期 fork | 尽力定位上游可复现问题 |
 
 报告定制环境的问题时，应先在未修改的当前发行物中复现。安全漏洞无论是否来自支持环境，都应按私密报告流程提交。
+
+## 安装与升级
+
+| 来源 | 状态 | 说明 |
+| --- | --- | --- |
+| 空白目标上的首个公开 Beta | 条件支持 | 仅在公开 Release 实际存在且附件验证通过时，使用新数据库、工作区和 OpenCode config/data/cache/state 四卷 |
+| 当前候选或首个公开 Beta 原地升级 | 不支持 | 当前 `upgrade_paths` 为空 |
+| 旧内部安装包或增量包 | 不支持 | 已退役，不属于公开 Release |
+| 缺少有效 Release 元数据的部署 | 不支持 | 未知来源默认拒绝 |
+| 手工复用旧数据库或命名卷 | 不支持 | 可能绕过 schema 与部署契约检查 |
+| 历史数据自动导出/导入 | 不提供 | 当前 Release 没有公开迁移工具 |
+
+未来只有 [upgrade matrix](../deploy/upgrade-matrix.json) 同时精确匹配来源和目标的
+version、完整 revision 与部署契约版本，并且对应 Release Notes 提供迁移与回滚
+说明时，才视为受支持升级路径。完整规则见[安装与升级策略](./upgrade-policy.md)。
 
 ## 浏览器端访问
 
@@ -110,4 +132,5 @@ Issue 应包含：
 - [部署指南](./deployment.md)
 - [安全模型](./security-model.md)
 - [配置指南](./configuration.md)
+- [安装与升级策略](./upgrade-policy.md)
 - [架构概览](./architecture.md)

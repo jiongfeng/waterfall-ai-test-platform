@@ -1,10 +1,12 @@
 # Architecture
 
-本文描述测试资源编辑器公开 Beta 的系统边界、主要组件和数据流。更细的模块职责与迁移规则见 [ARCHITECTURE.md](../ARCHITECTURE.md)。
+本文描述测试资源编辑器公开 Beta 候选的系统边界、主要组件和数据流。更细的模块
+职责与迁移规则见 [ARCHITECTURE.md](../ARCHITECTURE.md)。
 
 ## 支持边界
 
-当前架构面向可信环境、单租户、Linux Docker 部署。所有平台账号属于同一组织和信任域，平台位于受控网络中。
+当前架构面向可信环境、单租户、Linux/amd64 Docker 部署。所有平台账号属于同一
+组织和信任域，平台位于受控网络中。
 
 当前不提供：
 

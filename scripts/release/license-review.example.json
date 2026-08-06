@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "platformImage": {
+    "reference": null,
+    "complete": false,
+    "evidence": null
+  },
+  "mysqlImage": {
+    "reference": null,
+    "complete": false,
+    "evidence": null
+  }
+}

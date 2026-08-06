@@ -1,0 +1,392 @@
+name: Prepare release candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: SemVer without the leading v
+        required: true
+        type: string
+      revision:
+        description: Full 40-character Git revision; run this workflow at the same ref
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: prepare-release-${{ inputs.version }}-${{ inputs.revision }}
+  cancel-in-progress: false
+
+jobs:
+  candidate:
+    name: Build private immutable candidate once
+    runs-on: ubuntu-latest
+    env:
+      PLATFORM_ALLOW_HOST_SCRIPT_EXECUTION: "false"
+      PLATFORM_ALLOW_TEST_EXECUTION: "false"
+      PLATFORM_CONFIG_PATH: config.example.json
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the exact candidate revision
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate candidate source identity
+        id: identity
+        shell: bash
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          REQUESTED_REVISION: ${{ inputs.revision }}
+          REQUESTED_VERSION: ${{ inputs.version }}
+        run: |
+          set -Eeuo pipefail
+          [[ "${REQUESTED_REVISION}" =~ ^[0-9a-f]{40}$ ]]
+          [[ "${REQUESTED_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]
+          [[ "${GITHUB_SHA}" == "${REQUESTED_REVISION}" ]] \
+            || { printf 'Dispatch the workflow at the candidate revision.\n' >&2; exit 1; }
+          [[ "$(git rev-parse HEAD)" == "${REQUESTED_REVISION}" ]]
+          git merge-base --is-ancestor \
+            "${REQUESTED_REVISION}" "refs/remotes/origin/${DEFAULT_BRANCH}" \
+            || { printf 'Candidate revision is not on the default branch.\n' >&2; exit 1; }
+          [[ -z "$(git status --porcelain --untracked-files=all)" ]]
+          repository_lower="${GITHUB_REPOSITORY,,}"
+          target_image="ghcr.io/${repository_lower}"
+          source_url="https://github.com/${GITHUB_REPOSITORY}"
+          source_date_epoch="$(git show -s --format=%ct HEAD)"
+          mysql_image="$(python3 scripts/release/validate-third-party-images.py \
+            scripts/release/third-party-images.json --print-mysql-reference)"
+          mysql_parent="$(python3 scripts/release/validate-third-party-images.py \
+            scripts/release/third-party-images.json --print-mysql-parent-reference)"
+          {
+            printf 'target_image=%s\n' "${target_image}"
+            printf 'source_url=%s\n' "${source_url}"
+            printf 'source_date_epoch=%s\n' "${source_date_epoch}"
+            printf 'mysql_image=%s\n' "${mysql_image}"
+            printf 'mysql_parent=%s\n' "${mysql_parent}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Validate fail-closed repository policy shape
+        run: >-
+          python3 scripts/release/validate-third-party-images.py
+          scripts/release/third-party-images.json
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Test Python and release tooling
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python -m pip install --requirement requirements.txt
+          python -m compileall -q app.py test_plan_viewer tests scripts/release
+          python -m unittest discover -s tests
+          python -m unittest discover -s scripts/release/tests -p 'test_*.py'
+
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: project-template/package-lock.json
+          package-manager-cache: true
+
+      - name: Test locked JavaScript source
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          npm ci --prefix project-template --ignore-scripts --no-audit --no-fund
+          npm audit --prefix project-template --omit=optional --audit-level=high
+          for test_file in tests/js/*.vm.js; do
+            node "${test_file}"
+          done
+
+      - name: Validate release shell and deterministic fixtures
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          shellcheck -x \
+            deploy/entrypoint.sh \
+            deploy/healthcheck.sh \
+            deploy/platform-compose \
+            scripts/release/build-bundle.sh \
+            scripts/release/install-minisign.sh \
+            scripts/release/smoke-bundle.sh \
+            scripts/release/verify-bundle.sh \
+            scripts/release/tests/test-release-scripts.sh \
+            scripts/release/tests/test-runtime-wrapper.sh \
+            scripts/release/runtime/.release-common \
+            scripts/release/runtime/install \
+            scripts/release/runtime/logs \
+            scripts/release/runtime/platform-compose \
+            scripts/release/runtime/preflight \
+            scripts/release/runtime/stop \
+            scripts/release/runtime/verify
+          bash scripts/release/tests/test-runtime-wrapper.sh
+          bash scripts/release/tests/test-release-scripts.sh
+
+      - name: Install pinned Minisign
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p "${RUNNER_TEMP}/bin"
+          bash scripts/release/install-minisign.sh "${RUNNER_TEMP}/bin/minisign"
+          printf '%s\n' "${RUNNER_TEMP}/bin" >> "${GITHUB_PATH}"
+
+      - name: Validate runtime and source-build Compose contracts
+        shell: bash
+        env:
+          PLATFORM_IMAGE: ghcr.io/example/platform@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+          MYSQL_IMAGE: docker.io/library/mysql@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+        run: |
+          set -Eeuo pipefail
+          runtime_config="${RUNNER_TEMP}/platform-config.json"
+          cp deploy/config.example.json "${runtime_config}"
+          chmod 0444 "${runtime_config}"
+          export PLATFORM_RUNTIME_CONFIG_FILE="${runtime_config}"
+          PLATFORM_SESSION_SECRET="$(openssl rand -hex 32)"
+          PLATFORM_ADMIN_PASSWORD="$(openssl rand -hex 24)"
+          PLATFORM_DB_PASSWORD="$(openssl rand -hex 24)"
+          MYSQL_ROOT_PASSWORD="$(openssl rand -hex 24)"
+          OPENCODE_SERVER_PASSWORD="$(openssl rand -hex 24)"
+          export PLATFORM_SESSION_SECRET PLATFORM_ADMIN_PASSWORD PLATFORM_DB_PASSWORD
+          export MYSQL_ROOT_PASSWORD OPENCODE_SERVER_PASSWORD
+          docker compose --project-directory "${GITHUB_WORKSPACE}" \
+            -f deploy/compose.yaml config --quiet
+          docker compose --project-directory "${GITHUB_WORKSPACE}" \
+            -f deploy/compose.yaml -f deploy/compose.build.yaml config --quiet
+          docker compose --project-directory "${GITHUB_WORKSPACE}" \
+            -f deploy/compose.yaml config --format json \
+            | python3 -c 'import json,sys; value=json.load(sys.stdin); assert all("build" not in service for service in value["services"].values())'
+          docker compose --project-directory "${GITHUB_WORKSPACE}" \
+            -f deploy/compose.yaml -f deploy/compose.build.yaml config --format json \
+            | python3 -c 'import json,os,sys; value=json.load(sys.stdin); root=os.path.realpath(os.environ["GITHUB_WORKSPACE"]); built={name for name, service in value["services"].items() if "build" in service}; assert built == {"platform"}; assert value["services"]["platform"]["build"]["context"] == root; assert value["services"]["platform"]["build"]["dockerfile"] == "deploy/Dockerfile"'
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Create private candidate staging directory
+        run: mkdir -p "${RUNNER_TEMP}/release-candidate/sbom"
+
+      - name: Build the candidate once as an OCI archive
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: deploy/Dockerfile
+          platforms: linux/amd64
+          push: false
+          tags: ${{ steps.identity.outputs.target_image }}:candidate-${{ github.sha }}
+          outputs: type=oci,dest=${{ runner.temp }}/release-candidate/platform-linux-amd64.oci.tar
+          build-args: |
+            VERSION=${{ inputs.version }}
+            REVISION=${{ inputs.revision }}
+            SOURCE_URL=${{ steps.identity.outputs.source_url }}
+          cache-from: type=gha,scope=playwright-test-platform-candidate
+          cache-to: type=gha,mode=max,scope=playwright-test-platform-candidate
+          provenance: false
+          sbom: false
+
+      - name: Verify OCI archive contains the reported digest
+        id: oci
+        shell: bash
+        env:
+          BUILD_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -Eeuo pipefail
+          [[ "${BUILD_DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]
+          platform_config_digest="$(python3 - "${RUNNER_TEMP}/release-candidate/platform-linux-amd64.oci.tar" "${BUILD_DIGEST}" <<'PY'
+          import json, re, sys, tarfile
+          with tarfile.open(sys.argv[1]) as archive:
+              index = json.load(archive.extractfile("index.json"))
+              matches = [item for item in index.get("manifests", []) if item.get("digest") == sys.argv[2]]
+              if len(matches) != 1:
+                  raise SystemExit("Buildx digest is not uniquely present in the OCI archive index")
+              manifest_digest = matches[0]["digest"]
+              manifest = json.load(archive.extractfile(f"blobs/sha256/{manifest_digest.split(':', 1)[1]}"))
+          config_digest = manifest.get("config", {}).get("digest", "")
+          if re.fullmatch(r"sha256:[0-9a-f]{64}", config_digest) is None:
+              raise SystemExit("OCI archive manifest has no valid config digest")
+          print(config_digest)
+          PY
+          )"
+          [[ "${platform_config_digest}" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+            printf 'Platform config digest is invalid.\n' >&2
+            exit 1
+          }
+          printf 'platform_config_digest=%s\n' "${platform_config_digest}" >> "${GITHUB_OUTPUT}"
+
+      - name: Install pinned Syft
+        uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0
+
+      - name: Install Skopeo for local final-image inspection
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends skopeo
+          skopeo --version
+
+      - name: Verify exact MySQL child manifest and generate final-image SBOMs
+        id: images
+        shell: bash
+        env:
+          MYSQL_IMAGE: ${{ steps.identity.outputs.mysql_image }}
+          MYSQL_PARENT: ${{ steps.identity.outputs.mysql_parent }}
+          PLATFORM_DIGEST: ${{ steps.build.outputs.digest }}
+          PLATFORM_CONFIG_DIGEST: ${{ steps.oci.outputs.platform_config_digest }}
+          TARGET_IMAGE: ${{ steps.identity.outputs.target_image }}
+        run: |
+          set -Eeuo pipefail
+          mysql_tag="${MYSQL_PARENT%@*}"
+          docker buildx imagetools inspect --raw "${mysql_tag}" > "${RUNNER_TEMP}/mysql-tag-index.json"
+          tag_digest="$(sha256sum "${RUNNER_TEMP}/mysql-tag-index.json" | awk '{print "sha256:" $1}')"
+          [[ "${MYSQL_PARENT}" == "${mysql_tag}@${tag_digest}" ]] \
+            || { printf 'Reviewed MySQL parent index drifted at tag %s.\n' "${mysql_tag}" >&2; exit 1; }
+          docker buildx imagetools inspect --raw "${MYSQL_PARENT}" > "${RUNNER_TEMP}/mysql-parent-index.json"
+          python3 - \
+            "${RUNNER_TEMP}/mysql-parent-index.json" \
+            "${MYSQL_IMAGE#*@}" <<'PY'
+          import json, sys
+          value = json.load(open(sys.argv[1], encoding="utf-8"))
+          media_type = value.get("mediaType", "")
+          if not (media_type.endswith(".index.v1+json") or "manifest.list" in media_type):
+              raise SystemExit("Reviewed MySQL parent reference is not a multi-architecture index")
+          matches = [
+              item for item in value.get("manifests", [])
+              if item.get("platform", {}).get("os") == "linux"
+              and item.get("platform", {}).get("architecture") == "amd64"
+          ]
+          if len(matches) != 1 or matches[0].get("digest") != sys.argv[2]:
+              raise SystemExit("Reviewed MySQL child is not the parent's unique linux/amd64 descriptor")
+          PY
+          docker buildx imagetools inspect --raw "${MYSQL_IMAGE}" > "${RUNNER_TEMP}/mysql-child.json"
+          mysql_config_digest="$(python3 - "${RUNNER_TEMP}/mysql-child.json" <<'PY'
+          import json, re, sys
+          value = json.load(open(sys.argv[1], encoding="utf-8"))
+          media_type = value.get("mediaType", "")
+          if media_type.endswith(".index.v1+json") or "manifest.list" in media_type:
+              raise SystemExit("MySQL child reference unexpectedly resolves to an index")
+          if "config" not in value or "layers" not in value:
+              raise SystemExit("MySQL child manifest is missing config or layers")
+          config_digest = value["config"].get("digest", "")
+          if re.fullmatch(r"sha256:[0-9a-f]{64}", config_digest) is None:
+              raise SystemExit("MySQL child manifest has no valid config digest")
+          print(config_digest)
+          PY
+          )"
+          printf 'mysql_config_digest=%s\n' "${mysql_config_digest}" >> "${GITHUB_OUTPUT}"
+          docker pull --platform linux/amd64 "${MYSQL_IMAGE}"
+          [[ "$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "${MYSQL_IMAGE}")" == "linux/amd64" ]]
+          syft "oci-archive:${RUNNER_TEMP}/release-candidate/platform-linux-amd64.oci.tar" \
+            --output "spdx-json=${RUNNER_TEMP}/release-candidate/sbom/platform.spdx.json"
+          syft "oci-archive:${RUNNER_TEMP}/release-candidate/platform-linux-amd64.oci.tar" \
+            --output "cyclonedx-json=${RUNNER_TEMP}/release-candidate/sbom/platform.cdx.json"
+          syft "docker:${MYSQL_IMAGE}" \
+            --output "spdx-json=${RUNNER_TEMP}/release-candidate/sbom/mysql.spdx.json"
+          syft "docker:${MYSQL_IMAGE}" \
+            --output "cyclonedx-json=${RUNNER_TEMP}/release-candidate/sbom/mysql.cdx.json"
+          platform_local_image="playwright-test-platform-candidate:${GITHUB_SHA}"
+          skopeo copy \
+            "oci-archive:${RUNNER_TEMP}/release-candidate/platform-linux-amd64.oci.tar" \
+            "docker-daemon:${platform_local_image}"
+          python3 scripts/release/license_payload.py collect \
+            --image "${platform_local_image}" \
+            --source-reference "${TARGET_IMAGE}@${PLATFORM_DIGEST}" \
+            --expected-config-digest "${PLATFORM_CONFIG_DIGEST}" \
+            --output "${RUNNER_TEMP}/release-candidate/license-payloads/platformImage"
+          python3 scripts/release/license_payload.py collect \
+            --image "${MYSQL_IMAGE}" \
+            --source-reference "${MYSQL_IMAGE}" \
+            --expected-config-digest "${mysql_config_digest}" \
+            --output "${RUNNER_TEMP}/release-candidate/license-payloads/mysqlImage"
+
+      - name: Write and validate the candidate manifest
+        shell: bash
+        env:
+          PLATFORM_DIGEST: ${{ steps.build.outputs.digest }}
+          PLATFORM_CONFIG_DIGEST: ${{ steps.oci.outputs.platform_config_digest }}
+          TARGET_IMAGE: ${{ steps.identity.outputs.target_image }}
+          MYSQL_IMAGE: ${{ steps.identity.outputs.mysql_image }}
+          MYSQL_PARENT: ${{ steps.identity.outputs.mysql_parent }}
+          MYSQL_CONFIG_DIGEST: ${{ steps.images.outputs.mysql_config_digest }}
+          SOURCE_URL: ${{ steps.identity.outputs.source_url }}
+          SOURCE_DATE_EPOCH: ${{ steps.identity.outputs.source_date_epoch }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          set -Eeuo pipefail
+          candidate_root="${RUNNER_TEMP}/release-candidate"
+          python3 scripts/release/write-release-candidate.py \
+            --output "${candidate_root}/RELEASE-CANDIDATE.json" \
+            --version "${RELEASE_VERSION}" \
+            --revision "${GITHUB_SHA}" \
+            --source-url "${SOURCE_URL}" \
+            --source-date-epoch "${SOURCE_DATE_EPOCH}" \
+            --target-image "${TARGET_IMAGE}" \
+            --platform-digest "${PLATFORM_DIGEST}" \
+            --platform-config-digest "${PLATFORM_CONFIG_DIGEST}" \
+            --platform-archive "${candidate_root}/platform-linux-amd64.oci.tar" \
+            --mysql-image "${MYSQL_IMAGE}" \
+            --mysql-parent-index "${MYSQL_PARENT}" \
+            --mysql-config-digest "${MYSQL_CONFIG_DIGEST}" \
+            --sbom-dir "${candidate_root}/sbom" \
+            --license-payload-dir "${candidate_root}/license-payloads" \
+            --workflow-repository "${GITHUB_REPOSITORY}" \
+            --workflow-run-id "${GITHUB_RUN_ID}" \
+            --workflow-run-attempt "${GITHUB_RUN_ATTEMPT}" \
+            --workflow-ref "${GITHUB_REF}" \
+            --workflow-sha "${GITHUB_SHA}"
+          (
+            cd "${candidate_root}"
+            find . -type f ! -name CANDIDATE-SHA256SUMS -print0 \
+              | sort -z | xargs -0 sha256sum > "${RUNNER_TEMP}/CANDIDATE-SHA256SUMS"
+            mv "${RUNNER_TEMP}/CANDIDATE-SHA256SUMS" .
+            sha256sum --check --strict CANDIDATE-SHA256SUMS
+          )
+          # The awk program must receive $1 literally.
+          # shellcheck disable=SC2016
+          candidate_sha="$(sha256sum "${candidate_root}/RELEASE-CANDIDATE.json" | awk '{print $1}')"
+          {
+            printf "### Private release candidate\n\n"
+            printf -- "- Candidate manifest SHA-256: \`%s\`\n" "${candidate_sha}"
+            printf -- "- Platform digest: \`%s\`\n" "${PLATFORM_DIGEST}"
+            printf -- "- This run did not push an image or create a release.\n"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Sign the candidate checksum root with Minisign
+        shell: bash
+        env:
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          set -Eeuo pipefail
+          [[ -n "${MINISIGN_SECRET_KEY}" ]] || { printf 'MINISIGN_SECRET_KEY is not configured.\n' >&2; exit 1; }
+          umask 077
+          secret_key="${RUNNER_TEMP}/minisign.key"
+          printf '%s\n' "${MINISIGN_SECRET_KEY}" > "${secret_key}"
+          minisign -S -s "${secret_key}" \
+            -m "${RUNNER_TEMP}/release-candidate/CANDIDATE-SHA256SUMS" \
+            -x "${RUNNER_TEMP}/release-candidate/CANDIDATE-SHA256SUMS.minisig" \
+            -t "candidate v${RELEASE_VERSION} revision ${GITHUB_SHA}"
+          rm -f -- "${secret_key}"
+          minisign -Vm "${RUNNER_TEMP}/release-candidate/CANDIDATE-SHA256SUMS" \
+            -x "${RUNNER_TEMP}/release-candidate/CANDIDATE-SHA256SUMS.minisig" \
+            -p scripts/release/minisign.pub -H -q
+
+      - name: Upload the private immutable candidate
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-candidate
+          path: ${{ runner.temp }}/release-candidate
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30

@@ -9,7 +9,7 @@
 - 分层后端模块和按功能拆分的前端结构；
 - Agent 失败分析、诊断包、单项重试和人工验证流程；
 - 项目级测试准备脚本、绑定和执行记录；
-- Linux Docker 项目脚手架与离线部署加固；
+- Linux/amd64 Docker 项目脚手架、源码/发行 Compose 分离与离线部署加固；
 - Apache-2.0 许可证、社区治理、安全报告和支持文档；
 - GitHub Issue、Pull Request 模板和 Dependabot 配置。
 
@@ -18,7 +18,11 @@
 - 测试准备动作统一到项目级准备脚本；数据库基线仅保留文件复制模式，旧命令
   模式和批处理辅助文件不再受支持；
 - 生成、执行和重试流程使用更明确的项目、作者和资产版本上下文；
-- 开源 Beta 的支持边界明确为可信环境、单租户、Linux Docker。
+- 开源 Beta 的支持边界明确为可信环境、单租户、Linux/amd64 Docker；
+- 发布流水线采用 Minisign 签名的候选、审批与最终 Release manifest，配合受保护审批、
+  草稿附件复验、公开包匿名拉取和唯一的 Draft-to-Public 门禁；
+- 镜像身份校验同时支持 classic 与 Docker 29 containerd image store，并以受审阅的
+  manifest/config 摘要、真实 archive blob 和运行中容器描述符交叉验证。
 
 ### Security
 

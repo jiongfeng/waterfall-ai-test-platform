@@ -37,18 +37,19 @@ jobs:
           - javascript-typescript
     steps:
       - name: Check out source
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
+          ref: ${{ github.sha }}
           persist-credentials: false
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@v4
+        uses: github/codeql-action/init@5595ccaf912efad79be6eef63a5619ff05969be3 # v4
         with:
           languages: ${{ matrix.language }}
           build-mode: none
 
       - name: Analyze
-        uses: github/codeql-action/analyze@v4
+        uses: github/codeql-action/analyze@5595ccaf912efad79be6eef63a5619ff05969be3 # v4
         with:
           category: /language:${{ matrix.language }}
 
@@ -57,17 +58,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out source
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
+          ref: ${{ github.sha }}
           persist-credentials: false
 
       - name: Audit Python dependencies
-        uses: pypa/gh-action-pip-audit@v1.1.0
+        uses: pypa/gh-action-pip-audit@1220774d901786e6f652ae159f7b6bc8fea6d266 # v1.1.0
         with:
           inputs: requirements.txt
 
       - name: Set up Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: "24"
           cache: npm
@@ -87,12 +89,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out source
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
+          ref: ${{ github.sha }}
           persist-credentials: false
 
       - name: Review dependency changes
-        uses: actions/dependency-review-action@v4
+        uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48 # v4.9.0
 
   secret-scan:
     name: Secret scan
@@ -102,13 +105,14 @@ jobs:
       pull-requests: read
     steps:
       - name: Check out complete history
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
+          ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
 
       - name: Scan for committed secrets
-        uses: gitleaks/gitleaks-action@v2
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2
         env:
           GITHUB_TOKEN: ${{ github.token }}
           GITLEAKS_ENABLE_COMMENTS: "false"
