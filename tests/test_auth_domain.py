@@ -81,6 +81,7 @@ class FakeAuthRepository:
     def __init__(self):
         self.users = {}
         self.permissions = {}
+        self.roles = {}
         self.role_rows = []
         self.role_permissions = {}
         self.user_rows = []
@@ -100,6 +101,9 @@ class FakeAuthRepository:
 
     def load_user_permission_codes(self, user_id):
         return list(self.permissions.get(user_id, []))
+
+    def load_user_role_codes(self, user_id):
+        return list(self.roles.get(user_id, []))
 
     def authenticate_user(
         self,
@@ -197,6 +201,7 @@ class AuthModelTests(unittest.TestCase):
                     "menu.roles",
                 ],
                 "menus": ["requirements", "roles"],
+                "is_admin": False,
             },
         )
 
@@ -437,6 +442,7 @@ class AuthServiceTests(unittest.TestCase):
         fake_repository.permissions = {
             7: ["menu.roles", "menu.requirements"]
         }
+        fake_repository.roles = {7: ["admin"]}
 
         self.assertIsNone(auth_service.load_current_user("invalid"))
         self.assertIsNone(auth_service.load_current_user(8))
@@ -457,6 +463,7 @@ class AuthServiceTests(unittest.TestCase):
                     "menu.roles",
                 ],
                 "menus": ["requirements", "roles"],
+                "is_admin": True,
             },
         )
 
