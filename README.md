@@ -22,6 +22,10 @@ Plan, generate, review, execute, and repair with an AI agent.
   <a href="./docs/security-model.md"><strong>Understand the security boundary</strong></a>
 </p>
 
+<p align="center">
+  <img src="./docs/assets/waterfall-ai-demo.gif" alt="Waterfall AI turns a SauceDemo shopping requirement into a test plan, a Playwright script, and a verified cart result" width="960">
+</p>
+
 ## Agent-driven workflow
 
 | Plan | Generate | Run and repair |
