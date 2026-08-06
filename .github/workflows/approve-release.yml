@@ -143,11 +143,28 @@ jobs:
             "${approvals}")"
           [[ -n "${approval}" ]]
           reviewed_by="$(jq -r '.user.login // empty' <<< "${approval}")"
-          reviewed_at="$(jq -r '.created_at // empty' <<< "${approval}")"
           [[ "${reviewed_by}" =~ ^[A-Za-z0-9_.-]+$ ]] \
             || { printf 'Could not prove approval by a release-legal environment reviewer.\n' >&2; exit 1; }
+
+          run_json="${RUNNER_TEMP}/approval-run.json"
+          deployments="${RUNNER_TEMP}/approval-deployments.json"
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" > "${run_json}"
+          run_created_at="$(jq -r .created_at "${run_json}")"
+          gh api "repos/${GITHUB_REPOSITORY}/deployments?environment=release-legal&sha=${GITHUB_SHA}&per_page=100" \
+            > "${deployments}"
+          deployment_id="$(jq -r --arg created "${run_created_at}" \
+            '[.[] | select(.created_at >= $created)] | if length == 1 then .[0].id else empty end' \
+            "${deployments}")"
+          [[ "${deployment_id}" =~ ^[1-9][0-9]*$ ]] \
+            || { printf 'Could not uniquely bind the release-legal deployment to this run.\n' >&2; exit 1; }
+          deployment_statuses="${RUNNER_TEMP}/approval-deployment-statuses.json"
+          gh api "repos/${GITHUB_REPOSITORY}/deployments/${deployment_id}/statuses" \
+            > "${deployment_statuses}"
+          reviewed_at="$(jq -r \
+            '[.[] | select(.state == "queued" or .state == "in_progress" or .state == "success")] | sort_by(.created_at) | first.created_at // empty' \
+            "${deployment_statuses}")"
           [[ "${reviewed_at}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] \
-            || { printf 'Could not prove the release-legal approval timestamp.\n' >&2; exit 1; }
+            || { printf 'Could not prove the release-legal approval state-transition timestamp.\n' >&2; exit 1; }
           printf 'reviewed_by=%s\n' "${reviewed_by}" >> "${GITHUB_OUTPUT}"
           printf 'reviewed_at=%s\n' "${reviewed_at}" >> "${GITHUB_OUTPUT}"
 
