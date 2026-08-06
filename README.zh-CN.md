@@ -21,6 +21,10 @@
   <a href="./docs/security-model.md"><strong>了解安全边界</strong></a>
 </p>
 
+<p align="center">
+  <img src="./docs/assets/waterfall-ai-demo.gif" alt="Waterfall AI 将 SauceDemo 购物需求转换为测试计划、Playwright 脚本和购物车验证结果" width="960">
+</p>
+
 ## Agent 驱动的工作流
 
 | 规划 | 生成 | 执行与修复 |
