@@ -154,16 +154,20 @@ PY
 unset SMOKE_ADMIN_PASSWORD SMOKE_PLATFORM_PORT
 chmod 0600 "${install_root}/.env" "${install_root}/config.json"
 
+wait_for_stack_health() {
+    local ready="false"
+    for _ in {1..60}; do
+        if "${install_root}/bin/verify" >/dev/null 2>&1; then
+            ready="true"
+            break
+        fi
+        sleep 5
+    done
+    [[ "${ready}" == "true" ]] || fail "services did not become healthy"
+}
+
 "${install_root}/bin/platform-compose" up --detach --no-build --pull never
-ready="false"
-for _ in {1..60}; do
-    if "${install_root}/bin/verify" >/dev/null 2>&1; then
-        ready="true"
-        break
-    fi
-    sleep 5
-done
-[[ "${ready}" == "true" ]] || fail "services did not become healthy"
+wait_for_stack_health
 
 platform_container="$("${install_root}/bin/platform-compose" ps --quiet platform)"
 if [[ "${container_http_probe}" == "true" ]]; then
@@ -266,6 +270,7 @@ done
 "${install_root}/bin/platform-compose" up \
     --detach --no-build --pull never --no-deps --force-recreate opencode
 opencode_container="$("${install_root}/bin/platform-compose" ps --quiet opencode)"
+wait_for_stack_health
 verify_opencode_sentinels \
     || fail "OpenCode XDG sentinels did not survive force-recreate"
 
@@ -282,6 +287,7 @@ chmod 0600 "${install_root}/config.json"
 platform_container="$("${install_root}/bin/platform-compose" ps --quiet platform)"
 [[ "${platform_container}" != "${old_platform_container}" ]] \
     || fail "apply-config did not recreate the platform container"
+wait_for_stack_health
 docker exec "${platform_container}" python -c \
     'import json,os; assert json.load(open(os.environ["PLATFORM_CONFIG_PATH"]))["script_execution_timeout_seconds"] == 7199'
 "${install_root}/bin/verify"
