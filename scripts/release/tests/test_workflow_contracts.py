@@ -52,6 +52,14 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertIn("smoke-bundle.sh", workflow)
         self.assertIn("DOCKER_CONFIG", workflow)
 
+    def test_approval_timestamp_comes_from_environment_deployment_status(self) -> None:
+        workflow = (
+            REPOSITORY_ROOT / ".github" / "workflows" / "approve-release.yml"
+        ).read_text(encoding="utf-8")
+        self.assertNotIn("'.created_at // empty'", workflow)
+        self.assertIn("approval-deployment-statuses.json", workflow)
+        self.assertIn('.state == "queued"', workflow)
+
 
 if __name__ == "__main__":
     unittest.main()
