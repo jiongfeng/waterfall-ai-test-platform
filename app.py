@@ -2071,7 +2071,12 @@ def get_current_project():
 def get_current_project_language():
     """Return the locale of the request or the agent's captured project."""
 
-    project = current_context_project() or get_current_project()
+    project = current_context_project()
+    if not project:
+        try:
+            project = get_current_project()
+        except RuntimeError:
+            return "zh-CN"
     return normalize_project_language(project.get("language"))
 
 

@@ -1,8 +1,10 @@
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from flask import Flask
 
+import app as legacy_app
 from test_plan_viewer.generation import prompts
 from test_plan_viewer.projects import model as project_model
 from test_plan_viewer.web.projects import (
@@ -12,6 +14,24 @@ from test_plan_viewer.web.projects import (
 
 
 class ProjectLanguageTests(unittest.TestCase):
+    def test_legacy_language_defaults_when_project_is_unavailable(self):
+        with (
+            patch.object(
+                legacy_app,
+                "current_context_project",
+                return_value=None,
+            ),
+            patch.object(
+                legacy_app,
+                "get_current_project",
+                side_effect=RuntimeError("project unavailable"),
+            ),
+        ):
+            self.assertEqual(
+                legacy_app.get_current_project_language(),
+                "zh-CN",
+            )
+
     def test_legacy_project_serializes_to_chinese_default(self):
         project = project_model.serialize_project({"project_key": "legacy"})
         self.assertEqual(project["language"], "zh-CN")
@@ -61,4 +81,3 @@ class ProjectLanguageTests(unittest.TestCase):
         self.assertIn("Naming preference", prompt)
         self.assertIn("Test plan save location", prompt)
         self.assertNotIn("命名强约束", prompt)
-
