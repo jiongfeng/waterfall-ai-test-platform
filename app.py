@@ -56,6 +56,7 @@ from test_plan_viewer.configuration import (
     parse_target_system_config,
     parse_timeout_seconds,
     validate_coverage_profile,
+    normalize_project_language,
 )
 from test_plan_viewer.core.validation import (
     normalize_confidence,
@@ -637,6 +638,16 @@ def build_default_plan_prompt_template():
     target_system = get_current_target_system_config()
     seed_path = get_seed_script_relative_path()
     login_url = build_target_login_url(target_system)
+    if get_current_project_language() == "en":
+        username = target_system.get("username") or "<login username>"
+        password = target_system.get("password") or "<login password>"
+        return (
+            "@playwright-test-planner\n"
+            f"Use {seed_path} as the entry point. Open {login_url}, then sign in with username {username} and password {password} to explore the target module.\n"
+            f"Module name: {DEFAULT_PLAN_PROMPT_MODULE_PLACEHOLDER}\n"
+            "Design scenarios from the test scope confirmed in the generation dialog.\n"
+            "Requirements: record the navigation path and prefer stable selectors."
+        )
     username = target_system.get("username") or "<登录用户名>"
     password = target_system.get("password") or "<登录密码>"
     return (
@@ -828,6 +839,8 @@ def get_script_filename_from_plan_filename(plan_filename):
 
 
 def get_generated_script_filename_from_plan_filename(plan_filename):
+    if get_current_project_language() == "en":
+        return get_script_filename_from_plan_filename(plan_filename)
     return artifact_naming.get_generated_script_filename_from_plan_filename(
         plan_filename,
         validate_plan=validate_plan_filename,
@@ -927,6 +940,7 @@ def _generation_prompt_dependencies():
         get_script_test_relative_path=lambda module_name, filename: (
             get_script_test_relative_path(module_name, filename)
         ),
+        get_project_language=lambda: get_current_project_language(),
     )
 
 
@@ -1616,6 +1630,16 @@ def _project_service_dependencies():
                 )
             )
         ),
+        update_project_language=(
+            lambda config, project_key, language: (
+                project_repository.update_project_language(
+                    config,
+                    project_key,
+                    language,
+                    _project_repository_dependencies(),
+                )
+            )
+        ),
         remove_tree=shutil.rmtree,
         uuid_hex=lambda: uuid.uuid4().hex,
     )
@@ -1663,6 +1687,12 @@ def _project_web_services():
                 )
             )
         ),
+        update_project_language=(
+            lambda language: update_current_project_language_in_mysql(
+                language
+            )
+        ),
+        can_manage_project_language=lambda: current_user_is_admin(),
         serialize_coverage_profiles=lambda: serialize_coverage_profiles(),
         get_seed_script_relative_path=(
             lambda: get_seed_script_relative_path()
@@ -2038,11 +2068,27 @@ def get_current_project():
     return project
 
 
+def get_current_project_language():
+    """Return the locale of the request or the agent's captured project."""
+
+    project = current_context_project() or get_current_project()
+    return normalize_project_language(project.get("language"))
+
+
 def update_current_project_settings_in_mysql(target_system, database_baseline, plan_generation):
     updated_project = _project_service().update_current_project_settings(
         target_system,
         database_baseline,
         plan_generation,
+    )
+    if has_request_context():
+        session["project_key"] = updated_project["project_key"]
+    return updated_project
+
+
+def update_current_project_language_in_mysql(language):
+    updated_project = _project_service().update_current_project_language(
+        language
     )
     if has_request_context():
         session["project_key"] = updated_project["project_key"]
@@ -5443,7 +5489,12 @@ def create_agent_run_record(requirement, created_by, plan_generation=None):
                     requirement.get("id"),
                     requirement.get("requirement_uid"),
                     requirement.get("title") or requirement.get("filename") or "",
-                    compact_json_dumps({"pipeline_version": CURRENT_AGENT_PIPELINE_VERSION}),
+                    compact_json_dumps(
+                        {
+                            "pipeline_version": CURRENT_AGENT_PIPELINE_VERSION,
+                            "language": get_current_project_language(),
+                        }
+                    ),
                     compact_json_dumps(plan_generation),
                     created_by,
                     now_ms,
@@ -6157,6 +6208,7 @@ def _requirement_module_model_dependencies():
                 )
             )
         ),
+        get_project_language=lambda: get_current_project_language(),
         normalize_confidence=lambda value: normalize_confidence(value),
         normalize_string_list=lambda value: normalize_string_list(value),
         normalize_json_object_or_array=lambda value, fallback: (
@@ -6691,10 +6743,25 @@ def normalize_analysis_json(parsed):
 def summarize_page_inventory_for_prompt(limit=40):
     rows = list_page_inventory_rows(limit=limit)
     if not rows:
+        if get_current_project_language() == "en":
+            return "No page inventory is available. Record unmatched pages in open_questions; do not invent URLs."
         return "暂无页面 inventory。无法匹配真实页面时，请在 open_questions 中说明，不要臆造 URL。"
     lines = []
     for row in rows:
         item = serialize_page_inventory(row)
+        if get_current_project_language() == "en":
+            parts = [
+                f"Page: {item['page_name']}",
+                f"URL: {item['url'] or 'unknown'}",
+                f"Menu: {' / '.join(item['menu_path']) if item['menu_path'] else 'unknown'}",
+                f"Account: {', '.join(account.get('username', '') for account in item['accounts'] if isinstance(account, dict)) or ', '.join(item['roles']) or 'unknown'}",
+                f"Selectors: {', '.join(item['stable_selectors'][:8]) or 'unknown'}",
+                f"Write risk: {'yes' if item['write_risk'] else 'no'}",
+            ]
+            if item.get("notes"):
+                parts.append(f"Notes: {item['notes']}")
+            lines.append("- " + "; ".join(parts))
+            continue
         parts = [
             f"页面：{item['page_name']}",
             f"URL：{item['url'] or '未知'}",
@@ -6713,8 +6780,12 @@ def summarize_existing_plans_for_prompt(limit=80):
     try:
         specs_dir = get_specs_dir()
     except Exception:
+        if get_current_project_language() == "en":
+            return "Existing test plans could not be read."
         return "无法读取现有测试计划。"
     if not specs_dir.exists():
+        if get_current_project_language() == "en":
+            return "No existing test plans."
         return "暂无现有测试计划。"
     lines = []
     for plan_file in sorted(specs_dir.glob("*/*.md"), key=lambda item: item.as_posix().lower()):
@@ -6725,10 +6796,26 @@ def summarize_existing_plans_for_prompt(limit=80):
             lines.append(f"- {module_name}/{plan_file.name}")
         except Exception:
             continue
-    return "\n".join(lines) if lines else "暂无现有测试计划。"
+    if lines:
+        return "\n".join(lines)
+    return "No existing test plans." if get_current_project_language() == "en" else "暂无现有测试计划。"
 
 
 def build_requirement_analysis_prompt(requirement, markdown_text):
+    if get_current_project_language() == "en":
+        return (
+            "@requirement-analyst\n"
+            "Read the requirement Markdown, page-inventory summary, and existing-plan summary. Generate module candidates.\n\n"
+            "Requirements:\n1. Analyze only; do not use the browser or write specs/tests.\n"
+            "2. Output JSON only, with a top-level modules array.\n"
+            "3. Each module includes module_name, plan_name, business_goal, requirement_refs, test_points, matched_inventory, write_risk, baseline_required, confidence, open_questions, and planner_prompt.\n"
+            "4. Generate English business names for module_name and plan_name by default.\n"
+            "5. Extract explicit positive, error, boundary, role, and permission points without inventing unrelated coverage.\n"
+            "6. Keep open_questions when no real page can be matched.\n\n"
+            f"Requirement title: {requirement.get('title')}\n\nRequirement Markdown:\n{markdown_text}\n\n"
+            f"Page inventory summary:\n{summarize_page_inventory_for_prompt()}\n\n"
+            f"Existing test-plan summary:\n{summarize_existing_plans_for_prompt()}\n"
+        )
     return (
         "@requirement-analyst\n"
         "你是测试需求分析助手。请读取下面的需求 Markdown、页面 inventory 摘要和已有测试计划摘要，生成模块候选。\n\n"
@@ -7830,6 +7917,14 @@ def agent_generate_plans(run_id, requirement, modules, resume_output=None):
 def build_agent_script_generation_prompt(plan):
     module_name = validate_module_name(plan["module_name"])
     plan_filename = validate_plan_filename(plan["plan_filename"])
+    if get_current_project_language() == "en":
+        return (
+            "@playwright-test-generator\n"
+            f"Generate a Playwright test file from specs/{module_name}/{plan_filename}.\n"
+            "Each file must contain exactly one test. Use an English business test name by default.\n"
+            "The platform supplies a candidate output path; write only there and do not modify the production tests file directly.\n"
+            "Implement real code beneath each STEP whenever possible; otherwise explain why it cannot be implemented."
+        )
     return (
         "@playwright-test-generator\n"
         f"请根据 specs/{module_name}/{plan_filename} 生成Playwright测试文件。\n"
@@ -8308,15 +8403,26 @@ def build_agent_script_repair_prompt(item, failure=None):
     plan_filename = validate_plan_filename(
         item.get("plan_filename") or f"{module_name}.md"
     )
-    prompt = (
-        "@playwright-test-healer\n"
-        f"请根据测试计划 specs/{module_name}/{plan_filename}，修复 tests/{module_name}/{filename}\n"
-        "要求：\n"
-        "1. 不允许删除或注释任何 STEP。\n"
-        "2. 保留执行视频。"
-    )
+    if get_current_project_language() == "en":
+        prompt = (
+            "@playwright-test-healer\n"
+            f"Use test plan specs/{module_name}/{plan_filename} to repair tests/{module_name}/{filename}.\n"
+            "Requirements:\n1. Do not delete or comment out any STEP.\n2. Preserve the execution video."
+        )
+    else:
+        prompt = (
+            "@playwright-test-healer\n"
+            f"请根据测试计划 specs/{module_name}/{plan_filename}，修复 tests/{module_name}/{filename}\n"
+            "要求：\n"
+            "1. 不允许删除或注释任何 STEP。\n"
+            "2. 保留执行视频。"
+        )
     if isinstance(failure, dict) and failure:
-        prompt += "\n\n上次失败信息：\n" + json.dumps(
+        prompt += (
+            "\n\nPrevious failure details:\n"
+            if get_current_project_language() == "en"
+            else "\n\n上次失败信息：\n"
+        ) + json.dumps(
             failure, ensure_ascii=False, indent=2
         )
     return prompt
@@ -8839,6 +8945,9 @@ def run_agent_workflow(run_id, project, author):
             run = get_agent_run_row(run_id)
             if not run:
                 return
+            language = load_json_column(run.get("summary_json"), {}).get("language")
+            if language:
+                PROJECT_CONTEXT.project = {**project, "language": normalize_project_language(language)}
             requirement = get_requirement_by_uid(run.get("requirement_uid"))
             if not requirement:
                 raise RuntimeError("需求不存在。")
@@ -8892,6 +9001,9 @@ def run_agent_script_preparation_continue_workflow(run_id, project, author):
             run = get_agent_run_row(run_id)
             if not run or run.get("status") in AGENT_TERMINAL_STATUSES:
                 return
+            language = load_json_column(run.get("summary_json"), {}).get("language")
+            if language:
+                PROJECT_CONTEXT.project = {**project, "language": normalize_project_language(language)}
             requirement = get_requirement_by_uid(run.get("requirement_uid"))
             if not requirement:
                 raise RuntimeError("需求不存在。")
@@ -8926,6 +9038,9 @@ def run_agent_resume_workflow(run_id, project, author, from_step, resume_context
             run = get_agent_run_row(run_id)
             if not run:
                 return
+            language = load_json_column(run.get("summary_json"), {}).get("language")
+            if language:
+                PROJECT_CONTEXT.project = {**project, "language": normalize_project_language(language)}
             requirement = get_requirement_by_uid(run.get("requirement_uid"))
             if not requirement:
                 raise RuntimeError("需求不存在。")
@@ -12448,6 +12563,11 @@ def load_permission_codes_by_role_ids(cursor, config, role_ids):
 
 def load_user_permission_codes(user_id):
     return _auth_service().load_user_permission_codes(user_id)
+
+
+def current_user_is_admin():
+    user = getattr(g, "current_user", None)
+    return bool(user and _auth_service().is_admin(user["id"]))
 
 
 def serialize_user(row, roles=None):

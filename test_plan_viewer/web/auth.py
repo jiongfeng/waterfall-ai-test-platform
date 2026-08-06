@@ -135,7 +135,7 @@ def create_auth_blueprint(services):
             )
 
         if not user:
-            return auth_error_response("请先登录。", 401)
+            return auth_error_response("Please sign in.", 401)
 
         g.current_user = user
         try:
@@ -212,7 +212,7 @@ def create_auth_blueprint(services):
             return (
                 render_template(
                     "login.html",
-                    config_error=f"登录配置不可用：{exc}",
+                    config_error=f"Sign-in configuration unavailable: {exc}",
                     csrf_token=issue_csrf_token(),
                 ),
                 500,
@@ -225,7 +225,7 @@ def create_auth_blueprint(services):
             if not auth.get("enabled"):
                 return (
                     jsonify(
-                        {"error": "平台登录鉴权未启用。"}
+                        {"error": "Authentication is disabled."}
                     ),
                     400,
                 )
@@ -237,7 +237,7 @@ def create_auth_blueprint(services):
             )
             if not user:
                 return (
-                    jsonify({"error": "用户名或密码错误。"}),
+                    jsonify({"error": "Invalid username or password."}),
                     401,
                 )
 
@@ -254,7 +254,7 @@ def create_auth_blueprint(services):
             return jsonify({"error": str(exc)}), 400
         except Exception as exc:
             return (
-                jsonify({"error": f"登录失败：{exc}"}),
+                jsonify({"error": f"Sign-in failed: {exc}"}),
                 500,
             )
 

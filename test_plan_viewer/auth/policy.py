@@ -14,6 +14,7 @@ def build_disabled_auth_payload(menu_permissions):
     ]
     return {
         "user": None,
+        "is_admin": False,
         "permissions": permissions,
         "menus": menus,
     }

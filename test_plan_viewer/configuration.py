@@ -20,6 +20,8 @@ DEFAULT_TARGET_SYSTEM_CONFIG = {
     "password": "",
 }
 DEFAULT_COVERAGE_PROFILE = "core"
+DEFAULT_PROJECT_LANGUAGE = "zh-CN"
+SUPPORTED_PROJECT_LANGUAGES = frozenset({"zh-CN", "en"})
 COVERAGE_PROFILES = {
     "core": {
         "key": "core",
@@ -63,6 +65,17 @@ AUTH_USERNAME_PATTERN = re.compile(r"^[A-Za-z0-9_.-]{3,64}$")
 PROJECT_KEY_PATTERN = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
 PROJECT_STATUS_ACTIVE = "active"
 PROJECT_STATUS_DISABLED = "disabled"
+
+
+def normalize_project_language(value, default=DEFAULT_PROJECT_LANGUAGE):
+    """Return one supported project UI/prompt language."""
+
+    normalized = str(value or "").strip()
+    if not normalized:
+        return default
+    if normalized not in SUPPORTED_PROJECT_LANGUAGES:
+        raise ValueError("Unsupported project language.")
+    return normalized
 
 
 def parse_boolean(value, default=False):

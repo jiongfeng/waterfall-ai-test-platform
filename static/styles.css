@@ -132,6 +132,17 @@ button:disabled {
   min-height: 0;
 }
 
+.app-shell.i18n-pending {
+  visibility: hidden;
+}
+
+.language-menu { position: relative; }
+.language-trigger { border: 0; background: transparent; color: inherit; cursor: pointer; font: inherit; padding: 6px; }
+.language-trigger[disabled] { cursor: default; }
+.language-options { position: absolute; right: 0; top: calc(100% + 6px); z-index: 20; min-width: 132px; padding: 4px; border: 1px solid var(--border-color, #d8dee9); border-radius: 8px; background: var(--panel-background, #fff); box-shadow: 0 8px 24px rgb(0 0 0 / 12%); }
+.language-options button { display: block; width: 100%; border: 0; background: transparent; color: inherit; text-align: left; padding: 7px 9px; border-radius: 5px; cursor: pointer; }
+.language-options button:hover, .language-options button:focus-visible { background: rgb(100 116 139 / 12%); outline: none; }
+
 .global-topbar {
   display: flex;
   align-items: center;

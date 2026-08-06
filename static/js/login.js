@@ -18,7 +18,7 @@
     event.preventDefault();
     showLoginError("");
     loginSubmit.disabled = true;
-    loginSubmit.textContent = "登录中";
+    loginSubmit.textContent = "Signing in…";
     try {
       const response = await fetch("/api/auth/login", {
         method: "POST",
@@ -33,17 +33,17 @@
       });
       const data = await response
         .json()
-        .catch(() => ({ error: "接口返回不是 JSON。" }));
+        .catch(() => ({ error: "The server did not return JSON." }));
       if (!response.ok) {
-        throw new Error(data.error || `登录失败：${response.status}`);
+        throw new Error(data.error || `Sign-in failed: ${response.status}`);
       }
       window.location.href = "/";
     } catch (error) {
-      showLoginError(error.message || "登录失败。");
+      showLoginError(error.message || "Sign-in failed.");
       loginPassword.focus();
     } finally {
       loginSubmit.disabled = false;
-      loginSubmit.textContent = "登录";
+      loginSubmit.textContent = "Sign in";
     }
   });
 })();

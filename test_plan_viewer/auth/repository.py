@@ -212,6 +212,27 @@ class AuthRepository:
             if row.get("code") in AUTH_MENU_PERMISSION_CODES
         ]
 
+    def load_user_role_codes(self, user_id):
+        config = self.get_database_config()
+        roles_table = self._table(config, "platform_roles")
+        user_roles_table = self._table(config, "platform_user_roles")
+        with self.dependencies.platform_mysql_connection(config) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    f"""
+                    SELECT DISTINCT r.code
+                    FROM {user_roles_table} ur
+                    JOIN {roles_table} r
+                      ON r.id = ur.role_id
+                     AND r.status = 'active'
+                    WHERE ur.user_id = %s
+                    ORDER BY r.code ASC
+                    """,
+                    (user_id,),
+                )
+                rows = cursor.fetchall()
+        return [str(row.get("code") or "") for row in rows if row.get("code")]
+
     def authenticate_user(
         self,
         username,

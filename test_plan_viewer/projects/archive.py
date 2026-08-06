@@ -7,7 +7,11 @@ from pathlib import PurePosixPath
 from typing import Any, Callable
 import zipfile
 
-from test_plan_viewer.configuration import PROJECT_KEY_PATTERN
+from test_plan_viewer.configuration import (
+    DEFAULT_PROJECT_LANGUAGE,
+    PROJECT_KEY_PATTERN,
+    normalize_project_language,
+)
 
 
 PROJECT_EXPORT_FORMAT_VERSION = 1
@@ -161,6 +165,10 @@ def validate_project_import_project(raw_project, dependencies):
             raw_project.get("tests_dir"),
             "tests",
             "manifest.project.tests_dir",
+        ),
+        "language": normalize_project_language(
+            raw_project.get("language"),
+            default=DEFAULT_PROJECT_LANGUAGE,
         ),
     }
 

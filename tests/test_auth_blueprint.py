@@ -175,7 +175,7 @@ class AuthBlueprintContractTests(unittest.TestCase):
         self.assertEqual(api_response.status_code, 401)
         self.assertEqual(
             api_response.json,
-            {"error": "请先登录。", "redirect": "/login"},
+            {"error": "Please sign in.", "redirect": "/login"},
         )
 
     def test_invalid_session_is_cleared_before_unauthorized_response(self):
@@ -273,7 +273,7 @@ class AuthBlueprintContractTests(unittest.TestCase):
         self.assertEqual(anonymous.status_code, 401)
         self.assertEqual(
             anonymous.json,
-            {"error": "请先登录。", "redirect": "/login"},
+            {"error": "Please sign in.", "redirect": "/login"},
         )
         self.assertEqual(denied.status_code, 403)
         self.assertEqual(
@@ -374,7 +374,7 @@ class AuthBlueprintSessionTests(unittest.TestCase):
         ).test_client()
         anonymous = enabled_client.get("/login")
         self.assertEqual(anonymous.status_code, 200)
-        self.assertIn("账号登录", anonymous.get_data(as_text=True))
+        self.assertIn("Sign in", anonymous.get_data(as_text=True))
 
         set_session_user(enabled_client)
         authenticated = enabled_client.get("/login")
@@ -426,7 +426,7 @@ class AuthBlueprintSessionTests(unittest.TestCase):
         self.assertEqual(disabled.status_code, 400)
         self.assertEqual(
             disabled.json["error"],
-            "平台登录鉴权未启用。",
+            "Authentication is disabled.",
         )
 
         invalid_services = make_services(
@@ -444,7 +444,7 @@ class AuthBlueprintSessionTests(unittest.TestCase):
         self.assertEqual(invalid.status_code, 401)
         self.assertEqual(
             invalid.json,
-            {"error": "用户名或密码错误。"},
+            {"error": "Invalid username or password."},
         )
 
         validation_services = make_services(

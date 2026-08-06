@@ -119,6 +119,7 @@ class ProjectModelTests(unittest.TestCase):
                 "description": "details",
                 "specs_dir": "plans",
                 "tests_dir": "tests",
+                "language": "zh-CN",
             },
         )
 
@@ -739,6 +740,11 @@ class ProjectRouteTests(unittest.TestCase):
                 "update_current_project_settings_in_mysql",
                 return_value=project,
             ) as update_settings,
+            patch.object(
+                app,
+                "get_current_project",
+                return_value=project,
+            ),
         ):
             response = self.client.put(
                 "/api/project-settings",

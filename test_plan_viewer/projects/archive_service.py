@@ -323,6 +323,7 @@ class ProjectArchiveService:
                 "tests_dir": (
                     project.get("tests_dir") or "tests"
                 ),
+                "language": project.get("language") or "zh-CN",
             },
             "modules": [
                 {
@@ -774,6 +775,11 @@ class ProjectArchiveService:
                 overrides.get("tests_dir")
                 or source_project.get("tests_dir")
                 or "tests"
+            ),
+            "language": (
+                overrides.get("language")
+                or source_project.get("language")
+                or "zh-CN"
             ),
         }
 

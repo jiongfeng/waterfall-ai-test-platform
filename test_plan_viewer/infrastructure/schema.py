@@ -160,6 +160,7 @@ def ensure_platform_database_schema(config=None, *, dependencies, state=None):
                       target_system_json LONGTEXT NULL,
                       database_baseline_json LONGTEXT NULL,
                       plan_generation_json LONGTEXT NULL,
+                      language_code VARCHAR(16) NOT NULL DEFAULT 'zh-CN',
                       status VARCHAR(32) NOT NULL DEFAULT 'active',
                       is_default TINYINT(1) NOT NULL DEFAULT 0,
                       created_at BIGINT NOT NULL,
@@ -172,6 +173,11 @@ def ensure_platform_database_schema(config=None, *, dependencies, state=None):
                 )
                 ensure_mysql_column(cursor, config, "platform_projects", "target_system_json", "target_system_json LONGTEXT NULL")
                 ensure_mysql_column(cursor, config, "platform_projects", "plan_generation_json", "plan_generation_json LONGTEXT NULL")
+                ensure_mysql_column(cursor, config, "platform_projects", "language_code", "language_code VARCHAR(16) NOT NULL DEFAULT 'zh-CN'")
+                cursor.execute(
+                    f"UPDATE {projects_table} SET language_code = 'zh-CN' "
+                    "WHERE language_code IS NULL OR language_code = ''"
+                )
                 seed_platform_projects(cursor, config)
                 default_project_id = get_default_project_id_from_cursor(cursor, config)
                 cursor.execute(
