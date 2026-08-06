@@ -1,6 +1,6 @@
 # Architecture
 
-本文描述测试资源编辑器公开 Beta 候选的系统边界、主要组件和数据流。更细的模块
+本文描述 Waterfall AI 公开 Beta 的系统边界、主要组件和数据流。更细的模块
 职责与迁移规则见 [ARCHITECTURE.md](../ARCHITECTURE.md)。
 
 ## 支持边界

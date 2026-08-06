@@ -130,7 +130,7 @@ def main() -> int:
     approval_path = output / "RELEASE-APPROVAL.json"
     approval = {
         "schemaVersion": 1,
-        "kind": "playwright-test-platform-release-approval",
+        "kind": "waterfall-ai-test-platform-release-approval",
         "candidateManifestSha256": sha256(args.candidate),
         "candidate": {
             key: candidate[key]

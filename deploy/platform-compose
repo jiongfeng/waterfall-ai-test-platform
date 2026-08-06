@@ -11,7 +11,7 @@ readonly COMPOSE_FILE="${SCRIPT_DIR}/compose.yaml"
 readonly BUILD_COMPOSE_FILE="${SCRIPT_DIR}/compose.build.yaml"
 readonly CONFIG_CONTROL="${SCRIPT_DIR}/configctl.py"
 readonly INSTALL_PREFLIGHT="${SCRIPT_DIR}/preflight-install.py"
-readonly DEFAULT_COMPOSE_PROJECT="playwright-test-platform"
+readonly DEFAULT_COMPOSE_PROJECT="waterfall-ai-test-platform"
 readonly SOURCE_CONFIG="${PLATFORM_CONFIG_FILE:-${REPOSITORY_ROOT}/config.json}"
 readonly ENV_FILE="${PLATFORM_ENV_FILE:-${REPOSITORY_ROOT}/.env}"
 readonly RUNTIME_ROOT="${PLATFORM_RUNTIME_DIR:-${SCRIPT_DIR}/.runtime}"
@@ -323,7 +323,7 @@ verify_stack() {
             rm -f -- "${probe}"
         done
     '
-    printf 'playwright-test-platform: verified\n'
+    printf 'waterfall-ai-test-platform: verified\n'
 }
 
 resolve_compose_volume() {

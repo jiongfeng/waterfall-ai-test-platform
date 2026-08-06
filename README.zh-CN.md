@@ -1,16 +1,32 @@
-# Playwright 测试平台
+# Waterfall AI
 
 [English](./README.md)
 
-Playwright 测试平台是一个自托管工作台，用于管理测试需求、Markdown
-测试计划、Playwright 脚本、执行记录，以及 AI 辅助的生成与修复流程。
-测试资产保存在带本地 Git 历史的项目工作区中，平台元数据保存在 MySQL。
+**Agent 驱动的自动化测试平台**
 
-> **公开 Beta 候选（当前无公开安装制品）**
+Waterfall AI 是一个自托管工作台，可将测试需求转化为 Markdown 测试计划、
+Playwright 脚本和执行记录，并通过 Agent 辅助审查与修复。测试资产保存在带本地
+Git 历史的项目工作区中，平台元数据保存在 MySQL。
+
+Waterfall AI 是基于 Playwright 构建的独立开源项目，与 Microsoft 或 Playwright
+项目不存在隶属、赞助或官方背书关系。
+
+> **公开 Beta**
 >
-> 当前源码候选只适合同一信任域内的团队，在 Linux/amd64 Docker 上以单租户、
-> 单实例方式评估；它尚不是公开 Release，也不是经过强化的公网 SaaS、多租户隔离
-> 系统或安全沙箱。平台入口应位于 TLS 反向代理和组织访问控制之后。
+> 已发布带 Minisign 签名的预发行版
+> [`v0.1.0-beta.3`](https://github.com/jiongfeng/waterfall-ai-test-platform/releases/tag/v0.1.0-beta.3)，
+> 适合同一信任域内的团队在 Linux/amd64 Docker 上以单租户、单实例方式使用；
+> 它不是经过强化的公网 SaaS、多租户隔离系统或安全沙箱。平台入口应位于 TLS
+> 反向代理和组织访问控制之后。
+
+### 品牌与发布兼容性
+
+项目已由 `playwright-test-platform` 更名为 `waterfall-ai-test-platform`，GitHub 会将
+旧仓库地址重定向到新地址。不可变的 `v0.1.0-beta.3` Release 会保留原有
+`playwright-test-platform-*` 制品名和
+`ghcr.io/jiongfeng/playwright-test-platform` 镜像地址；改名后的新 Release 使用
+Waterfall AI 命名。为保障现有部署兼容，`playwright_platform` 数据库、Python 包路径、
+容器内部路径和既有 Session Cookie 名称保持不变。
 
 ## 主要能力
 
@@ -298,7 +314,7 @@ Playwright 报告、截图、视频、trace、浏览器下载、工作区 Git �
 
 ## 仅支持全新安装的升级边界
 
-任何未来的首个公开 Beta 都将**只支持全新安装**，不支持从内部安装包、旧部署、源码检出版本，
+当前公开 Beta **只支持全新安装**，不支持从内部安装包、旧部署、源码检出版本，
 或者缺失/无法识别 Release 元数据的环境原地升级。旧内部增量包已经退役，不属于
 公开 Release 资产，也不构成公开兼容性承诺。
 
@@ -319,7 +335,7 @@ Release 安装器会在写入目标前自动执行只读预检。如需在已解
 
 ```bash
 python3 deploy/preflight-install.py \
-  --target /srv/playwright-platform-next \
+  --target /srv/waterfall-ai-next \
   --release-metadata ./RELEASE-METADATA.json
 ```
 

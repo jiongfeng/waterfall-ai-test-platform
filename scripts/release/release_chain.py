@@ -145,7 +145,7 @@ def validate_candidate(path: Path, root: Path | None = None) -> dict[str, Any]:
     require(isinstance(value, dict), "candidate manifest must be an object")
     require(set(value) == CANDIDATE_KEYS, "candidate manifest has missing or unknown fields")
     require(value["schemaVersion"] == 1, "candidate schemaVersion must be 1")
-    require(value["kind"] == "playwright-test-platform-release-candidate",
+    require(value["kind"] == "waterfall-ai-test-platform-release-candidate",
             "candidate kind is invalid")
     require(isinstance(value["version"], str) and VERSION_RE.fullmatch(value["version"]),
             "candidate version is invalid")
@@ -236,7 +236,7 @@ def validate_approval(path: Path, candidate_path: Path, root: Path | None = None
     require(isinstance(value, dict), "approval manifest must be an object")
     require(set(value) == APPROVAL_KEYS, "approval manifest has missing or unknown fields")
     require(value["schemaVersion"] == 1, "approval schemaVersion must be 1")
-    require(value["kind"] == "playwright-test-platform-release-approval", "approval kind is invalid")
+    require(value["kind"] == "waterfall-ai-test-platform-release-approval", "approval kind is invalid")
     require(value["candidateManifestSha256"] == sha256(candidate_path),
             "approval is not bound to the exact candidate manifest bytes")
     identity = value["candidate"]

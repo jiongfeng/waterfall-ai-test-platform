@@ -18,7 +18,7 @@ an automatically created, unprotected environment is not an approval control.
 GHCR package visibility is a separate gate from repository visibility. A newly
 created container package is private by default, and linking it to a public
 repository does not make anonymous pulls available. Before a public release,
-an owner must explicitly set the `playwright-test-platform` container package
+an owner must explicitly set the `waterfall-ai-test-platform` container package
 to **Public** in GitHub Packages and acknowledge that this visibility change is
 not reversible. After the exact digest is promoted, the public workflow pauses
 at the preconfigured, required-reviewer `release-package-publication`
@@ -72,7 +72,7 @@ from an archive before `verify-bundle.sh --extract-to` establishes no trust.
 
 Docker save/load archives do not preserve a registry-assigned RepoDigest. For
 that reason, an offline archive carries deterministic local tags of the form
-`playwright-test-platform.local/<component>:sha256-<registry-manifest-hex>`.
+`waterfall-ai-test-platform.local/<component>:sha256-<registry-manifest-hex>`.
 The candidate and protected approval separately bind each registry manifest
 digest and image config digest. Packaging, verification, and installation use
 a storage-aware resolver rather than assuming `docker image inspect .Id` is a

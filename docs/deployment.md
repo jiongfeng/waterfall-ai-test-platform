@@ -1,6 +1,6 @@
 # Deployment
 
-本文定义 Playwright 测试平台公开 Beta 的部署基线。只有 GitHub 上已公开、签名验证
+本文定义 Waterfall AI 公开 Beta 的部署基线。只有 GitHub 上已公开、签名验证
 通过的 Release 才是安装制品；源码候选只用于可信环境、单租户、单应用实例的
 Linux/amd64 Docker 评估。
 
@@ -63,7 +63,7 @@ group 账号，或全流程一致的 `sudo` 策略。Docker daemon 权限等同�
 ```bash
 set -Eeuo pipefail
 
-OPERATIONS_ROOT=/srv/playwright-platform-releases
+OPERATIONS_ROOT=/srv/waterfall-ai-releases
 sudo install -d -o "$(id -u)" -g "$(id -g)" -m 0750 "${OPERATIONS_ROOT}"
 if git -C "${OPERATIONS_ROOT}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   printf 'Operations root must be outside every Git worktree.\n' >&2
@@ -78,8 +78,15 @@ VERIFIER_DIR="${OPERATIONS_ROOT}/release-${TAG}-verifier"
 EXTRACT_DIR="${OPERATIONS_ROOT}/release-${TAG}-verified"
 INSTALL_PARENT="${OPERATIONS_ROOT}/installed"
 INSTALL_DIR="${INSTALL_PARENT}/${TAG}"
-COMPOSE_PROJECT="playwright-platform-$(printf '%s' "${TAG}" | tr '[:upper:].' '[:lower:]-')"
-BUNDLE="${DOWNLOAD_DIR}/playwright-test-platform-${TAG#v}-linux-amd64-online.tar.zst"
+COMPOSE_PROJECT="waterfall-ai-$(printf '%s' "${TAG}" | tr '[:upper:].' '[:lower:]-')"
+# v0.1.0-beta.3 是改名前发布的不可变历史 Release，保留原制品名。
+ASSET_PREFIX=waterfall-ai-test-platform
+VERIFY_REPOSITORY="${REPOSITORY}"
+if [[ "${TAG}" == "v0.1.0-beta.3" ]]; then
+  ASSET_PREFIX=playwright-test-platform
+  VERIFY_REPOSITORY="${REPOSITORY%/*}/playwright-test-platform"
+fi
+BUNDLE="${DOWNLOAD_DIR}/${ASSET_PREFIX}-${TAG#v}-linux-amd64-online.tar.zst"
 
 for path in "${DOWNLOAD_DIR}" "${VERIFIER_DIR}" "${EXTRACT_DIR}" "${INSTALL_DIR}"; do
   [[ ! -e "${path}" && ! -L "${path}" ]] || {
@@ -107,7 +114,7 @@ python3 "${VERIFIER_DIR}/scripts/release/verify_release_assets.py" "${DOWNLOAD_D
 VERIFY_IMAGE_ARGS=()
 [[ "${BUNDLE}" != *-offline.tar.zst ]] || VERIFY_IMAGE_ARGS+=(--verify-image-archives)
 bash "${VERIFIER_DIR}/scripts/release/verify-bundle.sh" \
-  --github-repository "${REPOSITORY}" \
+  --github-repository "${VERIFY_REPOSITORY}" \
   --source-ref "refs/tags/${TAG}" \
   --source-digest "${REVISION}" \
   --release-manifest "${DOWNLOAD_DIR}/RELEASE-MANIFEST.json" \
@@ -277,7 +284,7 @@ trace、数据库转储或配置文件。
 
 ## 安装、升级与回滚
 
-任何未来的首个公开 Beta 都只支持全新安装。旧内部包已经退役，不支持从旧包、源码检出、
+当前公开 Beta 只支持全新安装。旧内部包已经退役，不支持从旧包、源码检出、
 未知 revision 或缺失 Release 元数据的环境原地升级。当前
 `deploy/upgrade-matrix.json` 不包含任何允许路径，安装器必须在写入前调用只读
 预检，收到拒绝后停止；不得提供忽略或强制继续开关。完整契约见

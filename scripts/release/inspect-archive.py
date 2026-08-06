@@ -17,7 +17,7 @@ MAX_EXPANDED_BYTES = 16 * 1024 * 1024 * 1024
 MAX_MEMBER_BYTES = 8 * 1024 * 1024 * 1024
 MAX_MEMBERS = 20_000
 SAFE_NAME = re.compile(r"^[A-Za-z0-9._/+:-]+$")
-SAFE_ROOT = re.compile(r"^playwright-test-platform-[0-9A-Za-z.-]+-linux-amd64$")
+SAFE_ROOT = re.compile(r"^waterfall-ai-test-platform-[0-9A-Za-z.-]+-linux-amd64$")
 
 
 def inspect_archive(path: pathlib.Path) -> str:

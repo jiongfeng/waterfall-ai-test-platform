@@ -1,4 +1,4 @@
-name: playwright-test-platform
+name: waterfall-ai-test-platform
 
 services:
   mysql:
@@ -26,7 +26,7 @@ services:
       - backend
 
   opencode:
-    image: ${PLATFORM_IMAGE:-playwright-test-platform:local}
+    image: ${PLATFORM_IMAGE:-waterfall-ai-test-platform:local}
     command:
       - opencode
     restart: unless-stopped
@@ -65,7 +65,7 @@ services:
       - backend
 
   platform:
-    image: ${PLATFORM_IMAGE:-playwright-test-platform:local}
+    image: ${PLATFORM_IMAGE:-waterfall-ai-test-platform:local}
     command:
       - platform
     restart: unless-stopped

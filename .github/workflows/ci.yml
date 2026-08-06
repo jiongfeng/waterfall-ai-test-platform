@@ -220,6 +220,6 @@ jobs:
           file: deploy/Dockerfile
           platforms: linux/amd64
           push: false
-          tags: playwright-test-platform:ci
-          cache-from: type=gha,scope=playwright-test-platform
-          cache-to: type=gha,mode=max,scope=playwright-test-platform
+          tags: waterfall-ai-test-platform:ci
+          cache-from: type=gha,scope=waterfall-ai-test-platform
+          cache-to: type=gha,mode=max,scope=waterfall-ai-test-platform

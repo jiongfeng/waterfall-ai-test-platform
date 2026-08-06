@@ -49,8 +49,8 @@ if "${temporary_dir}/bin/platform-compose" up --build >/dev/null 2>&1; then
 fi
 
 printf '%s\n' \
-    'PLATFORM_IMAGE=playwright-test-platform.local/platform:sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' \
-    'MYSQL_IMAGE=playwright-test-platform.local/mysql:sha256-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' \
+    'PLATFORM_IMAGE=waterfall-ai-test-platform.local/platform:sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' \
+    'MYSQL_IMAGE=waterfall-ai-test-platform.local/mysql:sha256-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' \
     > "${temporary_dir}/.env.images"
 "${temporary_dir}/bin/platform-compose" ps
 cmp "${temporary_dir}/.env.images" "${CAPTURE_ENV_PATH}" \

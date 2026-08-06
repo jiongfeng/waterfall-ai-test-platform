@@ -89,7 +89,7 @@ def validate_image(name: str, image: object, bundle_type: str, root: Path | None
                 f"online bundle must not claim images.{name} archive")
         return
     digest_hex = digest.split(":", 1)[1]
-    expected_runtime = f"playwright-test-platform.local/{name}:sha256-{digest_hex}"
+    expected_runtime = f"waterfall-ai-test-platform.local/{name}:sha256-{digest_hex}"
     require(runtime_reference == expected_runtime,
             f"offline images.{name}.runtimeReference must be {expected_runtime}")
     expected_archive = f"images/{name}-linux-amd64.tar.zst"
@@ -141,7 +141,7 @@ def validate_assembly(root: Path, metadata: dict[str, object]) -> None:
     assembly = load_json(root / "assembly/bundle-manifest.json")
     require(isinstance(assembly, dict), "assembly manifest must be an object")
     require(assembly.get("schemaVersion") == 1, "assembly manifest schemaVersion must be 1")
-    require(assembly.get("kind") == "playwright-test-platform-release-bundle-assembly",
+    require(assembly.get("kind") == "waterfall-ai-test-platform-release-bundle-assembly",
             "assembly manifest kind is invalid")
     require(assembly.get("bundleType") == metadata["bundleType"],
             "assembly manifest bundleType mismatch")
@@ -253,7 +253,7 @@ def validate(
     require(isinstance(document, dict), "release metadata must be an object")
     require(set(document) == ROOT_KEYS, "release metadata has missing or unknown fields")
     require(document["schemaVersion"] == 1, "schemaVersion must be 1")
-    require(document["project"] == "playwright-test-platform", "project is invalid")
+    require(document["project"] == "waterfall-ai-test-platform", "project is invalid")
     version = document["version"]
     require(isinstance(version, str) and VERSION_RE.fullmatch(version) is not None, "version is invalid")
     require(document["tag"] == f"v{version}", "tag must equal v + version")

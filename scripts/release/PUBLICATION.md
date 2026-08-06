@@ -19,7 +19,7 @@ The publication job runs behind the `release-publication` environment and:
 6. performs `draft=false` as its sole release mutation.
 
 GitHub Container Registry visibility is independent of repository visibility.
-The `playwright-test-platform` package must be changed to Public before the
+The `waterfall-ai-test-platform` package must be changed to Public before the
 `release-package-publication` gate is approved. A token-authenticated pull is
 not evidence of public availability.
 

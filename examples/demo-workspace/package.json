@@ -2,7 +2,7 @@
   "name": "playwright-platform-demo-workspace",
   "version": "0.0.0",
   "private": true,
-  "description": "Credential-free local demo workspace for Playwright Test Platform.",
+  "description": "Credential-free local demo workspace for Waterfall AI.",
   "type": "module",
   "scripts": {
     "test": "playwright test"

@@ -103,7 +103,7 @@ jobs:
           version="${RELEASE_TAG#v}"
           bash scripts/release/smoke-bundle.sh \
             --type online \
-            --bundle "${assets}/playwright-test-platform-${version}-linux-amd64-online.tar.zst" \
+            --bundle "${assets}/waterfall-ai-test-platform-${version}-linux-amd64-online.tar.zst" \
             --github-repository "${GITHUB_REPOSITORY}" \
             --source-ref "refs/tags/${RELEASE_TAG}" \
             --source-digest "${EXPECTED_REVISION}" \

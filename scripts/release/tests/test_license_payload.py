@@ -72,7 +72,7 @@ class LicensePayloadTests(unittest.TestCase):
             config_digest = "sha256:" + "b" * 64
             manifest = {
                 "schemaVersion": 1,
-                "kind": "playwright-test-platform-final-image-license-files",
+                "kind": "waterfall-ai-test-platform-final-image-license-files",
                 "selectionPolicy": "license-notice-filenames-v1",
                 "imageReference": reference,
                 "configDigest": config_digest,

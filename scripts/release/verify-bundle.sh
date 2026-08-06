@@ -222,7 +222,7 @@ python3 "${SCRIPT_DIR}/validate-metadata.py" "${metadata_args[@]}"
 
 version="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["version"])' \
     "${bundle_root}/RELEASE-METADATA.json")"
-[[ "${bundle_directory}" == "playwright-test-platform-${version}-linux-amd64" ]] \
+[[ "${bundle_directory}" == "waterfall-ai-test-platform-${version}-linux-amd64" ]] \
     || fail "bundle directory version does not match metadata"
 
 if [[ "${verify_images}" == "true" ]]; then

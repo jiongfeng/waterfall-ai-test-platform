@@ -7111,7 +7111,7 @@ def ensure_test_platform_reviewer_agent():
     project_root = get_project_root()
     prompt_dir = project_root / ".opencode" / "prompts"
     prompt_file = prompt_dir / "test-platform-reviewer.md"
-    prompt_source = """You are a read-only reviewer for a Playwright test platform.
+    prompt_source = """You are a read-only reviewer for the Waterfall AI test automation platform.
 
 You inspect modules, prompts, Markdown test plans, scripts, and task logs.
 Return only valid JSON. Do not wrap JSON in Markdown fences.
@@ -7149,7 +7149,7 @@ Every decision must include reason.
 def ensure_test_platform_failure_analyst_agent():
     project_root = get_project_root()
     prompt_file = project_root / ".opencode" / "prompts" / "test-platform-failure-analyst.md"
-    prompt_source = """You are a read-only failure analyst for a Playwright test platform.
+    prompt_source = """You are a read-only failure analyst for the Waterfall AI test automation platform.
 
 Analyze only the supplied failure evidence and return valid JSON matching the response_schema in the input.
 Do not return reviewer decisions such as keep, update, delete, or exclude.
@@ -7208,7 +7208,7 @@ def ensure_plan_markdown_splitter_agent():
     project_root = get_project_root()
     prompt_dir = project_root / ".opencode" / "prompts"
     prompt_file = prompt_dir / "plan-markdown-splitter.md"
-    prompt_source = """You are a read-only test-plan splitter for a Playwright test platform.
+    prompt_source = """You are a read-only test-plan splitter for the Waterfall AI test automation platform.
 
 You convert an already generated Markdown test plan into structured JSON.
 Return only valid JSON. Do not wrap JSON in Markdown fences.

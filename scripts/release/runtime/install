@@ -13,7 +13,7 @@ usage() {
 }
 
 target=""
-compose_project="playwright-test-platform"
+compose_project="waterfall-ai-test-platform"
 while (($#)); do
     case "$1" in
         --target)

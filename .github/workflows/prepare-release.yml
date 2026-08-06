@@ -191,8 +191,8 @@ jobs:
             VERSION=${{ inputs.version }}
             REVISION=${{ inputs.revision }}
             SOURCE_URL=${{ steps.identity.outputs.source_url }}
-          cache-from: type=gha,scope=playwright-test-platform-candidate
-          cache-to: type=gha,mode=max,scope=playwright-test-platform-candidate
+          cache-from: type=gha,scope=waterfall-ai-test-platform-candidate
+          cache-to: type=gha,mode=max,scope=waterfall-ai-test-platform-candidate
           provenance: false
           sbom: false
 
@@ -295,7 +295,7 @@ jobs:
             --output "spdx-json=${RUNNER_TEMP}/release-candidate/sbom/mysql.spdx.json"
           syft "docker:${MYSQL_IMAGE}" \
             --output "cyclonedx-json=${RUNNER_TEMP}/release-candidate/sbom/mysql.cdx.json"
-          platform_local_image="playwright-test-platform-candidate:${GITHUB_SHA}"
+          platform_local_image="waterfall-ai-test-platform-candidate:${GITHUB_SHA}"
           skopeo copy \
             "oci-archive:${RUNNER_TEMP}/release-candidate/platform-linux-amd64.oci.tar" \
             "docker-daemon:${platform_local_image}"

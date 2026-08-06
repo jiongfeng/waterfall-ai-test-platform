@@ -1,7 +1,7 @@
 [project]
-name = "playwright-test-platform"
+name = "waterfall-ai-test-platform"
 version = "0.1.0b0"
-description = "A self-hosted platform for managing Playwright test plans, scripts, execution, and AI-assisted workflows."
+description = "Agent-driven test automation platform for planning, generating, running, and reviewing Playwright tests."
 readme = "README.md"
 requires-python = ">=3.12,<3.15"
 license = { file = "LICENSE" }

@@ -1,6 +1,6 @@
 # Support Matrix
 
-测试资源编辑器目前处于公开 Beta 准备阶段。社区支持边界是可信环境、单租户、
+Waterfall AI 目前处于公开 Beta 阶段。社区支持边界是可信环境、单租户、
 单应用实例和 Linux/amd64 Docker。
 
 本页描述技术兼容边界；问题处理方式见 [SUPPORT.md](../SUPPORT.md)。
@@ -90,8 +90,8 @@ config/data/cache/state 四卷和 `config.json`/`.env`/Release 元数据必须�
 
 | 来源 | 状态 | 说明 |
 | --- | --- | --- |
-| 空白目标上的首个公开 Beta | 条件支持 | 仅在公开 Release 实际存在且附件验证通过时，使用新数据库、工作区和 OpenCode config/data/cache/state 四卷 |
-| 当前候选或首个公开 Beta 原地升级 | 不支持 | 当前 `upgrade_paths` 为空 |
+| 空白目标上的公开 Beta | 条件支持 | 仅在公开 Release 实际存在且附件验证通过时，使用新数据库、工作区和 OpenCode config/data/cache/state 四卷 |
+| 当前公开 Beta 原地升级 | 不支持 | 当前 `upgrade_paths` 为空 |
 | 旧内部安装包或增量包 | 不支持 | 已退役，不属于公开 Release |
 | 缺少有效 Release 元数据的部署 | 不支持 | 未知来源默认拒绝 |
 | 手工复用旧数据库或命名卷 | 不支持 | 可能绕过 schema 与部署契约检查 |
