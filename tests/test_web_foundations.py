@@ -105,7 +105,9 @@ class WebFoundationTests(unittest.TestCase):
             response = client.get("/")
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn("测试资源编辑器", response.get_data(as_text=True))
+        rendered = response.get_data(as_text=True)
+        self.assertIn("Waterfall AI", rendered)
+        self.assertIn("Agent-driven test automation platform", rendered)
 
 
 if __name__ == "__main__":

@@ -17,7 +17,7 @@ from release_chain import load_json, sha256, validate_chain, write_json
 
 MANIFEST_NAME = "RELEASE-MANIFEST.json"
 CHECKSUM_NAME = "RELEASE-ASSET-SHA256SUMS"
-KIND = "playwright-test-platform-release-manifest"
+KIND = "waterfall-ai-test-platform-release-manifest"
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+(?:[.-][0-9A-Za-z.-]+)?$")
 REVISION_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -54,7 +54,7 @@ def validate(path: Path, asset_root: Path | None = None) -> dict[str, Any]:
             "release manifest has missing or unknown fields")
     require(value["schemaVersion"] == 1 and value["kind"] == KIND,
             "release manifest schema or kind is invalid")
-    require(value["project"] == "playwright-test-platform", "project is invalid")
+    require(value["project"] == "waterfall-ai-test-platform", "project is invalid")
     require(isinstance(value["version"], str) and VERSION_RE.fullmatch(value["version"]) is not None,
             "version is invalid")
     require(value["tag"] == f"v{value['version']}", "tag must equal v + version")
@@ -168,7 +168,7 @@ def write(args: argparse.Namespace) -> None:
     document = {
         "schemaVersion": 1,
         "kind": KIND,
-        "project": "playwright-test-platform",
+        "project": "waterfall-ai-test-platform",
         "version": candidate["version"],
         "tag": f"v{candidate['version']}",
         "revision": candidate["revision"],

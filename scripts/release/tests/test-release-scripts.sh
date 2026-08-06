@@ -36,11 +36,11 @@ runtime_pattern = schema["$defs"]["image"]["properties"]["runtimeReference"]["pa
 assert re.fullmatch(runtime_pattern, "ghcr.io/example/platform@sha256:" + "a" * 64)
 assert re.fullmatch(
     runtime_pattern,
-    "playwright-test-platform.local/platform:sha256-" + "a" * 64,
+    "waterfall-ai-test-platform.local/platform:sha256-" + "a" * 64,
 )
 assert not re.fullmatch(
     runtime_pattern,
-    "playwright-test-platform.local/platform:latest",
+    "waterfall-ai-test-platform.local/platform:latest",
 )
 PY
 
@@ -85,7 +85,7 @@ platform_digest="sha256:$(printf 'a%.0s' {1..64})"
 mysql_digest="sha256:$(printf 'b%.0s' {1..64})"
 platform_config_digest="sha256:$(printf 'd%.0s' {1..64})"
 mysql_config_digest="sha256:$(printf 'e%.0s' {1..64})"
-platform_image="ghcr.io/example/playwright-test-platform@${platform_digest}"
+platform_image="ghcr.io/example/waterfall-ai-test-platform@${platform_digest}"
 mysql_image="docker.io/library/mysql:8.4@${mysql_digest}"
 mysql_parent="docker.io/library/mysql:8.4@sha256:$(printf 'c%.0s' {1..64})"
 git -C "${source_root}" init --quiet
@@ -131,7 +131,7 @@ for name, (reference, config_digest) in components.items():
     (files / artifact_name).write_bytes(content)
     manifest = {
         "schemaVersion": 1,
-        "kind": "playwright-test-platform-final-image-license-files",
+        "kind": "waterfall-ai-test-platform-final-image-license-files",
         "selectionPolicy": "license-notice-filenames-v1",
         "imageReference": reference,
         "configDigest": config_digest,
@@ -154,9 +154,9 @@ python3 "${source_root}/scripts/release/write-release-candidate.py" \
     --output "${candidate_manifest}" \
     --version 1.2.3-beta.1 \
     --revision "${revision}" \
-    --source-url https://github.com/example/playwright-test-platform \
+    --source-url https://github.com/example/waterfall-ai-test-platform \
     --source-date-epoch "${source_date_epoch}" \
-    --target-image ghcr.io/example/playwright-test-platform \
+    --target-image ghcr.io/example/waterfall-ai-test-platform \
     --platform-digest "${platform_digest}" \
     --platform-config-digest "${platform_config_digest}" \
     --platform-archive "${candidate_root}/platform-linux-amd64.oci.tar" \
@@ -165,7 +165,7 @@ python3 "${source_root}/scripts/release/write-release-candidate.py" \
     --mysql-config-digest "${mysql_config_digest}" \
     --sbom-dir "${sbom_dir}" \
     --license-payload-dir "${license_payload_dir}" \
-    --workflow-repository example/playwright-test-platform \
+    --workflow-repository example/waterfall-ai-test-platform \
     --workflow-run-id 123 \
     --workflow-run-attempt 1 \
     --workflow-ref refs/heads/main \
@@ -184,7 +184,7 @@ python3 "${source_root}/scripts/release/write-release-approval.py" \
     --mysql-license-evidence https://example.invalid/reviews/mysql-license \
     --reviewed-by release-script-test \
     --reviewed-at 2026-08-05T00:00:00Z \
-    --workflow-repository example/playwright-test-platform \
+    --workflow-repository example/waterfall-ai-test-platform \
     --workflow-run-id 456 \
     --workflow-run-attempt 1 \
     --workflow-ref refs/heads/main \
@@ -199,7 +199,7 @@ python3 "${source_root}/scripts/release/release_chain.py" \
     --require-offline \
     --expected-version 1.2.3-beta.1 \
     --expected-revision "${revision}" \
-    --expected-target-image ghcr.io/example/playwright-test-platform
+    --expected-target-image ghcr.io/example/waterfall-ai-test-platform
 
 cp "${approval_root}/RELEASE-APPROVAL.json" "${temporary_dir}/tampered-approval.json"
 python3 - "${temporary_dir}/tampered-approval.json" <<'PY'
@@ -219,7 +219,7 @@ common_args=(
     --version 1.2.3-beta.1
     --tag v1.2.3-beta.1
     --revision "${revision}"
-    --source-url https://github.com/example/playwright-test-platform
+    --source-url https://github.com/example/waterfall-ai-test-platform
     --source-date-epoch "${source_date_epoch}"
     --platform-image "${platform_image}"
     --mysql-image "${mysql_image}"
@@ -238,11 +238,11 @@ for iteration in one two; do
         "${common_args[@]}" >/dev/null
     bash "${RELEASE_DIR}/verify-bundle.sh" \
         --allow-unsigned-local \
-        "${output_dir}/playwright-test-platform-1.2.3-beta.1-linux-amd64-online.tar.zst"
+        "${output_dir}/waterfall-ai-test-platform-1.2.3-beta.1-linux-amd64-online.tar.zst"
 done
 cmp \
-    "${temporary_dir}/online-one/playwright-test-platform-1.2.3-beta.1-linux-amd64-online.tar.zst" \
-    "${temporary_dir}/online-two/playwright-test-platform-1.2.3-beta.1-linux-amd64-online.tar.zst"
+    "${temporary_dir}/online-one/waterfall-ai-test-platform-1.2.3-beta.1-linux-amd64-online.tar.zst" \
+    "${temporary_dir}/online-two/waterfall-ai-test-platform-1.2.3-beta.1-linux-amd64-online.tar.zst"
 
 printf 'fake platform docker save\n' | zstd --threads=1 --quiet --stdout \
     > "${temporary_dir}/platform.tar.zst"
@@ -258,11 +258,11 @@ for iteration in one two; do
         "${common_args[@]}" >/dev/null
     bash "${RELEASE_DIR}/verify-bundle.sh" \
         --allow-unsigned-local \
-        "${output_dir}/playwright-test-platform-1.2.3-beta.1-linux-amd64-offline.tar.zst"
+        "${output_dir}/waterfall-ai-test-platform-1.2.3-beta.1-linux-amd64-offline.tar.zst"
 done
 cmp \
-    "${temporary_dir}/offline-one/playwright-test-platform-1.2.3-beta.1-linux-amd64-offline.tar.zst" \
-    "${temporary_dir}/offline-two/playwright-test-platform-1.2.3-beta.1-linux-amd64-offline.tar.zst"
+    "${temporary_dir}/offline-one/waterfall-ai-test-platform-1.2.3-beta.1-linux-amd64-offline.tar.zst" \
+    "${temporary_dir}/offline-two/waterfall-ai-test-platform-1.2.3-beta.1-linux-amd64-offline.tar.zst"
 
 [[ "$(grep -Fc 'docker_image_config_digest.py' "${RELEASE_DIR}/runtime/verify")" -eq 2 ]] \
     || fail "runtime verification does not validate both platform and MySQL container identities"

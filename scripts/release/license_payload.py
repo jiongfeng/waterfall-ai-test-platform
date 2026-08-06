@@ -250,7 +250,7 @@ def collect(
     require(entries, "final image contains no collected license or NOTICE files")
     manifest = {
         "schemaVersion": 1,
-        "kind": "playwright-test-platform-final-image-license-files",
+        "kind": "waterfall-ai-test-platform-final-image-license-files",
         "selectionPolicy": SELECTION_POLICY,
         "imageReference": source_reference,
         "configDigest": expected_config_digest,
@@ -302,7 +302,7 @@ def validate_payload(
         "fileCount", "totalBytes", "files",
     }, "license payload manifest has missing or unknown fields")
     require(value["schemaVersion"] == 1, "license payload schemaVersion must be 1")
-    require(value["kind"] == "playwright-test-platform-final-image-license-files",
+    require(value["kind"] == "waterfall-ai-test-platform-final-image-license-files",
             "license payload kind is invalid")
     require(value["selectionPolicy"] == SELECTION_POLICY,
             "license payload selection policy is invalid")

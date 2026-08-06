@@ -8,8 +8,8 @@ ARG VERSION=dev
 ARG REVISION=unknown
 ARG SOURCE_URL
 
-LABEL org.opencontainers.image.title="Playwright Test Platform" \
-      org.opencontainers.image.description="Single-tenant Playwright test platform beta" \
+LABEL org.opencontainers.image.title="Waterfall AI" \
+      org.opencontainers.image.description="Agent-driven test automation platform for trusted single-tenant teams" \
       org.opencontainers.image.version="${VERSION}" \
       org.opencontainers.image.revision="${REVISION}" \
       org.opencontainers.image.source="${SOURCE_URL}" \

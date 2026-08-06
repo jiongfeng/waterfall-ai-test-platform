@@ -19,7 +19,7 @@ class ReleaseAssetSetTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name)
-        self.asset = self.root / "playwright-test-platform-1.2.3-beta.1-linux-amd64-online.tar.zst"
+        self.asset = self.root / "waterfall-ai-test-platform-1.2.3-beta.1-linux-amd64-online.tar.zst"
         self.asset.write_bytes(b"bundle\n")
         checksum = hashlib.sha256(self.asset.read_bytes()).hexdigest()
         (self.root / "RELEASE-ASSET-SHA256SUMS").write_text(
@@ -36,18 +36,18 @@ class ReleaseAssetSetTests(unittest.TestCase):
             })
         manifest = {
             "schemaVersion": 1,
-            "kind": "playwright-test-platform-release-manifest",
-            "project": "playwright-test-platform",
+            "kind": "waterfall-ai-test-platform-release-manifest",
+            "project": "waterfall-ai-test-platform",
             "version": "1.2.3-beta.1",
             "tag": "v1.2.3-beta.1",
             "revision": "a" * 40,
-            "sourceUrl": "https://github.com/jiongfeng/playwright-test-platform",
+            "sourceUrl": "https://github.com/jiongfeng/waterfall-ai-test-platform",
             "sourceDateEpoch": 1700000000,
             "architecture": "linux/amd64",
             "scope": "online-only",
             "images": {
                 "platform": {
-                    "reference": "ghcr.io/jiongfeng/playwright-test-platform@sha256:" + "b" * 64,
+                    "reference": "ghcr.io/jiongfeng/waterfall-ai-test-platform@sha256:" + "b" * 64,
                     "manifestDigest": "sha256:" + "b" * 64,
                     "configDigest": "sha256:" + "c" * 64,
                     "redistributed": True,

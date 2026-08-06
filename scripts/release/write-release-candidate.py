@@ -44,7 +44,7 @@ def main() -> int:
         license_payloads[name] = file_record(path, path.relative_to(root).as_posix())
     document = {
         "schemaVersion": 1,
-        "kind": "playwright-test-platform-release-candidate",
+        "kind": "waterfall-ai-test-platform-release-candidate",
         "version": args.version,
         "revision": args.revision,
         "sourceUrl": args.source_url,

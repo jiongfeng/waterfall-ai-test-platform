@@ -22,7 +22,7 @@ ALLOW = 0
 INVALID_INPUT = 2
 POLICY_DENIED = 10
 METADATA_NAME = "RELEASE-METADATA.json"
-DEFAULT_COMPOSE_PROJECT = "playwright-test-platform"
+DEFAULT_COMPOSE_PROJECT = "waterfall-ai-test-platform"
 
 
 class PreflightError(ValueError):

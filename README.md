@@ -1,18 +1,37 @@
-# Playwright Test Platform
+# Waterfall AI
 
 [简体中文](./README.zh-CN.md)
 
-Playwright Test Platform is a self-hosted workspace for managing test
-requirements, Markdown test plans, Playwright scripts, execution records, and
-AI-assisted generation and repair. It keeps test assets in project workspaces
-with local Git history and stores platform metadata in MySQL.
+**Agent-driven test automation platform**
 
-> **Public Beta candidate — no public install artifact exists yet**
+Waterfall AI is a self-hosted workspace for turning test requirements into
+Markdown test plans, Playwright scripts, execution records, and agent-assisted
+review and repair. It keeps test assets in project workspaces with local Git
+history and stores platform metadata in MySQL.
+
+Waterfall AI is an independent open-source project built with Playwright. It is
+not affiliated with, sponsored by, or endorsed by Microsoft or the Playwright
+project.
+
+> **Public Beta**
 >
-> The current source candidate can be evaluated by a trusted, single-tenant
-> team on one Linux/amd64 Docker deployment. It is not a published release, a
-> hardened public SaaS, a hostile multi-tenant system, or a security sandbox.
-> Keep the UI behind a TLS reverse proxy and an organization access boundary.
+> The signed prerelease
+> [`v0.1.0-beta.3`](https://github.com/jiongfeng/waterfall-ai-test-platform/releases/tag/v0.1.0-beta.3)
+> is available for trusted, single-tenant teams on one Linux/amd64 Docker
+> deployment. It is not a hardened public SaaS, a hostile multi-tenant system,
+> or a security sandbox. Keep the UI behind a TLS reverse proxy and an
+> organization access boundary.
+
+### Brand and release compatibility
+
+The project was renamed from `playwright-test-platform` to
+`waterfall-ai-test-platform`. GitHub redirects the old repository URL. The
+immutable `v0.1.0-beta.3` release intentionally keeps its original
+`playwright-test-platform-*` asset names and
+`ghcr.io/jiongfeng/playwright-test-platform` image reference; releases created
+after the rename use the Waterfall AI names. Runtime compatibility identifiers
+such as the `playwright_platform` database, Python package paths, container
+paths, and existing session-cookie names remain unchanged.
 
 ## What it includes
 
@@ -346,7 +365,7 @@ automatic sanitizer for every text field or binary artifact.
 
 ## Fresh-install-only upgrade boundary
 
-Any eventual initial Public Beta will support **fresh installation only**. It does not
+The current Public Beta supports **fresh installation only**. It does not
 support an in-place upgrade from an internal package, a legacy installation, a
 source checkout, or an installation whose release metadata is missing or
 unknown. The old internal incremental packages are retired and are not release
@@ -372,7 +391,7 @@ destination. To audit the decision manually from an unpacked release bundle:
 
 ```bash
 python3 deploy/preflight-install.py \
-  --target /srv/playwright-platform-next \
+  --target /srv/waterfall-ai-next \
   --release-metadata ./RELEASE-METADATA.json
 ```
 

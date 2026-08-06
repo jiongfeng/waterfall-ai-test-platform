@@ -1,6 +1,6 @@
 services:
   platform:
-    image: ${PLATFORM_IMAGE:-playwright-test-platform:local}
+    image: ${PLATFORM_IMAGE:-waterfall-ai-test-platform:local}
     build:
       context: .
       dockerfile: deploy/Dockerfile

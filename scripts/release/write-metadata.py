@@ -17,7 +17,7 @@ def runtime_reference(name: str, source_reference: str, bundle_type: str) -> str
     if bundle_type == "online":
         return source_reference
     digest_hex = digest_from_reference(source_reference).split(":", 1)[1]
-    return f"playwright-test-platform.local/{name}:sha256-{digest_hex}"
+    return f"waterfall-ai-test-platform.local/{name}:sha256-{digest_hex}"
 
 
 def sha256(path: Path) -> str:
@@ -69,7 +69,7 @@ def main() -> int:
     )
     metadata = {
         "schemaVersion": 1,
-        "project": "playwright-test-platform",
+        "project": "waterfall-ai-test-platform",
         "version": args.version,
         "tag": args.tag,
         "revision": args.revision,
@@ -133,7 +133,7 @@ def main() -> int:
         subjects.append({"name": mysql_archive, "digest": {"sha256": mysql_archive_sha}})
     assembly = {
         "schemaVersion": 1,
-        "kind": "playwright-test-platform-release-bundle-assembly",
+        "kind": "waterfall-ai-test-platform-release-bundle-assembly",
         "bundleType": args.bundle_type,
         "tag": args.tag,
         "revision": args.revision,

@@ -406,8 +406,8 @@ jobs:
           set -Eeuo pipefail
           image_dir="${RUNNER_TEMP}/offline-images"
           mkdir -p "${image_dir}"
-          platform_archive_image="playwright-test-platform.local/platform:sha256-${PLATFORM_IMAGE##*@sha256:}"
-          mysql_archive_image="playwright-test-platform.local/mysql:sha256-${MYSQL_IMAGE##*@sha256:}"
+          platform_archive_image="waterfall-ai-test-platform.local/platform:sha256-${PLATFORM_IMAGE##*@sha256:}"
+          mysql_archive_image="waterfall-ai-test-platform.local/mysql:sha256-${MYSQL_IMAGE##*@sha256:}"
           docker image tag "${PLATFORM_IMAGE}" "${platform_archive_image}"
           docker image tag "${MYSQL_IMAGE}" "${mysql_archive_image}"
           [[ "$(docker image inspect --format '{{.Id}}' "${platform_archive_image}")" \
@@ -502,7 +502,7 @@ jobs:
           minisign -S -s "${secret_key}" \
             -m "${output}/RELEASE-MANIFEST.json" \
             -x "${output}/RELEASE-MANIFEST.json.minisig" \
-            -t "playwright-test-platform ${RELEASE_TAG:-v${RELEASE_VERSION}} revision ${GITHUB_SHA}"
+            -t "waterfall-ai-test-platform ${RELEASE_TAG:-v${RELEASE_VERSION}} revision ${GITHUB_SHA}"
           rm -f -- "${secret_key}"
           minisign -Vm "${output}/RELEASE-MANIFEST.json" \
             -x "${output}/RELEASE-MANIFEST.json.minisig" \
@@ -603,7 +603,7 @@ jobs:
           fi
           bash scripts/release/smoke-bundle.sh \
             --type online \
-            --bundle "${RUNNER_TEMP}/release-assets/playwright-test-platform-${RELEASE_VERSION}-linux-amd64-online.tar.zst" \
+            --bundle "${RUNNER_TEMP}/release-assets/waterfall-ai-test-platform-${RELEASE_VERSION}-linux-amd64-online.tar.zst" \
             --github-repository "${GITHUB_REPOSITORY}" \
             --source-ref "${GITHUB_REF}" \
             --source-digest "${GITHUB_SHA}" \
@@ -665,7 +665,7 @@ jobs:
           runner_gid="$(id -g)"
           dind_name="offline-dind-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           dind_root="${RUNNER_TEMP}/offline-dind"
-          bundle="${RUNNER_TEMP}/release-assets/playwright-test-platform-${RELEASE_VERSION}-linux-amd64-offline.tar.zst"
+          bundle="${RUNNER_TEMP}/release-assets/waterfall-ai-test-platform-${RELEASE_VERSION}-linux-amd64-offline.tar.zst"
           bash scripts/release/verify-bundle.sh \
             --github-repository "${GITHUB_REPOSITORY}" \
             --source-ref "${GITHUB_REF}" \

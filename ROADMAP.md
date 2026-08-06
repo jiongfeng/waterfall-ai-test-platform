@@ -4,11 +4,11 @@
 
 ## 项目定位
 
-测试资源编辑器当前是面向可信团队的单租户 Linux Docker Beta，用于管理 Playwright 测试计划、脚本、生成任务、执行证据和本地 Git 版本。
+Waterfall AI 当前是面向可信团队的单租户 Linux Docker Beta，用于管理 Playwright 测试计划、脚本、Agent 任务、执行证据和本地 Git 版本。
 
 在完成明确的安全与运维门槛前，项目不会宣称支持公网不可信用户或多租户 SaaS。
 
-## 当前：公开 Beta 准备
+## 当前：公开 Beta 加固
 
 ### 安全基线
 

@@ -42,13 +42,13 @@ release_import_image_environment() {
         case "${key}" in
             PLATFORM_IMAGE)
                 [[ "${value}" =~ ^[^[:space:]@]+@sha256:[0-9a-f]{64}$ \
-                    || "${value}" =~ ^playwright-test-platform\.local/platform:sha256-[0-9a-f]{64}$ ]] \
+                    || "${value}" =~ ^waterfall-ai-test-platform\.local/platform:sha256-[0-9a-f]{64}$ ]] \
                     || release_fail "${key} is not an approved registry digest or offline archive tag"
                 export "${key}=${value}"
                 ;;
             MYSQL_IMAGE)
                 [[ "${value}" =~ ^[^[:space:]@]+@sha256:[0-9a-f]{64}$ \
-                    || "${value}" =~ ^playwright-test-platform\.local/mysql:sha256-[0-9a-f]{64}$ ]] \
+                    || "${value}" =~ ^waterfall-ai-test-platform\.local/mysql:sha256-[0-9a-f]{64}$ ]] \
                     || release_fail "${key} is not an approved registry digest or offline archive tag"
                 export "${key}=${value}"
                 ;;

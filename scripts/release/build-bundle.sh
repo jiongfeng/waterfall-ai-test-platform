@@ -213,7 +213,7 @@ else
         || fail "online bundles must not include image archives"
 fi
 
-archive_name="playwright-test-platform-${version}-linux-amd64-${bundle_type}.tar.zst"
+archive_name="waterfall-ai-test-platform-${version}-linux-amd64-${bundle_type}.tar.zst"
 archive_path="${output_dir}/${archive_name}"
 [[ ! -e "${archive_path}" ]] || fail "refusing to overwrite existing artifact: ${archive_path}"
 
@@ -222,7 +222,7 @@ cleanup() {
     rm -rf -- "${staging_dir}"
 }
 trap cleanup EXIT
-bundle_root="${staging_dir}/playwright-test-platform-${version}-linux-amd64"
+bundle_root="${staging_dir}/waterfall-ai-test-platform-${version}-linux-amd64"
 mkdir -p -- "${bundle_root}"
 
 while IFS= read -r -d '' tracked_path; do

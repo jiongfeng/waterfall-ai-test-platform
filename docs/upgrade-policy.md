@@ -1,6 +1,6 @@
 # 安装与升级策略
 
-本文定义候选公开发行物的安装来源识别和升级边界。任何未来的首个公开 Beta 只
+本文定义公开发行物的安装来源识别和升级边界。当前公开 Beta 只
 支持全新安装，不提供内部版或旧版原地升级，也不提供公开的历史数据迁移工具。
 
 ## 当前策略
@@ -11,7 +11,7 @@
 | 旧内部安装包或增量包 | 拒绝 | 已退役，不属于公开兼容性契约 |
 | 缺少有效 Release 元数据的非空目录 | 拒绝 | 来源未知，默认关闭 |
 | 未在升级矩阵精确列出的来源 | 拒绝 | 不允许猜测兼容性或跳过中间版本 |
-| 当前候选或首个公开 Beta 的原地升级 | 拒绝 | `deploy/upgrade-matrix.json` 的路径列表为空 |
+| 当前公开 Beta 的原地升级 | 拒绝 | `deploy/upgrade-matrix.json` 的路径列表为空 |
 
 “拒绝”表示不得通过删除版本标记、重新标记镜像、复用旧卷或加跳过参数来继续。
 如果需要保留旧环境数据，应把 `mysql_data`、`platform_projects`、
@@ -25,7 +25,7 @@
 
 ```bash
 python3 deploy/preflight-install.py \
-  --target /srv/playwright-platform-next \
+  --target /srv/waterfall-ai-next \
   --release-metadata ./RELEASE-METADATA.json
 ```
 
@@ -39,9 +39,13 @@ Docker 资源。Docker 状态无法查询也按未知来源拒绝。
 `--release-metadata`；非空目标永远不能省略。正式在线/离线包必须提供并传入自身
 Release 元数据。
 
-预检默认检查 Compose project `playwright-test-platform`。安装器若使用其他合法
+预检默认检查 Compose project `waterfall-ai-test-platform`。安装器若使用其他合法
 project 名，必须通过 `--compose-project` 传入实际值；不能为绕过旧资源检测而临时
 更名。发现任何无法与允许路径精确关联的容器、卷或网络时都应停止。
+
+从旧品牌部署迁移时，不要仅修改已有 `.env` 中的 `COMPOSE_PROJECT_NAME`。该值决定
+Docker Compose 的容器、网络和命名卷身份；保留旧值即可继续定位原资源。新名称是
+全新安装的默认值，不构成对旧部署的原地升级支持。
 
 ## 身份与矩阵
 

@@ -15,6 +15,11 @@
 
 ### Changed
 
+- 产品名改为 Waterfall AI，仓库名改为 `waterfall-ai-test-platform`，副标题为
+  “Agent-driven test automation platform”；数据库、Python 模块、容器内部路径和
+  Session Cookie 等运行时兼容标识保持不变；
+- 后续 Release 制品、镜像和 Compose 默认项目使用 Waterfall AI 命名；不可变的
+  `v0.1.0-beta.3` Release 保留改名前的制品与镜像名称；
 - 测试准备动作统一到项目级准备脚本；数据库基线仅保留文件复制模式，旧命令
   模式和批处理辅助文件不再受支持；
 - 生成、执行和重试流程使用更明确的项目、作者和资产版本上下文；

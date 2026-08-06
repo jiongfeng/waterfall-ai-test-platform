@@ -19,7 +19,7 @@ class SetComposeProjectTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / ".env"
             path.write_text(
-                "PLATFORM_PORT=5000\nCOMPOSE_PROJECT_NAME=playwright-test-platform\n",
+                "PLATFORM_PORT=5000\nCOMPOSE_PROJECT_NAME=waterfall-ai-test-platform\n",
                 encoding="utf-8",
             )
             update(path, "release-smoke-123")

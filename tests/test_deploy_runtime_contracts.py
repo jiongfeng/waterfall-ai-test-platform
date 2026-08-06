@@ -167,7 +167,7 @@ class DeployRuntimeContractTests(unittest.TestCase):
             "--source",
             environment_file,
             "--default",
-            "playwright-test-platform",
+            "waterfall-ai-test-platform",
         )
 
         self.assertEqual(resolved.returncode, 0, resolved.stderr)
@@ -184,7 +184,7 @@ class DeployRuntimeContractTests(unittest.TestCase):
             "--source",
             environment_file,
             "--default",
-            "playwright-test-platform",
+            "waterfall-ai-test-platform",
         )
         self.assertEqual(duplicate.returncode, 1)
         self.assertIn("duplicate COMPOSE_PROJECT_NAME", duplicate.stderr)
