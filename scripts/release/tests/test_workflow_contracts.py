@@ -60,6 +60,13 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertIn("approval-deployment-statuses.json", workflow)
         self.assertIn('.state == "queued"', workflow)
 
+    def test_release_smoke_uses_same_origin_login_requests(self) -> None:
+        smoke = (
+            REPOSITORY_ROOT / "scripts" / "release" / "smoke-bundle.sh"
+        ).read_text(encoding="utf-8")
+        self.assertIn('"Origin": base', smoke)
+        self.assertGreaterEqual(smoke.count('--header "Origin:'), 2)
+
 
 if __name__ == "__main__":
     unittest.main()

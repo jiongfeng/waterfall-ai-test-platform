@@ -183,7 +183,7 @@ def login(password):
     request = urllib.request.Request(
         base + "/api/auth/login",
         data=json.dumps({"username": "admin", "password": password}).encode(),
-        headers={"Content-Type": "application/json"},
+        headers={"Content-Type": "application/json", "Origin": base},
     )
     try:
         return opener.open(request).status
@@ -197,6 +197,7 @@ PY
 else
     wrong_status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
         --header 'Content-Type: application/json' \
+        --header "Origin: http://127.0.0.1:${port}" \
         --data-binary '{"username":"admin","password":"wrong"}' \
         "http://127.0.0.1:${port}/api/auth/login")"
     [[ "${wrong_status}" == "401" ]] || fail "wrong-password login did not return 401"
@@ -204,6 +205,7 @@ else
         | curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
             --cookie-jar "${work_root}/cookies" \
             --header 'Content-Type: application/json' \
+            --header "Origin: http://127.0.0.1:${port}" \
             --data-binary @- \
             "http://127.0.0.1:${port}/api/auth/login"
 import json, sys
