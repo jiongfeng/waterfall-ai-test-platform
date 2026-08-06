@@ -36,12 +36,12 @@ const COVERAGE_POLICY_START = "<<<COVERAGE_POLICY_START>>>";
 const COVERAGE_POLICY_END = "<<<COVERAGE_POLICY_END>>>";
 const DEFAULT_COVERAGE_PROFILE = "core";
 
-const SCRIPT_PROMPT_FIXED_TEMPLATE = `@playwright-test-generator
+let SCRIPT_PROMPT_FIXED_TEMPLATE = `@playwright-test-generator
 请根据 specs/<模块名>/<测试计划文件名> 生成Playwright测试文件。
 每个测试文件里面只能有一个测试，测试文件名字必须为中文业务测试名.spec.ts，文件名主体不能包含英文字母。
 平台会在提交任务时提供候选脚本路径，请只把生成结果写入候选路径；不要直接修改正式 tests 文件。`;
 
-const SCRIPT_PROMPT_NOTE_DEFAULT = "注意：每个Step下面尽量生成实际代码，如果实在没有代码，需要说明为什么。";
+let SCRIPT_PROMPT_NOTE_DEFAULT = "注意：每个Step下面尽量生成实际代码，如果实在没有代码，需要说明为什么。";
 
 const SCRIPT_VIEW_TAB = {
   SCRIPT: "script",
@@ -70,10 +70,10 @@ const EXECUTION_MODE = {
   SERIAL_PER_FILE: "serial_per_file",
 };
 
-const SCRIPT_RUN_PROMPT_FIXED_TEMPLATE = `@playwright-test-healer
+let SCRIPT_RUN_PROMPT_FIXED_TEMPLATE = `@playwright-test-healer
 请根据测试计划 specs/<模块名>/<模块名>.md, 运行并修复 tests/<模块名>/<测试脚本名>.spec.ts`;
 
-const SCRIPT_RUN_PROMPT_NOTE_DEFAULT = `要求：
+let SCRIPT_RUN_PROMPT_NOTE_DEFAULT = `要求：
 1. 不允许删除或注释任何 STEP。
 2. 保留执行视频`;
 
@@ -706,6 +706,7 @@ const state = {
   },
   auth: {
     user: null,
+    isAdmin: false,
     permissions: new Set(),
     menus: [],
   },
@@ -852,6 +853,9 @@ const elements = {
   createProjectButton: document.getElementById("createProjectButton"),
   exportProjectButton: document.getElementById("exportProjectButton"),
   importProjectButton: document.getElementById("importProjectButton"),
+  languageMenuControl: document.getElementById("languageMenuControl"),
+  languageMenuButton: document.getElementById("languageMenuButton"),
+  languageMenu: document.getElementById("languageMenu"),
   currentUserName: document.getElementById("currentUserName"),
   logoutButton: document.getElementById("logoutButton"),
   planCreateWrap: document.getElementById("planCreateWrap"),
@@ -1143,6 +1147,74 @@ const elements = {
   suiteScriptPickerTitle: document.getElementById("suiteScriptPickerTitle"),
   suiteScriptSelectionCount: document.getElementById("suiteScriptSelectionCount"),
 };
+
+const UI_COPY = {
+  en: {
+    "#appTitle": "Test assets",
+    "#logoutButton": "Sign out",
+    "#createProjectButton": "New project",
+    "#createModuleButton": "New plan",
+    "#uploadRequirementButton": "Upload requirement",
+    "#refreshButton": "Refresh list",
+  },
+  "zh-CN": {},
+};
+
+function projectLanguage() {
+  return state.project.current?.language === "en" ? "en" : "zh-CN";
+}
+
+function applyProjectLanguage() {
+  const language = projectLanguage();
+  window.WaterfallI18n?.setLocale(language);
+  Object.entries(UI_COPY[language] || {}).forEach(([selector, text]) => {
+    const element = document.querySelector(selector);
+    if (element) element.textContent = text;
+  });
+  const isAdmin = Boolean(state.auth.isAdmin);
+  if (language === "en") {
+    SCRIPT_PROMPT_FIXED_TEMPLATE = `@playwright-test-generator
+Generate a Playwright test file from specs/<module>/<test-plan-file>.
+Each test file contains exactly one test and should use an English business name by default.
+Write output only to the candidate path supplied by the platform; do not directly modify production tests.`;
+    SCRIPT_PROMPT_NOTE_DEFAULT = "Implement real code under each STEP whenever possible; otherwise explain why.";
+    SCRIPT_RUN_PROMPT_FIXED_TEMPLATE = "@playwright-test-healer\nUse specs/<module>/<module>.md to run and repair tests/<module>/<test-script>.spec.ts";
+    SCRIPT_RUN_PROMPT_NOTE_DEFAULT = "Requirements:\n1. Do not delete or comment out any STEP.\n2. Preserve the execution video.";
+  }
+  const languageLabel = language === "en" ? "English" : "简体中文";
+  elements.languageMenuButton.textContent = isAdmin ? `${languageLabel} ▾` : languageLabel;
+  elements.languageMenuButton.disabled = !isAdmin;
+  elements.languageMenuButton.classList.toggle("readonly", !isAdmin);
+  elements.languageMenuButton.setAttribute("aria-expanded", "false");
+  elements.languageMenu.querySelectorAll("[data-language]").forEach((item) => {
+    item.setAttribute("aria-checked", String(item.dataset.language === language));
+    item.textContent = `${item.dataset.language === language ? "✓ " : ""}${item.dataset.language === "en" ? "English" : "简体中文"}`;
+  });
+  elements.appShell.classList.remove("i18n-pending");
+}
+
+function closeLanguageMenu() {
+  elements.languageMenu.classList.add("hidden");
+  elements.languageMenuButton.setAttribute("aria-expanded", "false");
+}
+
+async function setProjectLanguage(language) {
+  if (!state.auth.isAdmin || language === projectLanguage()) {
+    closeLanguageMenu();
+    return;
+  }
+  try {
+    await requestJson("/api/project-language", {
+      method: "PUT",
+      headers: getProjectRequestHeaders(),
+      body: JSON.stringify({ language }),
+    });
+    window.location.reload();
+  } catch (error) {
+    closeLanguageMenu();
+    setNotice(error.message || window.WaterfallI18n?.t("language.changeFailed") || "Could not change language.", "error");
+  }
+}
 
 const setupFeature = createSetupPreparation({
   setupState: state.projectSettings.setup,
@@ -3714,6 +3786,29 @@ elements.projectSelect.addEventListener("change", () => switchProject(elements.p
 elements.createProjectButton.addEventListener("click", openProjectCreateModal);
 elements.exportProjectButton.addEventListener("click", exportCurrentProject);
 elements.importProjectButton.addEventListener("click", openProjectImportModal);
+elements.languageMenuButton.addEventListener("click", () => {
+  if (!state.auth.isAdmin) return;
+  const opening = elements.languageMenu.classList.contains("hidden");
+  elements.languageMenu.classList.toggle("hidden", !opening);
+  elements.languageMenuButton.setAttribute("aria-expanded", String(opening));
+  if (opening) elements.languageMenu.querySelector('[aria-checked="true"]')?.focus();
+});
+elements.languageMenu.addEventListener("click", (event) => {
+  const item = event.target.closest("[data-language]");
+  if (item) setProjectLanguage(item.dataset.language);
+});
+elements.languageMenu.addEventListener("keydown", (event) => {
+  const choices = [...elements.languageMenu.querySelectorAll("[data-language]")];
+  const index = choices.indexOf(document.activeElement);
+  if (index < 0) return;
+  if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+    event.preventDefault();
+    choices[(index + (event.key === "ArrowDown" ? 1 : choices.length - 1)) % choices.length].focus();
+  }
+});
+document.addEventListener("click", (event) => {
+  if (!elements.languageMenuControl.contains(event.target)) closeLanguageMenu();
+});
 elements.logoutButton.addEventListener("click", async () => {
   try {
     await requestJson("/api/auth/logout", { method: "POST" });
@@ -3876,6 +3971,16 @@ elements.editSaveButton.addEventListener("click", toggleEditSave);
 elements.cancelButton.addEventListener("click", cancelEdit);
 
 window.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !elements.languageMenu.classList.contains("hidden")) {
+    closeLanguageMenu();
+    elements.languageMenuButton.focus();
+    return;
+  }
+  if ((event.key === "Enter" || event.key === " ") && document.activeElement?.matches("#languageMenu [data-language]")) {
+    event.preventDefault();
+    setProjectLanguage(document.activeElement.dataset.language);
+    return;
+  }
   if (event.key === "Escape" && !elements.requirementBatchPlanModal.classList.contains("hidden")) {
     closeRequirementBatchPlanModal();
     return;
@@ -3936,6 +4041,7 @@ window.addEventListener("keydown", (event) => {
 async function bootstrap() {
   await loadAuthContext();
   await loadProjects();
+  applyProjectLanguage();
   resetProjectScopedState();
   renderSideList();
   renderContent();

@@ -53,6 +53,7 @@ function ensureAllowedActiveSection() {
 async function loadAuthContext() {
   const data = await requestJson("/api/auth/me");
   state.auth.user = data.user || null;
+  state.auth.isAdmin = Boolean(data.is_admin);
   state.auth.permissions = new Set(Array.isArray(data.permissions) ? data.permissions : []);
   state.auth.menus = Array.isArray(data.menus) ? data.menus : [];
   ensureAllowedActiveSection();

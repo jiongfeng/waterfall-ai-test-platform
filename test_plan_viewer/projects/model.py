@@ -3,7 +3,9 @@
 import json
 
 from test_plan_viewer.configuration import (
+    DEFAULT_PROJECT_LANGUAGE,
     PROJECT_STATUS_ACTIVE,
+    normalize_project_language,
     parse_plan_generation_config,
     parse_target_system_config,
 )
@@ -44,6 +46,10 @@ def normalize_create_project_payload(
             "tests",
             "tests_dir",
         ),
+        "language": normalize_project_language(
+            payload.get("language")
+            or DEFAULT_PROJECT_LANGUAGE
+        ),
     }
 
 
@@ -77,6 +83,10 @@ def serialize_project(
         "plan_generation": parse_plan_generation(
             project.get("plan_generation")
         ),
+        "language": normalize_project_language(
+            project.get("language")
+            or project.get("language_code")
+        ),
         "status": project.get("status") or PROJECT_STATUS_ACTIVE,
         "is_default": bool(project.get("is_default")),
     }
@@ -102,6 +112,11 @@ def serialize_project_row(
         "tests_dir": row.get("tests_dir") or "tests",
         "status": row.get("status") or PROJECT_STATUS_ACTIVE,
         "is_default": bool(row.get("is_default")),
+        "language": normalize_project_language(
+            row.get("language_code")
+            or row.get("language")
+            or DEFAULT_PROJECT_LANGUAGE
+        ),
     }
     for source_key, target_key in (
         ("opencode_config_json", "opencode_config"),

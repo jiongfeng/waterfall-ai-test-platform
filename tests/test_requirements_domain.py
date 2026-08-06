@@ -197,7 +197,10 @@ class RequirementModelParityTests(unittest.TestCase):
         self.assertEqual(extracted, legacy)
 
     def test_planner_prompt_and_normalization_match_legacy_head(self):
-        dependencies = make_module_dependencies()
+        dependencies = make_module_dependencies(
+            get_seed_script_relative_path=lambda: "tests/seed/seed.spec.ts",
+            append_database_baseline_write_operation_notice=lambda prompt: prompt,
+        )
         samples = [
             (
                 {
@@ -224,28 +227,41 @@ class RequirementModelParityTests(unittest.TestCase):
 
         for raw, requirement in samples:
             with self.subTest(module=raw["module_name"]):
-                self.assertEqual(
-                    model.build_planner_prompt_from_requirement_module(
-                        raw,
-                        requirement,
-                        dependencies=dependencies,
-                    ),
-                    app.build_planner_prompt_from_requirement_module(
-                        raw,
-                        requirement,
-                    ),
-                )
-                self.assertEqual(
-                    model.normalize_requirement_module_candidate(
-                        raw,
-                        requirement,
-                        dependencies=dependencies,
-                    ),
-                    app.normalize_requirement_module_candidate(
-                        raw,
-                        requirement,
-                    ),
-                )
+                with patch.object(
+                    app,
+                    "get_seed_script_relative_path",
+                    return_value="tests/seed/seed.spec.ts",
+                ), patch.object(
+                    app,
+                    "get_current_project",
+                    return_value={"language": "zh-CN", "tests_dir": "tests"},
+                ), patch.object(
+                    app,
+                    "append_database_baseline_write_operation_notice",
+                    side_effect=lambda prompt: prompt,
+                ):
+                    self.assertEqual(
+                        model.build_planner_prompt_from_requirement_module(
+                            raw,
+                            requirement,
+                            dependencies=dependencies,
+                        ),
+                        app.build_planner_prompt_from_requirement_module(
+                            raw,
+                            requirement,
+                        ),
+                    )
+                    self.assertEqual(
+                        model.normalize_requirement_module_candidate(
+                            raw,
+                            requirement,
+                            dependencies=dependencies,
+                        ),
+                        app.normalize_requirement_module_candidate(
+                            raw,
+                            requirement,
+                        ),
+                    )
 
     def test_module_serialization_matches_legacy_plan_fallbacks(self):
         row = {

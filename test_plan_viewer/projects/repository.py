@@ -6,9 +6,11 @@ from typing import Callable
 
 from test_plan_viewer.configuration import (
     DEFAULT_COVERAGE_PROFILE,
+    DEFAULT_PROJECT_LANGUAGE,
     DEFAULT_TARGET_SYSTEM_CONFIG,
     DISABLED_DATABASE_BASELINE_CONFIG,
     PROJECT_STATUS_ACTIVE,
+    normalize_project_language,
 )
 
 
@@ -41,8 +43,8 @@ def seed_platform_projects(cursor, config, dependencies):
             INSERT INTO {projects_table}
               (project_key, name, description, playwright_project_root, specs_dir, tests_dir,
                opencode_config_json, target_system_json, database_baseline_json, plan_generation_json,
-               status, is_default, created_at, updated_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+               language_code, status, is_default, created_at, updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON DUPLICATE KEY UPDATE
               name = VALUES(name),
               description = VALUES(description),
@@ -83,6 +85,10 @@ def seed_platform_projects(cursor, config, dependencies):
                     dependencies.parse_plan_generation_config(
                         project.get("plan_generation")
                     )
+                ),
+                normalize_project_language(
+                    project.get("language")
+                    or project.get("language_code")
                 ),
                 project.get("status") or PROJECT_STATUS_ACTIVE,
                 int(
@@ -192,8 +198,8 @@ def create_project_record(
                 INSERT INTO {projects_table}
                   (project_key, name, description, playwright_project_root, specs_dir, tests_dir,
                    opencode_config_json, target_system_json, database_baseline_json, plan_generation_json,
-                   status, is_default, created_at, updated_at)
-                VALUES (%s, %s, %s, %s, %s, %s, NULL, %s, %s, %s, %s, 0, %s, %s)
+                   language_code, status, is_default, created_at, updated_at)
+                VALUES (%s, %s, %s, %s, %s, %s, NULL, %s, %s, %s, %s, %s, 0, %s, %s)
                 """,
                 (
                     project_key,
@@ -210,6 +216,10 @@ def create_project_record(
                                 DEFAULT_COVERAGE_PROFILE
                             )
                         }
+                    ),
+                    normalize_project_language(
+                        project.get("language"),
+                        default=DEFAULT_PROJECT_LANGUAGE,
                     ),
                     PROJECT_STATUS_ACTIVE,
                     now_ms,
@@ -306,6 +316,36 @@ def update_project_settings(
                 raise ValueError(
                     f"项目不存在或已禁用：{project_key}"
                 )
+            cursor.execute(
+                f"SELECT * FROM {projects_table} "
+                "WHERE project_key = %s LIMIT 1",
+                (project_key,),
+            )
+            updated_project = dependencies.serialize_project_row(
+                cursor.fetchone()
+            )
+        connection.commit()
+    return updated_project
+
+
+def update_project_language(config, project_key, language, dependencies):
+    """Persist the shared UI and prompt language for one active project."""
+
+    language = normalize_project_language(language)
+    projects_table = dependencies.get_platform_projects_table(config)
+    now_ms = dependencies.current_time_ms()
+    with dependencies.platform_mysql_connection(config) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                f"""
+                UPDATE {projects_table}
+                SET language_code = %s, updated_at = %s
+                WHERE project_key = %s AND status = %s
+                """,
+                (language, now_ms, project_key, PROJECT_STATUS_ACTIVE),
+            )
+            if cursor.rowcount == 0:
+                raise ValueError(f"项目不存在或已禁用：{project_key}")
             cursor.execute(
                 f"SELECT * FROM {projects_table} "
                 "WHERE project_key = %s LIMIT 1",

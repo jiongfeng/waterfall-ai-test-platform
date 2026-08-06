@@ -44,6 +44,7 @@ class RequirementModuleModelDependencies:
     get_test_asset_by_id: Callable[[int], dict]
     serialize_asset: Callable[[dict], dict]
     dedupe_chinese_artifact_naming_notice: Callable[[str], str]
+    get_project_language: Callable[[], str] = lambda: "zh-CN"
 
 
 def extract_requirement_title(markdown_text, filename):
@@ -116,6 +117,21 @@ def build_planner_prompt_from_requirement_module(
     """Build the editable planner prompt for one candidate module."""
 
     module_name = module_data.get("module_name") or "<模块名>"
+    if dependencies.get_project_language() == "en":
+        requirement_title = requirement.get("title") if requirement else "requirement document"
+        test_points = dependencies.normalize_string_list(module_data.get("test_points"))
+        points = "\n".join(f"- {item}" for item in test_points) or "- Identify explicitly described testable behavior."
+        return (
+            "@playwright-test-planner\n"
+            f"Create a test plan for module {module_name} using requirement document {requirement_title} and the page inventory.\n\n"
+            f"Requirement points:\n{points}\n\n"
+            "Requirements:\n"
+            f"1. Use {dependencies.get_seed_script_relative_path()} as the entry point.\n"
+            "2. Sign in to the real system and verify the target page.\n"
+            "3. Record navigation paths and prefer stable selectors.\n"
+            "4. Mark write operations that need a database baseline and describe test-data preparation.\n"
+            "5. Follow the coverage scope confirmed when the plan is generated."
+        )
     test_points = dependencies.normalize_string_list(
         module_data.get("test_points")
     )
@@ -210,13 +226,16 @@ def normalize_requirement_module_candidate(
         str(raw.get("plan_name") or module_name).strip()
         or module_name
     )
-    plan_name = Path(
-        dependencies.get_chinese_plan_filename_from_name(
-            plan_name,
-            module_name,
-            fallback_stem=module_name,
-        )
-    ).stem
+    if dependencies.get_project_language() == "en":
+        plan_name = Path(plan_name).stem or module_name
+    else:
+        plan_name = Path(
+            dependencies.get_chinese_plan_filename_from_name(
+                plan_name,
+                module_name,
+                fallback_stem=module_name,
+            )
+        ).stem
     confidence = dependencies.normalize_confidence(
         raw.get("confidence")
     )

@@ -11,7 +11,7 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='css/features/agent-script-preparation.css', v=5) }}" />
   </head>
   <body>
-    <div class="app-shell" id="appShell">
+    <div class="app-shell i18n-pending" id="appShell">
       <header class="global-topbar">
         <div class="topbar-brand">
           <span class="topbar-brand-mark" aria-hidden="true">W</span>
@@ -29,6 +29,13 @@
         </div>
 
         <div class="account-actions">
+          <div class="language-menu" id="languageMenuControl">
+            <button class="language-trigger" id="languageMenuButton" type="button" aria-haspopup="menu" aria-expanded="false">简体中文 <span aria-hidden="true">▾</span></button>
+            <div class="language-options hidden" id="languageMenu" role="menu" aria-label="Language">
+              <button type="button" role="menuitemradio" aria-checked="false" data-language="en">English</button>
+              <button type="button" role="menuitemradio" aria-checked="true" data-language="zh-CN">简体中文</button>
+            </div>
+          </div>
           <span class="account-avatar" aria-hidden="true">A</span>
           <span id="currentUserName">未登录</span>
           <button class="secondary-button account-logout" id="logoutButton" type="button">退出</button>
@@ -584,6 +591,9 @@
     <script src="{{ url_for('static', filename='js/features/setup-preparation.js') }}"></script>
     <script src="{{ url_for('static', filename='js/features/agent-script-preparation.js', v=4) }}"></script>
     <script src="{{ url_for('static', filename='js/features/agent.js', v=4) }}"></script>
+    <script src="{{ url_for('static', filename='js/i18n/zh-CN.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/i18n/en.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/i18n.js') }}"></script>
     <script src="{{ url_for('static', filename='app.js') }}"></script>
   </body>
 </html>

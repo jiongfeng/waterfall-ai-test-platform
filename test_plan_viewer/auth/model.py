@@ -98,6 +98,7 @@ AUTH_API_PERMISSION_POLICY = _build_api_permission_policy(
             ("auth.auth_logout", "POST"),
             ("auth.auth_me", "GET"),
             ("projects.list_projects", "GET"),
+            ("projects.update_project_language", "PUT"),
         ),
     ),
     (
@@ -418,7 +419,7 @@ def serialize_role(row, permission_codes=None):
     }
 
 
-def build_auth_payload(user, permission_codes):
+def build_auth_payload(user, permission_codes, role_codes=None):
     permission_set = set(permission_codes or [])
     return {
         "user": {
@@ -429,6 +430,7 @@ def build_auth_payload(user, permission_codes):
                 or user["username"]
             ),
         },
+        "is_admin": "admin" in set(role_codes or ()),
         "permissions": [
             permission["code"]
             for permission in AUTH_MENU_PERMISSIONS

@@ -29,6 +29,7 @@ class ProjectServiceDependencies:
     update_project_settings: Callable
     remove_tree: Callable
     uuid_hex: Callable
+    update_project_language: Callable = lambda *_args: None
 
 
 class ProjectService:
@@ -167,6 +168,23 @@ class ProjectService:
             target_system,
             database_baseline,
             plan_generation,
+        )
+
+    def update_current_project_language(self, language):
+        config = self.dependencies.get_platform_database_config()
+        if not config.get("enabled"):
+            raise RuntimeError(
+                "项目语言需要启用平台 MySQL 持久化。"
+            )
+        self.dependencies.ensure_platform_database_schema(config)
+        project = self.dependencies.get_current_project()
+        project_key = project.get("project_key")
+        if not project_key:
+            raise RuntimeError("当前项目不可用。")
+        return self.dependencies.update_project_language(
+            config,
+            project_key,
+            language,
         )
 
     def get_current_project_id(self):

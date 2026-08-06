@@ -10,6 +10,11 @@ import json
 import re
 from typing import Any, Callable, Mapping
 
+from test_plan_viewer.configuration import (
+    DEFAULT_PROJECT_LANGUAGE,
+    normalize_project_language,
+)
+
 
 ABSOLUTE_PLAN_MAX_CASES = 25
 MODULE_PLAN_MAX_CASES = ABSOLUTE_PLAN_MAX_CASES
@@ -19,11 +24,21 @@ CHINESE_ARTIFACT_NAMING_NOTICE = (
     "命名强约束：新生成的测试计划、单用例计划 cases[].filename、cases[].title 和测试脚本文件名必须使用中文业务名称；"
     "文件名主体必须包含中文且不能包含英文字母，不要使用英文、拼音、login、add、user、case 等技术命名。"
 )
+ENGLISH_ARTIFACT_NAMING_NOTICE_KEY = "Naming preference:"
+ENGLISH_ARTIFACT_NAMING_NOTICE = (
+    "Naming preference: generate new test-plan titles, case titles, and test-script file names "
+    "with clear English business names. Keep file extensions and paths valid for the workspace."
+)
 DATABASE_BASELINE_WRITE_OPERATION_NOTICE = (
     "当前项目保存了旧数据库恢复配置；测试执行只会运行已绑定的准备脚本。若用例包含新增、修改、删除、审批、"
     "状态流转等写操作，请确保准备脚本能够恢复数据库基线。"
 )
 DATABASE_BASELINE_WRITE_OPERATION_NOTICE_KEY = "当前项目保存了旧数据库恢复配置"
+ENGLISH_DATABASE_BASELINE_WRITE_OPERATION_NOTICE = (
+    "This project has a legacy database restore configuration. Test execution only runs bound setup scripts. "
+    "For write operations such as create, update, delete, approval, or state transitions, make sure the setup script can restore the database baseline."
+)
+ENGLISH_DATABASE_BASELINE_WRITE_OPERATION_NOTICE_KEY = "This project has a legacy database restore configuration"
 
 
 @dataclass(frozen=True)
@@ -40,6 +55,11 @@ class PromptDependencies:
     build_target_login_url: Callable[[Mapping[str, Any]], str]
     get_seed_script_relative_path: Callable[[], str]
     get_script_test_relative_path: Callable[[str, str], str]
+    get_project_language: Callable[[], str] = lambda: DEFAULT_PROJECT_LANGUAGE
+
+
+def get_prompt_language(dependencies):
+    return normalize_project_language(dependencies.get_project_language())
 
 
 def strip_legacy_coverage_notices(prompt):
@@ -80,15 +100,22 @@ def get_database_baseline_write_operation_notice(dependencies):
     baseline_config = dependencies.get_database_baseline_config()
     if not baseline_config.get("enabled"):
         return ""
+    if get_prompt_language(dependencies) == "en":
+        return ENGLISH_DATABASE_BASELINE_WRITE_OPERATION_NOTICE
     return DATABASE_BASELINE_WRITE_OPERATION_NOTICE
 
 
 def append_database_baseline_write_operation_notice(prompt, dependencies):
     notice = get_database_baseline_write_operation_notice(dependencies)
+    key = (
+        ENGLISH_DATABASE_BASELINE_WRITE_OPERATION_NOTICE_KEY
+        if get_prompt_language(dependencies) == "en"
+        else DATABASE_BASELINE_WRITE_OPERATION_NOTICE_KEY
+    )
     return append_prompt_notice_once(
         prompt,
         notice,
-        DATABASE_BASELINE_WRITE_OPERATION_NOTICE_KEY,
+        key,
     )
 
 
@@ -98,6 +125,16 @@ def append_chinese_artifact_naming_notice(prompt):
         CHINESE_ARTIFACT_NAMING_NOTICE,
         CHINESE_ARTIFACT_NAMING_NOTICE_KEY,
     )
+
+
+def append_artifact_naming_notice(prompt, dependencies):
+    if get_prompt_language(dependencies) == "en":
+        return append_prompt_notice_once(
+            prompt,
+            ENGLISH_ARTIFACT_NAMING_NOTICE,
+            ENGLISH_ARTIFACT_NAMING_NOTICE_KEY,
+        )
+    return append_chinese_artifact_naming_notice(prompt)
 
 
 def dedupe_chinese_artifact_naming_notice(prompt):
@@ -110,10 +147,17 @@ def build_generation_prompt(prompt, target_path, dependencies):
         prompt,
         dependencies,
     )
-    prompt = append_chinese_artifact_naming_notice(prompt)
+    prompt = append_artifact_naming_notice(prompt, dependencies)
     relative_target_path = dependencies.get_workspace_relative_path(
         target_path
     )
+    if get_prompt_language(dependencies) == "en":
+        return (
+            f"{prompt.rstrip()}\n"
+            f"Test plan save location (absolute path for verification): {target_path}\n"
+            f"When calling planner_save_plan, fileName must use this workspace-relative path: {relative_target_path}\n"
+            "planner_save_plan must receive a structured JSON object: suites, tests, steps, and expect must be arrays, not JSON-stringified values."
+        )
     return (
         f"{prompt.rstrip()}\n"
         f"生成测试计划保存位置（绝对路径，供核对）：{target_path}\n"
@@ -134,7 +178,20 @@ def build_multiple_plan_generation_prompt(
         prompt,
         dependencies,
     )
-    prompt = append_chinese_artifact_naming_notice(prompt)
+    prompt = append_artifact_naming_notice(prompt, dependencies)
+    if get_prompt_language(dependencies) == "en":
+        return (
+            f"{prompt.rstrip()}\n"
+            "This task generates a module case index; do not create multiple test-plan files directly.\n"
+            "If a page entry, menu, or API cannot be found, do not stop to ask the user. Save the index plan anyway and record gaps in evidence, open_issues, or preconditions.\n"
+            f"The cases array must contain no more than {MODULE_PLAN_MAX_CASES} test cases. Save them in the index plan below.\n"
+            "The index plan must contain a fenced JSON block whose top level is an object with a cases array.\n"
+            "Each cases item represents one test case and must include title, filename, and steps. Use English business names for title and filename; filename must end in .md and contain no path separators. steps must be an array.\n"
+            "A step can be a string or an object containing text and an expect array. suite, description, and preconditions are optional context fields.\n"
+            "Do not JSON.stringify cases, steps, or expect.\n"
+            f"Module name: {module_name}\n"
+            f"Index plan save location: {target_path}"
+        )
     return (
         f"{prompt.rstrip()}\n"
         "本次任务是模块用例索引生成，不要直接生成多个测试计划文件。\n"
@@ -161,6 +218,24 @@ def build_markdown_plan_split_prompt(
     source_relative = dependencies.get_workspace_relative_path(
         source_plan_file
     )
+    if get_prompt_language(dependencies) == "en":
+        return (
+            "@plan-markdown-splitter\n"
+            "You are a test-plan splitting assistant. Convert the generated Markdown plan below into cases JSON that this platform can process.\n"
+            "Output JSON only. Do not use Markdown fences or explanations.\n\n"
+            "The output must be an object with a cases array. Every item must contain title, filename, suite, optional description and preconditions, and steps. "
+            "Each step may be a string or an object with text and expect.\n\n"
+            "Rules:\n"
+            f"1. The module name is: {module_name}.\n"
+            f"2. The source Markdown file is: {source_relative}.\n"
+            f"3. Return at most {MODULE_PLAN_MAX_CASES} cases; each case represents exactly one test case.\n"
+            "4. Prefer an existing file name or title when present. Generate English business names by default; filename must end in .md and contain no path separators.\n"
+            "5. Preserve every scenario type already present; do not filter by positive, negative, boundary, or permission category.\n"
+            "6. Do not merge cases or invent repeated or vague cases.\n\n"
+            "Source Markdown:\n```markdown\n"
+            f"{markdown_text}\n"
+            "```"
+        )
     return (
         "@plan-markdown-splitter\n"
         "你是测试计划拆分助手。请把下面这个已经生成的普通 Markdown 测试计划拆成平台可处理的 cases JSON。\n"
@@ -228,7 +303,36 @@ def build_script_generation_prompt(
         prompt,
         dependencies,
     )
-    prompt = append_chinese_artifact_naming_notice(prompt)
+    prompt = append_artifact_naming_notice(prompt, dependencies)
+    if get_prompt_language(dependencies) == "en":
+        english_extra_lines = []
+        if target_file:
+            english_extra_lines.append(
+                f"Final test-script target path (do not write here directly; the platform validates and commits it): {target_file}"
+            )
+            try:
+                english_extra_lines.append(
+                    "Final test-script workspace-relative path:"
+                    f"{dependencies.get_workspace_relative_path(target_file)}"
+                )
+            except ValueError:
+                pass
+        if candidate_file:
+            english_extra_lines.extend(
+                [
+                    f"Candidate test-script save path (the only path you may write in this task): {candidate_file}",
+                    "Write the complete Playwright test to the candidate path. Do not modify specs, test plans, or existing tests files.",
+                    "The candidate is outside tests; use an ordinary file edit or patch tool, not a write_test tool limited to tests.",
+                    "The platform validates the candidate before backing up and replacing the final target.",
+                ]
+            )
+        return (
+            f"{prompt.rstrip()}\n"
+            f"Test-plan absolute path: {plan_file}\n"
+            f"Test-script directory absolute path: {script_dir}\n"
+            + ("\n".join(english_extra_lines) + "\n" if english_extra_lines else "")
+            + "Each test script must contain exactly one test(...). Do not use page.waitForTimeout, page.waitForNavigation, page.waitForLoadState, or page.evaluate."
+        )
     return (
         f"{prompt.rstrip()}\n"
         f"测试计划文件绝对路径：{plan_file}\n"
@@ -254,6 +358,19 @@ def build_seed_generation_prompt(target_system, target_file, dependencies):
         raise ValueError("请先配置登录密码。")
 
     relative_path = dependencies.get_seed_script_relative_path()
+    if get_prompt_language(dependencies) == "en":
+        return (
+            "@playwright-test-generator\n"
+            f"Use Playwright MCP to open the login page: {login_url}\n"
+            f"Target system baseURL: {base_url}\n"
+            f"Username: {username}\n"
+            f"Password: {password}\n"
+            "Identify the username field, password field, and login button, then complete login.\n"
+            "After login, choose a stable assertion such as a URL, navigation item, title, menu, or visible main content.\n"
+            f"Write the complete Playwright test to: {target_file}\n"
+            f"Workspace-relative script path: {relative_path}\n"
+            "The script must contain one test(...), import test and expect from @playwright/test, and avoid page.waitForTimeout, page.waitForNavigation, page.waitForLoadState, and page.evaluate."
+        )
     return (
         "@playwright-test-generator\n"
         f"请使用 Playwright MCP 打开登录页：{login_url}\n"
@@ -285,6 +402,16 @@ def build_script_run_prompt(
         {"locations": [relative_script_path]},
         ensure_ascii=False,
     )
+    if get_prompt_language(dependencies) == "en":
+        return (
+            f"{prompt.rstrip()}\n"
+            f"Current test-script filename: {filename}\n"
+            f"Current test-script absolute path: {script_file}\n"
+            f"Current Playwright-relative path: {relative_script_path}\n"
+            f"Run and verify with Playwright MCP test_run using exactly: {test_run_args}\n"
+            "Do not use backslash paths, test titles, directory paths, or line numbers for test_run locations.\n"
+            "Only run and repair the current test script. Do not run the full suite, and keep Playwright execution video."
+        )
     return (
         f"{prompt.rstrip()}\n"
         f"当前测试脚本文件名：{filename}\n"

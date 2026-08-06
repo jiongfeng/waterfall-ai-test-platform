@@ -1,11 +1,11 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="csrf-token" content="{{ csrf_token }}" />
     <meta name="description" content="Waterfall AI — Agent-driven test automation platform" />
-    <title>登录 - Waterfall AI</title>
+    <title>Sign in - Waterfall AI</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}" />
   </head>
   <body class="login-body">
@@ -13,20 +13,20 @@
       <section class="login-panel" aria-labelledby="loginTitle">
         <div class="login-brand">W</div>
         <p class="login-label">Waterfall AI</p>
-        <h1 id="loginTitle">账号登录</h1>
+        <h1 id="loginTitle">Sign in</h1>
         <form id="loginForm" class="login-form">
           <label class="form-field">
-            <span>用户名</span>
+            <span>Username</span>
             <input id="loginUsername" name="username" type="text" autocomplete="username" required autofocus />
           </label>
           <label class="form-field">
-            <span>密码</span>
+            <span>Password</span>
             <input id="loginPassword" name="password" type="password" autocomplete="current-password" required />
           </label>
           <div class="notice error {% if not config_error %}hidden{% endif %}" id="loginError">
             {{ config_error or "" }}
           </div>
-          <button class="primary-button login-submit" id="loginSubmit" type="submit">登录</button>
+          <button class="primary-button login-submit" id="loginSubmit" type="submit">Sign in</button>
         </form>
       </section>
     </main>

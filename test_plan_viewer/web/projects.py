@@ -21,6 +21,8 @@ class ProjectWebServices:
     parse_database_baseline_config: Callable
     parse_plan_generation_config: Callable
     update_project_settings: Callable
+    update_project_language: Callable
+    can_manage_project_language: Callable
     serialize_coverage_profiles: Callable
     get_seed_script_relative_path: Callable
 
@@ -169,6 +171,27 @@ def save_project_settings_response(services):
         ), 500
 
 
+def update_project_language_response(services):
+    if not services.can_manage_project_language():
+        return jsonify({"error": "Only the built-in admin role can change the project language."}), 403
+
+    payload = request.get_json(silent=True) or {}
+    try:
+        project = services.update_project_language(payload.get("language"))
+        serialized_project = services.serialize_project(project)
+        return jsonify(
+            {
+                "project": serialized_project,
+                "language": serialized_project.get("language"),
+                "error": None,
+            }
+        )
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except Exception as exc:
+        return jsonify({"error": f"Failed to update project language: {exc}"}), 500
+
+
 def create_projects_blueprint(services):
     """Create project routes using application-provided collaborators."""
 
@@ -199,5 +222,11 @@ def create_projects_blueprint(services):
         view_func=lambda: save_project_settings_response(services),
         methods=["PUT"],
         endpoint="save_project_settings",
+    )
+    blueprint.add_url_rule(
+        "/api/project-language",
+        view_func=lambda: update_project_language_response(services),
+        methods=["PUT"],
+        endpoint="update_project_language",
     )
     return blueprint

@@ -30,6 +30,7 @@ REQUIRED_ROUTE_CONTRACTS = {
     ("POST", "/api/projects/import"),
     ("GET", "/api/project-settings"),
     ("PUT", "/api/project-settings"),
+    ("PUT", "/api/project-language"),
     ("POST", "/api/project-settings/seed/generate"),
     ("POST", "/api/project-settings/seed/test"),
     ("POST", "/api/project-settings/database/test-connection"),

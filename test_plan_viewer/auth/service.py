@@ -61,6 +61,12 @@ class AuthService:
     def load_user_permission_codes(self, user_id):
         return self.repository.load_user_permission_codes(user_id)
 
+    def load_user_role_codes(self, user_id):
+        return self.repository.load_user_role_codes(user_id)
+
+    def is_admin(self, user_id):
+        return "admin" in self.load_user_role_codes(user_id)
+
     def build_auth_payload(self, user, permission_codes=None):
         if permission_codes is None:
             permission_codes = self.load_user_permission_codes(
@@ -69,6 +75,7 @@ class AuthService:
         return model.build_auth_payload(
             user,
             permission_codes,
+            self.load_user_role_codes(user["id"]),
         )
 
     def authenticate(self, username, password):
