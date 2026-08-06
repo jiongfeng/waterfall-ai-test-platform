@@ -472,6 +472,7 @@ class ProjectArchiveImportServiceTests(unittest.TestCase):
                     "description": "来源描述",
                     "specs_dir": "specs",
                     "tests_dir": "tests",
+                    "language": "zh-CN",
                 }
             )
             self.assertEqual(

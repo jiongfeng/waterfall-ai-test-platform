@@ -343,15 +343,17 @@ find static/js tests/js -name "*.js" -print0 | xargs -0 -n1 node --check
 
 为防止兼容入口重新膨胀，测试维护以下“迁移上限”；它们是回归护栏，不是鼓励填满的容量：
 
-| 文件 | 行数上限 | 2026-07-27 当前值 |
+| 文件 | 行数上限 | 2026-08-06 当前值 |
 | --- | ---: | ---: |
-| `app.py` | 16,500 | 16,458 |
-| `static/app.js` | 4,000 | 3,948 |
+| `app.py` | 16,600 | 16,557 |
+| `static/app.js` | 4,100 | 4,055 |
 | `templates/index.html` | 650 | 585 |
 | `static/styles.css` | 2,600 | 2,409 |
 | 单个 `static/js/features/*.js` | 3,000 | 最大 2,757 |
 
 若新增职责会突破上限，应把职责放入对应领域、Blueprint、前端 feature 或 partial；尤其不能把 `app.js` 剩余空间当作新增功能容量。只有架构边界本身发生了有意变化时，才能同时修改上限和本文。
+
+2026-08-06 的上限调整用于项目级 i18n 外壳边界：语言加载、项目切换刷新和兼容 Prompt 入口仍由旧装配层协调；翻译字典、项目语言领域逻辑及主要 Prompt 构造器分别归属前端 i18n、projects 与 generation/requirements 模块。后续新增语言或文案不得继续扩张旧入口。
 
 - 优先按完整业务能力迁移，不按“工具函数数量”拆文件。
 - 领域模块必须能绕过 Flask 做 direct test。

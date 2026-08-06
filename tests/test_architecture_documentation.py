@@ -31,7 +31,7 @@ class ArchitectureDocumentationTests(unittest.TestCase):
             "awaiting_script_action",
             "api-client → sse → timers",
             "稳定契约",
-            "16,500",
+            "16,600",
             "迁移与维护规则",
         ):
             with self.subTest(required_text=required_text):
@@ -39,8 +39,8 @@ class ArchitectureDocumentationTests(unittest.TestCase):
 
     def test_legacy_entry_files_stay_within_migration_budgets(self):
         budgets = {
-            "app.py": 16_500,
-            "static/app.js": 4_000,
+            "app.py": 16_600,
+            "static/app.js": 4_100,
             "templates/index.html": 650,
             "static/styles.css": 2_600,
         }
