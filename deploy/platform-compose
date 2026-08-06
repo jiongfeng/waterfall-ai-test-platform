@@ -1,0 +1,701 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+umask 077
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+readonly SCRIPT_DIR
+REPOSITORY_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd -P)"
+readonly REPOSITORY_ROOT
+readonly COMPOSE_FILE="${SCRIPT_DIR}/compose.yaml"
+readonly BUILD_COMPOSE_FILE="${SCRIPT_DIR}/compose.build.yaml"
+readonly CONFIG_CONTROL="${SCRIPT_DIR}/configctl.py"
+readonly INSTALL_PREFLIGHT="${SCRIPT_DIR}/preflight-install.py"
+readonly DEFAULT_COMPOSE_PROJECT="playwright-test-platform"
+readonly SOURCE_CONFIG="${PLATFORM_CONFIG_FILE:-${REPOSITORY_ROOT}/config.json}"
+readonly ENV_FILE="${PLATFORM_ENV_FILE:-${REPOSITORY_ROOT}/.env}"
+readonly RUNTIME_ROOT="${PLATFORM_RUNTIME_DIR:-${SCRIPT_DIR}/.runtime}"
+readonly RUNTIME_CONFIG="${RUNTIME_ROOT}/secrets/platform-config.json"
+COMPOSE_PROJECT=""
+
+fail() {
+    printf 'platform-compose: %s\n' "$*" >&2
+    exit 1
+}
+
+usage() {
+    cat <<'EOF'
+Usage: deploy/platform-compose COMMAND [OPTIONS]
+
+Supported commands:
+  up [OPTIONS]       Stage config and start or update the stack.
+  ps [OPTIONS]       Show stack service status.
+  logs [OPTIONS]     Show stack logs.
+  stop [OPTIONS]     Stop services without removing containers or volumes.
+  down [OPTIONS]     Remove containers and networks; -v/--volumes is forbidden.
+  verify             Verify health and container hardening contracts.
+  preflight-install  Verify a fresh source install using the secured project identity.
+  validate-config    Validate the source config without staging it.
+  apply-config       Stage config and force-recreate only the platform service.
+  runtime-id         Print the final platform image's pwuser UID and GID.
+  repair-opencode-volumes
+                     Repair all four existing OpenCode volumes, then recreate OpenCode.
+  repair-state       Repair only the existing OpenCode state volume (legacy behavior).
+
+Environment:
+  PLATFORM_CONFIG_FILE  Source config.json (default: repository config.json).
+  PLATFORM_ENV_FILE     Compose environment file (default: repository .env).
+  PLATFORM_RUNTIME_DIR  Persistent private runtime directory (default: deploy/.runtime).
+
+Run this wrapper from any directory. Direct `docker compose` usage is unsupported.
+EOF
+}
+
+require_command() {
+    command -v "$1" >/dev/null 2>&1 \
+        || fail "Required command is not installed: $1"
+}
+
+require_no_arguments() {
+    local command_name="$1"
+    shift
+    (( $# == 0 )) || fail "${command_name} does not accept arguments."
+}
+
+stage_runtime_config() {
+    python3 "${CONFIG_CONTROL}" stage \
+        --source "${SOURCE_CONFIG}" \
+        --destination "${RUNTIME_CONFIG}" >/dev/null \
+        || fail "Configuration staging failed."
+    export PLATFORM_RUNTIME_CONFIG_FILE="${RUNTIME_CONFIG}"
+}
+
+reuse_or_stage_runtime_config() {
+    if python3 "${CONFIG_CONTROL}" validate-runtime \
+        --source "${RUNTIME_CONFIG}" >/dev/null 2>&1; then
+        export PLATFORM_RUNTIME_CONFIG_FILE="${RUNTIME_CONFIG}"
+        return
+    fi
+    stage_runtime_config
+}
+
+validate_environment_file() {
+    python3 "${CONFIG_CONTROL}" validate-env --source "${ENV_FILE}" >/dev/null \
+        || fail "Environment file validation failed."
+}
+
+resolve_compose_project_identity() {
+    COMPOSE_PROJECT="$(
+        python3 "${CONFIG_CONTROL}" compose-project \
+            --source "${ENV_FILE}" \
+            --default "${DEFAULT_COMPOSE_PROJECT}"
+    )" || fail "Compose project identity validation failed."
+    if [[ "${COMPOSE_PROJECT_NAME+x}" == "x" \
+        && "${COMPOSE_PROJECT_NAME-}" != "${COMPOSE_PROJECT}" ]]; then
+        fail "Ambient COMPOSE_PROJECT_NAME does not match the secured .env identity (${COMPOSE_PROJECT})."
+    fi
+}
+
+run_compose() {
+    docker compose \
+        --env-file "${ENV_FILE}" \
+        --project-directory "${REPOSITORY_ROOT}" \
+        --project-name "${COMPOSE_PROJECT}" \
+        --file "${COMPOSE_FILE}" \
+        "$@"
+}
+
+run_source_build() {
+    docker compose \
+        --env-file "${ENV_FILE}" \
+        --project-directory "${REPOSITORY_ROOT}" \
+        --project-name "${COMPOSE_PROJECT}" \
+        --file "${COMPOSE_FILE}" \
+        --file "${BUILD_COMPOSE_FILE}" \
+        build platform
+}
+
+pull_missing_source_runtime_images() {
+    run_compose pull --policy missing mysql
+}
+
+run_release_up() {
+    local -a runtime_options=()
+    local option
+
+    while (($#)); do
+        option="$1"
+        shift
+        case "${option}" in
+            --build | --build=*)
+                fail "Release runtime does not permit source builds."
+                ;;
+            --no-build)
+                ;;
+            --pull)
+                (($#)) || fail "--pull requires a policy."
+                [[ "$1" == "never" ]] \
+                    || fail "Release runtime requires --pull never."
+                shift
+                ;;
+            --pull=never)
+                ;;
+            --pull=*)
+                fail "Release runtime requires --pull never."
+                ;;
+            *)
+                runtime_options+=("${option}")
+                ;;
+        esac
+    done
+
+    run_compose up --no-build --pull never "${runtime_options[@]}"
+}
+
+run_compose_up() {
+    local -a runtime_options=()
+    local option
+    local build_requested="false"
+
+    for option in "$@"; do
+        case "${option}" in
+            --build | --build=*)
+                build_requested="true"
+                break
+                ;;
+        esac
+    done
+    if [[ "${build_requested}" == "true" ]]; then
+        [[ -f "${BUILD_COMPOSE_FILE}" ]] \
+            || fail "Source build override is unavailable: ${BUILD_COMPOSE_FILE}"
+
+        while (($#)); do
+            option="$1"
+            shift
+            case "${option}" in
+                --build)
+                    ;;
+                --build=*)
+                    fail "Use --build without a value."
+                    ;;
+                --no-build)
+                    fail "--build and --no-build cannot be used together."
+                    ;;
+                --pull)
+                    (($#)) || fail "--pull requires a policy."
+                    [[ "$1" == "never" ]] \
+                        || fail "Source build startup requires --pull never after the build."
+                    shift
+                    ;;
+                --pull=never)
+                    ;;
+                --pull=*)
+                    fail "Source build startup requires --pull never after the build."
+                    ;;
+                *)
+                    runtime_options+=("${option}")
+                    ;;
+            esac
+        done
+
+        pull_missing_source_runtime_images
+        run_source_build
+        run_compose up --no-build --pull never "${runtime_options[@]}"
+        return
+    fi
+    if [[ ! -f "${BUILD_COMPOSE_FILE}" ]]; then
+        run_release_up "$@"
+        return
+    fi
+    run_compose up "$@"
+}
+
+resolve_platform_image() {
+    run_compose config --format json \
+        | python3 -c '
+import json
+import sys
+
+config = json.load(sys.stdin)
+image = config.get("services", {}).get("opencode", {}).get("image", "")
+if not image:
+    raise SystemExit("platform-compose: resolved Compose config has no OpenCode image")
+print(image)
+'
+}
+
+ensure_local_image() {
+    local image_ref="$1"
+
+    docker image inspect "${image_ref}" >/dev/null 2>&1 \
+        || fail "Platform image is not available locally; build, pull, or load the verified image before continuing: ${image_ref}"
+}
+
+resolve_runtime_identity() {
+    local image_ref="$1"
+    local identity
+
+    ensure_local_image "${image_ref}"
+    identity="$(
+        docker run --rm \
+            --network none \
+            --read-only \
+            --cap-drop ALL \
+            --security-opt no-new-privileges:true \
+            --entrypoint /bin/sh \
+            "${image_ref}" \
+            -ceu 'printf "%s:%s\n" "$(id -u pwuser)" "$(id -g pwuser)"'
+    )" || fail "Could not resolve pwuser UID/GID from image: ${image_ref}"
+    [[ "${identity}" =~ ^[0-9]+:[0-9]+$ ]] \
+        || fail "Image returned an invalid pwuser UID/GID: ${image_ref}"
+    printf '%s\n' "${identity}"
+}
+
+verify_container_contract() {
+    local service="$1"
+    local container_id
+    local health
+    local runtime_user
+
+    container_id="$(run_compose ps --quiet "${service}")"
+    [[ -n "${container_id}" ]] || fail "Service has no container: ${service}"
+    [[ "$(docker inspect --format '{{.State.Running}}' "${container_id}")" == "true" ]] \
+        || fail "Service is not running: ${service}"
+    health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}missing{{end}}' "${container_id}")"
+    [[ "${health}" == "healthy" ]] \
+        || fail "Service is not healthy (${health}): ${service}"
+
+    if [[ "${service}" != "mysql" ]]; then
+        [[ "$(docker inspect --format '{{.HostConfig.ReadonlyRootfs}}' "${container_id}")" == "true" ]] \
+            || fail "Read-only root filesystem is disabled: ${service}"
+        runtime_user="$(docker inspect --format '{{.Config.User}}' "${container_id}")"
+        [[ -n "${runtime_user}" && "${runtime_user}" != "0" && "${runtime_user}" != "root" ]] \
+            || fail "Service is running as root: ${service}"
+        docker inspect --format '{{json .HostConfig.CapDrop}}' "${container_id}" \
+            | grep -q '"ALL"' \
+            || fail "Service does not drop all capabilities: ${service}"
+        docker inspect --format '{{json .HostConfig.SecurityOpt}}' "${container_id}" \
+            | grep -q 'no-new-privileges' \
+            || fail "Service does not enable no-new-privileges: ${service}"
+    fi
+}
+
+verify_stack() {
+    local service
+
+    for service in mysql opencode platform; do
+        verify_container_contract "${service}"
+    done
+    # Variables are intentionally expanded in the container.
+    # shellcheck disable=SC2016
+    run_compose exec --no-TTY --interactive=false platform /bin/sh -ceu '
+        test -f "$PLATFORM_CONFIG_PATH"
+        test -r "$PLATFORM_CONFIG_PATH"
+        test ! -w "$PLATFORM_CONFIG_PATH"
+    '
+    # Variables are intentionally expanded in the container.
+    # shellcheck disable=SC2016
+    run_compose exec --no-TTY --interactive=false opencode /bin/sh -ceu '
+        runtime_home="${HOME:-/home/pwuser}"
+        config_root="${XDG_CONFIG_HOME:-${runtime_home}/.config}/opencode"
+        data_root="${XDG_DATA_HOME:-${runtime_home}/.local/share}/opencode"
+        cache_root="${XDG_CACHE_HOME:-${runtime_home}/.cache}/opencode"
+        state_root="${XDG_STATE_HOME:-${runtime_home}/.local/state}"
+        runtime_identity="$(id -u):$(id -g)"
+        for directory in \
+            "${config_root}" \
+            "${data_root}" \
+            "${data_root}/log" \
+            "${data_root}/repos" \
+            "${cache_root}" \
+            "${state_root}" \
+            "${state_root}/opencode"; do
+            test -d "${directory}"
+            test ! -L "${directory}"
+            test "$(stat --format="%u:%g" "${directory}")" = "${runtime_identity}"
+            test "$(stat --format="%a" "${directory}")" = "700"
+            test -r "${directory}"
+            test -w "${directory}"
+            test -x "${directory}"
+            probe="$(umask 077; mktemp "${directory}/.verify.XXXXXX")"
+            test "$(stat --format="%u:%g" "${probe}")" = "$(id -u):$(id -g)"
+            test "$(stat --format="%a" "${probe}")" = "600"
+            rm -f -- "${probe}"
+        done
+    '
+    printf 'playwright-test-platform: verified\n'
+}
+
+resolve_compose_volume() {
+    local volume_key="$1"
+    local destination="$2"
+    local container_id
+    local candidate
+    local volume_name
+    local volume_names
+    local volume_labels
+
+    container_id="$(run_compose ps --all --quiet opencode)"
+    volume_name=""
+    if [[ -n "${container_id}" ]]; then
+        volume_name="$(
+            docker inspect "${container_id}" \
+                | python3 -c '
+import json
+import sys
+
+destination = sys.argv[1]
+containers = json.load(sys.stdin)
+if len(containers) != 1:
+    raise SystemExit("expected exactly one OpenCode container")
+for mount in containers[0].get("Mounts", []):
+    if mount.get("Type") == "volume" and mount.get("Destination") == destination:
+        print(mount.get("Name", ""))
+' "${destination}"
+        )" || fail "Could not inspect the OpenCode ${volume_key} mount."
+    else
+        volume_names="$(
+            docker volume ls --quiet \
+                --filter "label=com.docker.compose.project=${COMPOSE_PROJECT}" \
+                --filter "label=com.docker.compose.volume=${volume_key}"
+        )" || fail "Could not inspect the OpenCode ${volume_key} volume."
+        while IFS= read -r candidate; do
+            [[ -n "${candidate}" ]] || continue
+            [[ -z "${volume_name}" ]] \
+                || fail "Multiple ${volume_key} volumes matched project ${COMPOSE_PROJECT}."
+            volume_name="${candidate}"
+        done <<< "${volume_names}"
+    fi
+    [[ -n "${volume_name}" ]] \
+        || fail "No ${volume_key} volume was found for project ${COMPOSE_PROJECT}; start the stack before repairing it."
+    [[ "${volume_name}" != *$'\n'* ]] \
+        || fail "Multiple OpenCode mounts matched ${destination}."
+
+    volume_labels="$(
+        docker volume inspect \
+            --format '{{index .Labels "com.docker.compose.project"}}:{{index .Labels "com.docker.compose.volume"}}' \
+            "${volume_name}"
+    )" || fail "Could not inspect labels for volume ${volume_name}."
+    [[ "${volume_labels}" == "${COMPOSE_PROJECT}:${volume_key}" ]] \
+        || fail "Volume ${volume_name} does not have the expected Compose project and volume labels."
+    printf '%s\n' "${volume_name}"
+}
+
+require_compose_wait_support() {
+    local up_help
+
+    up_help="$(docker compose up --help 2>&1)" \
+        || fail "Could not inspect Docker Compose up capabilities."
+    if [[ ! "${up_help}" =~ (^|[[:space:]])--wait([[:space:]]|$) \
+        || ! "${up_help}" =~ (^|[[:space:]])--wait-timeout([[:space:]]|$) ]]; then
+        fail "Docker Compose up must support both --wait and --wait-timeout before OpenCode volumes can be repaired."
+    fi
+}
+
+repair_opencode_volumes() {
+    local image_ref
+    local identity
+    local runtime_uid
+    local runtime_gid
+    local config_volume
+    local data_volume
+    local cache_volume
+    local state_volume
+
+    require_compose_wait_support
+    image_ref="$(resolve_platform_image)"
+    identity="$(resolve_runtime_identity "${image_ref}")"
+    runtime_uid="${identity%%:*}"
+    runtime_gid="${identity##*:}"
+    config_volume="$(resolve_compose_volume \
+        opencode_config /home/pwuser/.config/opencode)"
+    data_volume="$(resolve_compose_volume \
+        opencode_data /home/pwuser/.local/share/opencode)"
+    cache_volume="$(resolve_compose_volume \
+        opencode_cache /home/pwuser/.cache/opencode)"
+    state_volume="$(resolve_compose_volume \
+        opencode_state /home/pwuser/.local/state)"
+
+    [[ "${config_volume}" != "${data_volume}" \
+        && "${config_volume}" != "${cache_volume}" \
+        && "${config_volume}" != "${state_volume}" \
+        && "${data_volume}" != "${cache_volume}" \
+        && "${data_volume}" != "${state_volume}" \
+        && "${cache_volume}" != "${state_volume}" ]] \
+        || fail "OpenCode volume resolution returned a duplicate volume."
+
+    run_compose stop opencode
+
+    docker run --rm \
+        --network none \
+        --read-only \
+        --user 0:0 \
+        --cap-drop ALL \
+        --cap-add CHOWN \
+        --cap-add DAC_OVERRIDE \
+        --cap-add FOWNER \
+        --security-opt no-new-privileges:true \
+        --volume "${config_volume}:/volumes/config" \
+        --volume "${data_volume}:/volumes/data" \
+        --volume "${cache_volume}:/volumes/cache" \
+        --volume "${state_volume}:/volumes/state" \
+        --entrypoint /bin/sh \
+        "${image_ref}" \
+        -ceu '
+            target_uid="$1"
+            target_gid="$2"
+            for directory in \
+                /volumes/config \
+                /volumes/data \
+                /volumes/data/log \
+                /volumes/data/repos \
+                /volumes/cache \
+                /volumes/state \
+                /volumes/state/opencode; do
+                test ! -L "${directory}"
+            done
+            mkdir -p \
+                /volumes/config \
+                /volumes/data/log \
+                /volumes/data/repos \
+                /volumes/cache \
+                /volumes/state/opencode
+            for directory in \
+                /volumes/config \
+                /volumes/data \
+                /volumes/data/log \
+                /volumes/data/repos \
+                /volumes/cache \
+                /volumes/state \
+                /volumes/state/opencode; do
+                test -d "${directory}"
+                test ! -L "${directory}"
+            done
+            chown -R "${target_uid}:${target_gid}" \
+                /volumes/config \
+                /volumes/data \
+                /volumes/cache \
+                /volumes/state
+            chmod 0700 \
+                /volumes/config \
+                /volumes/data \
+                /volumes/data/log \
+                /volumes/data/repos \
+                /volumes/cache \
+                /volumes/state \
+                /volumes/state/opencode
+        ' helper "${runtime_uid}" "${runtime_gid}"
+
+    docker run --rm \
+        --network none \
+        --read-only \
+        --user "${runtime_uid}:${runtime_gid}" \
+        --cap-drop ALL \
+        --security-opt no-new-privileges:true \
+        --volume "${config_volume}:/volumes/config" \
+        --volume "${data_volume}:/volumes/data" \
+        --volume "${cache_volume}:/volumes/cache" \
+        --volume "${state_volume}:/volumes/state" \
+        --entrypoint /bin/sh \
+        "${image_ref}" \
+        -ceu '
+            for directory in \
+                /volumes/config \
+                /volumes/data \
+                /volumes/data/log \
+                /volumes/data/repos \
+                /volumes/cache \
+                /volumes/state \
+                /volumes/state/opencode; do
+                test -d "${directory}"
+                test ! -L "${directory}"
+                test -r "${directory}"
+                test -w "${directory}"
+                test -x "${directory}"
+                probe="$(mktemp "${directory}/.repair-test.XXXXXX")"
+                rm -f -- "${probe}"
+            done
+        '
+
+    recreate_opencode_and_wait
+    printf 'platform-compose: repaired four OpenCode volumes for project %s and UID/GID %s:%s\n' \
+        "${COMPOSE_PROJECT}" "${runtime_uid}" "${runtime_gid}"
+}
+
+recreate_opencode_and_wait() {
+    if ! run_compose up --detach --no-deps --force-recreate \
+        --no-build --pull never --wait --wait-timeout 180 opencode; then
+        run_compose stop opencode >/dev/null 2>&1 || true
+        fail "OpenCode did not become healthy after recreation and has been stopped."
+    fi
+}
+
+repair_state_volume() {
+    local image_ref
+    local identity
+    local runtime_uid
+    local runtime_gid
+    local state_volume
+
+    require_compose_wait_support
+    image_ref="$(resolve_platform_image)"
+    identity="$(resolve_runtime_identity "${image_ref}")"
+    runtime_uid="${identity%%:*}"
+    runtime_gid="${identity##*:}"
+    state_volume="$(resolve_compose_volume \
+        opencode_state /home/pwuser/.local/state)"
+
+    run_compose stop opencode
+
+    docker run --rm \
+        --network none \
+        --read-only \
+        --user 0:0 \
+        --cap-drop ALL \
+        --cap-add CHOWN \
+        --cap-add DAC_OVERRIDE \
+        --cap-add FOWNER \
+        --security-opt no-new-privileges:true \
+        --volume "${state_volume}:/state" \
+        --entrypoint /bin/sh \
+        "${image_ref}" \
+        -ceu '
+            target_uid="$1"
+            target_gid="$2"
+            test ! -L /state
+            test ! -L /state/opencode
+            mkdir -p /state/opencode
+            test -d /state
+            test ! -L /state
+            test -d /state/opencode
+            test ! -L /state/opencode
+            chown -R "${target_uid}:${target_gid}" /state
+            chmod 0700 /state /state/opencode
+        ' helper "${runtime_uid}" "${runtime_gid}"
+
+    docker run --rm \
+        --network none \
+        --read-only \
+        --user "${runtime_uid}:${runtime_gid}" \
+        --cap-drop ALL \
+        --security-opt no-new-privileges:true \
+        --volume "${state_volume}:/state" \
+        --entrypoint /bin/sh \
+        "${image_ref}" \
+        -ceu '
+            test -d /state
+            test ! -L /state
+            test -r /state
+            test -w /state
+            test -x /state
+            test -d /state/opencode
+            test ! -L /state/opencode
+            test -r /state/opencode
+            test -w /state/opencode
+            test -x /state/opencode
+            probe="$(mktemp /state/opencode/.repair-test.XXXXXX)"
+            rm -f -- "${probe}"
+        '
+
+    recreate_opencode_and_wait
+    printf 'platform-compose: repaired OpenCode state volume %s for UID/GID %s:%s\n' \
+        "${state_volume}" "${runtime_uid}" "${runtime_gid}"
+}
+
+main() {
+    local command_name="${1:-}"
+    local option
+    local image_ref
+    local identity
+
+    if [[ -z "${command_name}" || "${command_name}" == "-h" || "${command_name}" == "--help" ]]; then
+        usage
+        return 0
+    fi
+    shift
+
+    case "${command_name}" in
+        up | ps | logs | stop | down | verify | preflight-install | validate-config | apply-config | runtime-id | repair-opencode-volumes | repair-state)
+            ;;
+        *)
+            usage >&2
+            fail "Unsupported command: ${command_name}"
+            ;;
+    esac
+
+    if [[ "${command_name}" == "down" ]]; then
+        for option in "$@"; do
+            case "${option}" in
+                -v | --volumes | --volumes=*)
+                    fail "down -v/--volumes is forbidden because it deletes persistent data."
+                    ;;
+            esac
+        done
+    fi
+
+    require_command python3
+    if [[ "${command_name}" == "validate-config" ]]; then
+        require_no_arguments "${command_name}" "$@"
+        python3 "${CONFIG_CONTROL}" validate --source "${SOURCE_CONFIG}"
+        return
+    fi
+
+    require_command docker
+    validate_environment_file
+    resolve_compose_project_identity
+    docker compose version >/dev/null 2>&1 \
+        || fail "Docker Compose v2 is required."
+
+    case "${command_name}" in
+        up | apply-config)
+            stage_runtime_config
+            ;;
+        ps | logs | stop | down | verify | runtime-id | repair-opencode-volumes | repair-state)
+            reuse_or_stage_runtime_config
+            ;;
+    esac
+
+    case "${command_name}" in
+        up | ps | logs | stop)
+            if [[ "${command_name}" == "up" ]]; then
+                run_compose_up "$@"
+            else
+                run_compose "${command_name}" "$@"
+            fi
+            ;;
+        down)
+            run_compose down "$@"
+            ;;
+        verify)
+            require_no_arguments "${command_name}" "$@"
+            verify_stack
+            ;;
+        preflight-install)
+            require_no_arguments "${command_name}" "$@"
+            python3 "${INSTALL_PREFLIGHT}" \
+                --target "${RUNTIME_ROOT}" \
+                --compose-project "${COMPOSE_PROJECT}"
+            ;;
+        apply-config)
+            require_no_arguments "${command_name}" "$@"
+            run_compose up --detach --no-deps --force-recreate \
+                --no-build --pull never platform
+            ;;
+        runtime-id)
+            require_no_arguments "${command_name}" "$@"
+            image_ref="$(resolve_platform_image)"
+            identity="$(resolve_runtime_identity "${image_ref}")"
+            printf 'uid=%s gid=%s\n' "${identity%%:*}" "${identity##*:}"
+            ;;
+        repair-opencode-volumes)
+            require_no_arguments "${command_name}" "$@"
+            repair_opencode_volumes
+            ;;
+        repair-state)
+            require_no_arguments "${command_name}" "$@"
+            repair_state_volume
+            ;;
+    esac
+}
+
+main "$@"

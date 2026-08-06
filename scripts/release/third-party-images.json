@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "platformImageDistribution": {
+    "approved": false,
+    "evidence": null,
+    "reviewedBy": null,
+    "reviewedAt": null
+  },
+  "images": {
+    "mysql": {
+      "parentIndexReference": "docker.io/library/mysql:8.4@sha256:b3b90af2a6552ae30c266fdb7d5dd55f3afb72404bb78d37fe8a23eb857fd3fb",
+      "reference": "docker.io/library/mysql:8.4@sha256:1d6b6a8fcee8ff758ff151d017f5203cd06792a0e698f0a593c9dfcb14609cf0",
+      "platform": "linux/amd64",
+      "licenseExpression": "GPL-2.0-only",
+      "offlineRedistribution": {
+        "approved": false,
+        "evidence": null,
+        "reviewedBy": null,
+        "reviewedAt": null
+      }
+    }
+  }
+}

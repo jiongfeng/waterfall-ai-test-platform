@@ -1,34 +1,13 @@
-import re
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
 from test_plan_viewer.configuration import PROJECT_KEY_PATTERN
-from test_plan_viewer.security.source import (
-    assert_no_embedded_secrets,
-)
 
 
 DEFAULT_SETUP_SCRIPT_TIMEOUT_SECONDS = 300
 MAX_SETUP_SCRIPT_TIMEOUT_SECONDS = 7200
 SETUP_BINDING_TARGET_TYPES = {"project", "test_suite", "script"}
-SETUP_ENVIRONMENT_NAME_PATTERN = re.compile(
-    r"^[A-Za-z_][A-Za-z0-9_]*$"
-)
-SETUP_ENVIRONMENT_REFERENCE_PREFIX = "TARGET_"
-SETUP_BASE_ENVIRONMENT_ALLOWLIST = frozenset({
-    "COMSPEC",
-    "HOME",
-    "LANG",
-    "PATH",
-    "PATHEXT",
-    "SHELL",
-    "SYSTEMROOT",
-    "TEMP",
-    "TMP",
-    "TMPDIR",
-    "USERPROFILE",
-})
 
 
 @dataclass(frozen=True)
@@ -90,51 +69,6 @@ def normalize_setup_string_map(value, field_name):
     return result
 
 
-def validate_setup_environment_reference(
-    child_name,
-    platform_name,
-):
-    if not SETUP_ENVIRONMENT_NAME_PATTERN.fullmatch(child_name):
-        raise ValueError(
-            "environment_refs contains an invalid subprocess "
-            "environment variable name."
-        )
-    if (
-        child_name.upper() in SETUP_BASE_ENVIRONMENT_ALLOWLIST
-        or child_name.upper().startswith("LC_")
-    ):
-        raise ValueError(
-            "environment_refs cannot override a protected subprocess "
-            "environment variable."
-        )
-    if not SETUP_ENVIRONMENT_NAME_PATTERN.fullmatch(platform_name):
-        raise ValueError(
-            "environment_refs contains an invalid platform "
-            "environment variable name."
-        )
-    if not platform_name.startswith(
-        SETUP_ENVIRONMENT_REFERENCE_PREFIX
-    ):
-        raise ValueError(
-            "environment_refs platform variable names must start "
-            f"with {SETUP_ENVIRONMENT_REFERENCE_PREFIX}."
-        )
-
-
-def normalize_setup_environment_refs(value, normalize_string_map):
-    references = normalize_string_map(value, "environment_refs")
-    result = {}
-    for child_name, platform_name in references.items():
-        child_name = str(child_name).strip()
-        platform_name = str(platform_name).strip()
-        validate_setup_environment_reference(
-            child_name,
-            platform_name,
-        )
-        result[child_name] = platform_name
-    return result
-
-
 def normalize_setup_timeout(
     value,
     fallback=DEFAULT_SETUP_SCRIPT_TIMEOUT_SECONDS,
@@ -155,19 +89,6 @@ def normalize_setup_timeout(
 def normalize_setup_script_payload(payload, existing, dependencies):
     if not isinstance(payload, dict):
         raise ValueError("Request body must be an object.")
-    if "environment_overrides" in payload:
-        raise ValueError(
-            "environment_overrides is no longer accepted; "
-            "use environment_refs."
-        )
-    if (
-        existing
-        and existing.get("credentials_migration_required")
-        and "environment_refs" not in payload
-    ):
-        raise ValueError(
-            "旧版明文环境配置需要重新绑定 environment_refs 后才能保存。"
-        )
     source = {**(existing or {}), **payload}
     script_content = source.get("script_content")
     if script_content is None:
@@ -178,10 +99,6 @@ def normalize_setup_script_payload(payload, existing, dependencies):
         raise ValueError(
             "script_content contains an invalid null character."
         )
-    assert_no_embedded_secrets(
-        script_content,
-        source_label="Setup script",
-    )
     working_directory = str(source.get("working_directory") or "").strip()
     dependencies.resolve_working_directory(working_directory)
     return {
@@ -194,9 +111,9 @@ def normalize_setup_script_payload(payload, existing, dependencies):
         "description": str(source.get("description") or "").strip()[:1024],
         "script_content": script_content,
         "working_directory": working_directory,
-        "environment_refs": normalize_setup_environment_refs(
-            source.get("environment_refs"),
-            dependencies.normalize_string_map,
+        "environment_overrides": dependencies.normalize_string_map(
+            source.get("environment_overrides"),
+            "environment_overrides",
         ),
         "timeout_seconds": dependencies.normalize_timeout(
             source.get("timeout_seconds")

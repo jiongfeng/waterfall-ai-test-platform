@@ -2,7 +2,7 @@ name: playwright-test-platform
 
 services:
   mysql:
-    image: mysql:8.4
+    image: ${MYSQL_IMAGE:-docker.io/library/mysql:8.4@sha256:1d6b6a8fcee8ff758ff151d017f5203cd06792a0e698f0a593c9dfcb14609cf0}
     restart: unless-stopped
     environment:
       MYSQL_DATABASE: playwright_platform
@@ -27,9 +27,6 @@ services:
 
   opencode:
     image: ${PLATFORM_IMAGE:-playwright-test-platform:local}
-    build:
-      context: ..
-      dockerfile: deploy/Dockerfile
     command:
       - opencode
     restart: unless-stopped
@@ -46,6 +43,7 @@ services:
       - opencode_config:/home/pwuser/.config/opencode
       - opencode_data:/home/pwuser/.local/share/opencode
       - opencode_cache:/home/pwuser/.cache/opencode
+      - opencode_state:/home/pwuser/.local/state
     tmpfs:
       - /tmp:size=512m,mode=1777
     shm_size: 1gb
@@ -68,9 +66,6 @@ services:
 
   platform:
     image: ${PLATFORM_IMAGE:-playwright-test-platform:local}
-    build:
-      context: ..
-      dockerfile: deploy/Dockerfile
     command:
       - platform
     restart: unless-stopped
@@ -83,24 +78,19 @@ services:
       PLATFORM_AUTH_ENABLED: "true"
       PLATFORM_ALLOW_HOST_SCRIPT_EXECUTION: "false"
       PLATFORM_ALLOW_TEST_EXECUTION: ${PLATFORM_ALLOW_TEST_EXECUTION:-false}
-      PLATFORM_CONFIG_PATH: /etc/playwright-platform/config.json
+      PLATFORM_CONFIG_PATH: /run/secrets/platform-config.json
       PLATFORM_COOKIE_SECURE: ${PLATFORM_COOKIE_SECURE:-false}
       PLATFORM_PORT: "5000"
       PLATFORM_SESSION_SECRET: ${PLATFORM_SESSION_SECRET:?Set PLATFORM_SESSION_SECRET}
       PLATFORM_ADMIN_PASSWORD: ${PLATFORM_ADMIN_PASSWORD:?Set PLATFORM_ADMIN_PASSWORD}
-      PLATFORM_DB_PASSWORD: ${PLATFORM_DB_PASSWORD:?Set PLATFORM_DB_PASSWORD}
-      OPENCODE_SERVER_PASSWORD: ${OPENCODE_SERVER_PASSWORD:?Set OPENCODE_SERVER_PASSWORD}
-      TARGET_SYSTEM_USERNAME: ${TARGET_SYSTEM_USERNAME:-}
-      TARGET_SYSTEM_PASSWORD: ${TARGET_SYSTEM_PASSWORD:-}
       PLAYWRIGHT_BROWSERS_PATH: /ms-playwright
       TZ: ${TZ:-UTC}
     ports:
       - "${PLATFORM_BIND_ADDRESS:-127.0.0.1}:${PLATFORM_PORT:-5000}:5000"
+    secrets:
+      - source: platform_config
+        target: platform-config.json
     volumes:
-      - type: bind
-        source: ${PLATFORM_CONFIG_FILE:-../config.json}
-        target: /etc/playwright-platform/config.json
-        read_only: true
       - platform_projects:/data/playwright-projects
       - platform_workspaces:/data/playwright-workspaces
     tmpfs:
@@ -128,10 +118,15 @@ networks:
   backend:
     driver: bridge
 
+secrets:
+  platform_config:
+    file: ${PLATFORM_RUNTIME_CONFIG_FILE:?Run deploy/platform-compose instead of docker compose directly}
+
 volumes:
   mysql_data:
   opencode_cache:
   opencode_config:
   opencode_data:
+  opencode_state:
   platform_projects:
   platform_workspaces:

@@ -20,6 +20,7 @@ from urllib import request as urlrequest
 from flask import Response, g, has_request_context, jsonify, render_template, request, send_file, session, stream_with_context
 from test_plan_viewer.agent import diagnostics as agent_diagnostics
 from test_plan_viewer.agent import failure_handling as agent_failure_handling
+from test_plan_viewer.agent import script_preparation as agent_script_preparation
 from test_plan_viewer.artifacts import naming as artifact_naming
 from test_plan_viewer.artifacts import paths as artifact_paths
 from test_plan_viewer.artifacts import snapshots as artifact_snapshots
@@ -54,7 +55,6 @@ from test_plan_viewer.configuration import (
     parse_projects_config,
     parse_target_system_config,
     parse_timeout_seconds,
-    resolve_opencode_runtime_config,
     validate_coverage_profile,
 )
 from test_plan_viewer.core.validation import (
@@ -164,12 +164,6 @@ from test_plan_viewer.requirements import repository as requirement_repository
 from test_plan_viewer.requirements import service as requirement_service
 from test_plan_viewer.requirements import storage as requirement_storage
 from test_plan_viewer.security import markdown as markdown_security
-from test_plan_viewer.security import source as source_security
-from test_plan_viewer.security.runtime import (
-    redact_natural_language_value,
-    redact_runtime_value,
-    redact_sensitive_text,
-)
 from test_plan_viewer.setup import model as setup_model
 from test_plan_viewer.setup import repository as setup_repository
 from test_plan_viewer.setup import runner as setup_runner
@@ -179,6 +173,7 @@ from test_plan_viewer.test_suites import model as test_suite_model
 from test_plan_viewer.test_suites import repository as test_suite_repository
 from test_plan_viewer.test_suites import service as test_suite_service
 from test_plan_viewer.web import (
+    AgentScriptPreparationWebServices,
     AuthWebServices,
     PageInventoryWebServices,
     PlatformRecordServices,
@@ -188,6 +183,7 @@ from test_plan_viewer.web import (
     SetupWebServices,
     TestSuiteWebServices,
     create_application,
+    create_agent_script_preparation_blueprint,
     create_auth_blueprint,
     create_page_inventory_blueprint,
     create_platform_records_blueprint,
@@ -196,10 +192,6 @@ from test_plan_viewer.web import (
     create_requirements_blueprint,
     create_setup_blueprint,
     create_test_suites_blueprint,
-)
-from test_plan_viewer.web.agent_failures import (
-    agent_failure_web_services_from_resolver,
-    create_agent_failures_blueprint,
 )
 from test_plan_viewer.web.projects import (
     create_project_response,
@@ -353,9 +345,6 @@ class AgentItemRetryConflict(RuntimeError):
         self.flow = flow
 
 
-AgentFailureCheckpointConflict = agent_failure_handling.AgentFailureCheckpointConflict
-
-
 class AgentItemFailure(RuntimeError):
     def __init__(
         self,
@@ -426,7 +415,7 @@ TEST_JOB_STATUSES = {"queued", "running", "succeeded", "failed", "cancelled"}
 AGENT_RUN_STATUSES = {
     "queued",
     "running",
-    "awaiting_failure_action",
+    "awaiting_script_action",
     "succeeded",
     "succeeded_with_unresolved",
     "failed",
@@ -449,18 +438,14 @@ AGENT_ITEM_RETRY_ACTIVE_STATUSES = {"queued", "running", "finalizing", "cancelli
 AGENT_ITEM_RETRY_PHASES = {"queued", "generating", "executing", "repairing", "verifying", "completed"}
 AGENT_TERMINAL_STATUSES = {"succeeded", "succeeded_with_unresolved", "failed", "cancelled"}
 AGENT_ACTIVE_STATUSES = {"queued", "running", "cancelling"}
-AGENT_PAUSED_STATUSES = {"awaiting_failure_action"}
-CURRENT_AGENT_PIPELINE_VERSION = 2
+AGENT_PAUSED_STATUSES = {"awaiting_script_action"}
+CURRENT_AGENT_PIPELINE_VERSION = 3
 AGENT_STEP_ORDER = [
     ("upload_requirement", "需求"),
     ("analyze_requirement", "需求解析"),
     ("review_modules", "模块审查"),
     ("generate_plans", "计划生成"),
-    ("review_plans", "计划审查"),
-    ("generate_scripts", "脚本生成"),
-    ("execute_scripts", "脚本执行"),
-    ("repair_scripts", "脚本修复"),
-    ("review_failed_scripts", "失败处理"),
+    ("prepare_scripts", "脚本准备"),
     ("create_suite", "测试集"),
     ("run_suite", "执行"),
 ]
@@ -490,7 +475,6 @@ PLATFORM_RECORD_REPOSITORY = PlatformRecordRepository(
         mysql_connection=lambda config: platform_mysql_connection(config),
         get_default_plan_filename=lambda module_name: get_default_plan_filename(module_name),
         now_ms=lambda: int(time.time() * 1000),
-        redact_value=redact_runtime_value,
     ),
     PLATFORM_RECORD_BUCKETS,
 )
@@ -623,11 +607,13 @@ def get_playwright_base_url():
 
 def get_playwright_execution_env(extra=None):
     execution_environment.require_test_execution_enabled(os.environ)
-    return execution_environment.build_playwright_environment(
-        os.environ,
-        get_current_target_system_config(),
-        extra=extra,
-    )
+    env = os.environ.copy()
+    base_url = get_playwright_base_url()
+    if base_url:
+        env["PLAYWRIGHT_BASE_URL"] = base_url
+    if extra:
+        env.update({key: str(value) for key, value in extra.items() if value is not None})
+    return env
 
 
 def build_execution_env_metadata(extra=None):
@@ -651,20 +637,12 @@ def build_default_plan_prompt_template():
     target_system = get_current_target_system_config()
     seed_path = get_seed_script_relative_path()
     login_url = build_target_login_url(target_system)
-    username_env = (
-        target_system.get("username_env")
-        or DEFAULT_TARGET_SYSTEM_CONFIG["username_env"]
-    )
-    password_env = (
-        target_system.get("password_env")
-        or DEFAULT_TARGET_SYSTEM_CONFIG["password_env"]
-    )
+    username = target_system.get("username") or "<登录用户名>"
+    password = target_system.get("password") or "<登录密码>"
     return (
         "@playwright-test-planner\n"
         f"请以 {seed_path} 作为入口，打开 {login_url}，"
-        "登录系统并探索目标模块。登录凭据只能在测试运行时分别从 "
-        f"process.env.{username_env} 和 process.env.{password_env} 读取，"
-        "不得写入提示词、源码、日志或测试产物。\n"
+        f"使用账号 {username}、密码 {password} 登录系统并探索目标模块。\n"
         f"模块名：{DEFAULT_PLAN_PROMPT_MODULE_PLACEHOLDER}\n"
         "请根据用户在生成弹窗中确认的测试范围设计测试场景。\n"
         "要求：记录进入该界面的导航路径；优先使用稳定定位器。"
@@ -1396,10 +1374,71 @@ def get_database_baseline_config():
     return baseline_config
 
 
+def redact_sensitive_text(value, *configs, limit=None):
+    text = normalize_process_output(value)
+    passwords = set()
+    for config in configs:
+        if not isinstance(config, dict):
+            continue
+        password = str(config.get("password") or "")
+        if password:
+            passwords.add(password)
+    for password in sorted(passwords, key=len, reverse=True):
+        if len(password) >= 2:
+            text = text.replace(password, "******")
+
+    text = re.sub(r"(?i)(password|passwd|pwd)\s*([=:])\s*([^\s'\";,]+)", r"\1\2******", text)
+    text = re.sub(r"(?i)(//[^:\s/@]+:)([^@\s/]+)(@)", r"\1******\3", text)
+    text = re.sub(r"([A-Za-z0-9_.$-]+)/(\"[^\"]+\"|'[^']+'|[^\s@]+)@", r"\1/******@", text)
+    if limit and len(text) > limit:
+        omitted = len(text) - limit
+        return f"{text[:limit]}\n...[已截断 {omitted} 个字符]"
+    return text
+
+
 def redact_database_messages(messages, baseline_config=None):
     baseline_config = baseline_config or get_database_baseline_config()
     target_system = get_current_target_system_config()
     return [redact_sensitive_text(message, baseline_config, target_system, limit=4000) for message in messages]
+
+
+def ensure_command_executable_available(command, label):
+    if not command:
+        raise RuntimeError(f"{label} 未配置。")
+    if isinstance(command, str):
+        return f"{label} 使用 shell 命令，跳过可执行文件探测。"
+    if not isinstance(command, list) or not command:
+        raise RuntimeError(f"{label} 必须是字符串命令或非空数组命令。")
+
+    executable = str(command[0] or "").strip()
+    if not executable:
+        raise RuntimeError(f"{label} 缺少可执行程序。")
+    executable_path = Path(executable).expanduser()
+    if executable_path.is_absolute() or len(executable_path.parts) > 1:
+        if not executable_path.exists():
+            raise RuntimeError(f"{label} 可执行程序不存在：{executable}")
+        return f"{label} 可执行程序存在：{executable}"
+    resolved = shutil.which(executable)
+    if not resolved:
+        raise RuntimeError(f"{label} 可执行程序不在 PATH 中：{executable}")
+    return f"{label} 可执行程序存在：{resolved}"
+
+
+def run_database_test_command(command, working_directory, timeout_seconds, baseline_config):
+    cwd = resolve_optional_path(working_directory) if working_directory else None
+    shell = isinstance(command, str)
+    completed = subprocess.run(
+        command,
+        cwd=str(cwd) if cwd else None,
+        shell=shell,
+        capture_output=True,
+        timeout=timeout_seconds,
+    )
+    output = summarize_process_output(completed.stdout, completed.stderr, limit=8000)
+    output = redact_sensitive_text(output, baseline_config, get_current_target_system_config(), limit=8000)
+    if completed.returncode != 0:
+        raise RuntimeError(f"数据库连接测试命令失败，退出码：{completed.returncode}\n{output}".strip())
+    return output
 
 
 def test_file_database_baseline_connection(config):
@@ -1425,23 +1464,65 @@ def test_file_database_baseline_connection(config):
     ]
 
 
+def test_command_database_baseline_connection(config):
+    timeout_seconds = config.get("timeout_seconds") or DEFAULT_DATABASE_BASELINE_TIMEOUT_SECONDS
+    working_directory = config.get("working_directory")
+    cwd = resolve_optional_path(working_directory) if working_directory else None
+    if cwd and not cwd.exists():
+        raise RuntimeError(f"数据库基线工作目录不存在：{cwd}")
+
+    messages = []
+    if cwd:
+        messages.append(f"工作目录存在：{cwd}")
+    messages.append(ensure_command_executable_available(config.get("backup_command"), "备份命令"))
+    messages.append(ensure_command_executable_available(config.get("restore_command"), "恢复命令"))
+    test_command = config.get("test_command")
+    if test_command:
+        messages.append(ensure_command_executable_available(test_command, "连接测试命令"))
+        output = run_database_test_command(test_command, working_directory, timeout_seconds, config)
+        messages.append("连接测试命令执行成功。")
+        if output:
+            messages.append(output)
+    else:
+        messages.append("未配置 test_command，已完成工作目录和命令可执行性检查。")
+    return messages
+
+
 def test_database_baseline_connection(config=None):
     config = config or get_database_baseline_config()
     if not config.get("enabled"):
         raise RuntimeError("当前项目未启用数据库基线。")
-    if config.get("mode") == "file":
+    mode = config.get("mode")
+    if mode == "file":
         return test_file_database_baseline_connection(config)
-    raise RuntimeError("数据库基线只支持 file 模式。")
+    if mode == "command":
+        return test_command_database_baseline_connection(config)
+    raise RuntimeError(f"不支持的数据库基线模式：{mode}")
 
 
 def get_opencode_config():
     config = load_config()
     if config["error"]:
         raise RuntimeError(config["error"])
-    return resolve_opencode_runtime_config(
-        config,
-        get_current_project(),
+    opencode_config = {
+        "opencode_server_url": config["opencode_server_url"],
+        "opencode_username": config.get("opencode_username", "opencode") or "opencode",
+        "opencode_password": config.get("opencode_password", ""),
+    }
+    project = get_current_project()
+    project_opencode_config = project.get("opencode_config") if isinstance(project, dict) else None
+    if isinstance(project_opencode_config, dict):
+        for key in ("opencode_server_url", "opencode_username", "opencode_password"):
+            if key in project_opencode_config:
+                opencode_config[key] = project_opencode_config[key]
+
+    opencode_config["opencode_server_url"] = (
+        str(opencode_config.get("opencode_server_url") or "http://127.0.0.1:4096").strip()
+        or "http://127.0.0.1:4096"
     )
+    opencode_config["opencode_username"] = str(opencode_config.get("opencode_username") or "opencode").strip() or "opencode"
+    opencode_config["opencode_password"] = str(opencode_config.get("opencode_password", ""))
+    return opencode_config
 
 
 def get_platform_database_config():
@@ -1475,11 +1556,7 @@ def _project_workspace_dependencies():
         template_dir=PROJECT_TEMPLATE_DIR,
         dependency_dirs=tuple(PROJECT_TEMPLATE_DEPENDENCY_DIRS),
         text_suffixes=frozenset(PROJECT_TEMPLATE_TEXT_SUFFIXES),
-        subprocess_run=lambda *args, **kwargs: subprocess.run(
-            *args,
-            env=execution_environment.build_isolated_tool_environment(),
-            **kwargs,
-        ),
+        subprocess_run=subprocess.run,
         get_project_workspace_root_text=get_project_workspace_root_text,
         get_project_template_dependency_source_text=(
             get_project_template_dependency_source_text
@@ -2049,7 +2126,6 @@ def run_git_command(args, check=True):
             *args,
         ],
         cwd=project_root,
-        env=execution_environment.build_isolated_tool_environment(),
         capture_output=True,
         text=True,
         encoding="utf-8",
@@ -2370,8 +2446,6 @@ def create_asset_revision(asset, file_path, change_source, source_job_id=None, m
 
 
 def sync_plan_asset(module_name, plan_file, change_source="manual", source_job_id=None, message=None):
-    if Path(plan_file).exists():
-        source_security.assert_no_embedded_secrets(Path(plan_file).read_text(encoding="utf-8"), source_label=f"Test plan {Path(plan_file).name}")
     asset = upsert_test_asset("plan", module_name, plan_file.stem, plan_file, source_job_id=source_job_id)
     if Path(plan_file).exists():
         create_asset_revision(asset, plan_file, change_source, source_job_id=source_job_id, message=message)
@@ -2379,16 +2453,10 @@ def sync_plan_asset(module_name, plan_file, change_source="manual", source_job_i
 
 
 def sync_script_asset(module_name, script_file, change_source="manual", source_job_id=None, from_plan_asset_id=None, message=None):
-    script_file = Path(script_file)
-    if script_file.exists():
-        source_security.assert_no_embedded_secrets(
-            script_file.read_text(encoding="utf-8"),
-            source_label=f"Playwright script {script_file.name}",
-        )
     if from_plan_asset_id is None:
-        plan_asset = infer_plan_asset_for_script(module_name, script_file.name)
+        plan_asset = infer_plan_asset_for_script(module_name, Path(script_file).name)
         from_plan_asset_id = plan_asset.get("asset_id") if plan_asset else None
-    title = script_file.name[: -len(".spec.ts")] if script_file.name.endswith(".spec.ts") else script_file.stem
+    title = Path(script_file).name[: -len(".spec.ts")] if Path(script_file).name.endswith(".spec.ts") else Path(script_file).stem
     asset = upsert_test_asset(
         "script",
         module_name,
@@ -2617,14 +2685,6 @@ def create_test_job(
 ):
     if job_type not in TEST_JOB_TYPES:
         raise ValueError("Unsupported job type.")
-    prompt = (
-        redact_sensitive_text(prompt)
-        if prompt
-        else prompt
-    )
-    prompt_context_json = compact_json_dumps(
-        redact_runtime_value(prompt_context or {})
-    )
     job_id = sanitize_job_id(job_id or f"{job_type}-{uuid.uuid4().hex}")
     log_path = get_job_log_path(job_id)
     log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -2672,7 +2732,7 @@ def create_test_job(
                     prompt,
                     validate_coverage_profile(coverage_profile),
                     int(bool(prompt_customized)),
-                    prompt_context_json,
+                    compact_json_dumps(prompt_context or {}),
                     str(log_path),
                     started_at,
                     now_ms,
@@ -2710,13 +2770,6 @@ def update_test_job(job_id, **updates):
     values = []
     for key, value in updates.items():
         if key in allowed:
-            if key in {
-                "error",
-                "log_tail",
-                "prompt",
-                "prompt_context_json",
-            } and value:
-                value = redact_sensitive_text(value)
             fields.append(f"{key} = %s")
             values.append(value)
     if not fields:
@@ -2732,7 +2785,6 @@ def update_test_job(job_id, **updates):
 
 
 def append_test_job_log(job_id, text):
-    text = redact_sensitive_text(text)
     tail, size, log_path = append_job_log_file(job_id, text)
     if is_platform_database_enabled():
         update_test_job(job_id, log_path=log_path, log_tail=tail[-JOB_LOG_TAIL_LIMIT:], log_size=size)
@@ -2742,15 +2794,7 @@ def append_test_job_log(job_id, text):
 def finish_test_job(job_id, status, error=None, target_asset_id=None):
     if status not in TEST_JOB_STATUSES:
         status = "failed"
-    updates = {
-        "status": status,
-        "finished_at": current_time_ms(),
-        "error": (
-            redact_sensitive_text(error)
-            if error
-            else error
-        ),
-    }
+    updates = {"status": status, "finished_at": current_time_ms(), "error": error}
     if target_asset_id:
         updates["target_asset_id"] = target_asset_id
     return update_test_job(job_id, **updates)
@@ -2779,21 +2823,14 @@ def serialize_job(job):
         "status": job.get("status"),
         "target_asset_id": job.get("target_asset_id"),
         "source_asset_id": job.get("source_asset_id"),
-        "prompt": redact_sensitive_text(job.get("prompt")),
+        "prompt": job.get("prompt"),
         "coverage_profile": job.get("coverage_profile") or DEFAULT_COVERAGE_PROFILE,
         "prompt_customized": bool(job.get("prompt_customized")),
-        "prompt_context": redact_runtime_value(
-            load_json_column(
-                job.get("prompt_context_json"),
-                {},
-            )
-        ),
+        "prompt_context": load_json_column(job.get("prompt_context_json"), {}),
         "log_path": job.get("log_path"),
-        "log_tail": redact_sensitive_text(
-            job.get("log_tail") or ""
-        ),
+        "log_tail": job.get("log_tail") or "",
         "log_size": job.get("log_size") or 0,
-        "error": redact_sensitive_text(job.get("error")),
+        "error": job.get("error"),
         "started_at": job.get("started_at"),
         "finished_at": job.get("finished_at"),
         "created_at": job.get("created_at"),
@@ -2922,18 +2959,7 @@ def create_test_run(
     runs_table = get_test_runs_table(config)
     project_id = get_current_project_id()
     now_ms = current_time_ms()
-    env_json = (
-        compact_json_dumps(
-            redact_runtime_value(env or {})
-        )
-        if env is not None
-        else None
-    )
-    command = (
-        redact_sensitive_text(command)
-        if command is not None
-        else None
-    )
+    env_json = json.dumps(env or {}, ensure_ascii=False, separators=(",", ":")) if env is not None else None
     with platform_mysql_connection(config) as connection:
         with connection.cursor() as cursor:
             cursor.execute(
@@ -3004,17 +3030,13 @@ def update_test_run(run_id, status=None, summary=None, completed_files=None, err
         values.append(db_run_status(status))
     if summary is not None:
         fields.append("summary_json = %s")
-        values.append(
-            compact_json_dumps(
-                redact_runtime_value(summary)
-            )
-        )
+        values.append(json.dumps(summary, ensure_ascii=False, separators=(",", ":")))
     if completed_files is not None:
         fields.append("completed_files = %s")
         values.append(int(completed_files))
     if error is not None:
         fields.append("error = %s")
-        values.append(redact_sensitive_text(error))
+        values.append(error)
     if finished:
         fields.append("finished_at = %s")
         values.append(current_time_ms())
@@ -3114,20 +3136,13 @@ def update_run_result(result_id, status=None, stdout_tail=None, error_message=No
         values.append(db_result_status(status))
     if stdout_tail is not None:
         fields.append("stdout_tail = %s")
-        values.append(
-            redact_sensitive_text(
-                stdout_tail,
-                limit=4000,
-            )
-        )
+        values.append(stdout_tail[-4000:])
     if error_message is not None:
         fields.append("error_message = %s")
-        values.append(
-            redact_sensitive_text(error_message)
-        )
+        values.append(error_message)
     if command is not None:
         fields.append("command = %s")
-        values.append(redact_sensitive_text(command))
+        values.append(command)
     if database_reset_status is not None:
         fields.append("database_reset_status = %s")
         values.append(database_reset_status)
@@ -3667,18 +3682,12 @@ def serialize_run_result(result):
         "module_name": result.get("module_name"),
         "script_path": result.get("script_path"),
         "script_title": result.get("script_title"),
-        "command": redact_sensitive_text(
-            result.get("command")
-        ),
+        "command": result.get("command"),
         "status": result.get("status"),
         "duration_ms": result.get("duration_ms"),
         "database_reset_status": result.get("database_reset_status"),
-        "error_message": redact_sensitive_text(
-            result.get("error_message")
-        ),
-        "stdout_tail": redact_sensitive_text(
-            result.get("stdout_tail") or ""
-        ),
+        "error_message": result.get("error_message"),
+        "stdout_tail": result.get("stdout_tail") or "",
         "started_at": result.get("started_at"),
         "finished_at": result.get("finished_at"),
         "created_at": result.get("created_at"),
@@ -3708,18 +3717,12 @@ def serialize_test_suite_execution_result(row, report=None, video=None):
         "script_key": f"{module_name}/{filename}" if module_name and filename else "",
         "script_path": script_path,
         "script_name": script_title,
-        "command": redact_sensitive_text(
-            row.get("command") or ""
-        ),
+        "command": row.get("command") or "",
         "status": row.get("status") or "unknown",
         "duration_ms": row.get("duration_ms"),
         "database_reset_status": row.get("database_reset_status"),
-        "error_message": redact_sensitive_text(
-            row.get("error_message") or ""
-        ),
-        "stdout_tail": redact_sensitive_text(
-            row.get("stdout_tail") or ""
-        ),
+        "error_message": row.get("error_message") or "",
+        "stdout_tail": row.get("stdout_tail") or "",
         "started_at": row.get("started_at"),
         "finished_at": row.get("finished_at"),
         "created_at": row.get("created_at"),
@@ -3742,21 +3745,12 @@ def serialize_test_suite_execution_run(row, results=None, report=None):
         "triggered_by": row.get("triggered_by") or "",
         "trigger_source": row.get("trigger_source") or "",
         "suite_id": row.get("suite_id") or "",
-        "command": redact_sensitive_text(
-            row.get("command") or ""
-        ),
+        "command": row.get("command") or "",
         "git_commit_sha": row.get("git_commit_sha") or "",
-        "summary": redact_runtime_value(
-            load_json_column(
-                row.get("summary_json"),
-                {},
-            )
-        ),
+        "summary": load_json_column(row.get("summary_json"), {}),
         "total_files": row.get("total_files") or 0,
         "completed_files": row.get("completed_files") or 0,
-        "error": redact_sensitive_text(
-            row.get("error") or ""
-        ),
+        "error": row.get("error") or "",
         "started_at": row.get("started_at"),
         "finished_at": row.get("finished_at"),
         "created_at": row.get("created_at"),
@@ -3958,7 +3952,7 @@ def _setup_runner_dependencies():
         popen=subprocess.Popen,
         clock=time.time,
         thread_factory=threading.Thread,
-        environment_factory=setup_runner.build_setup_environment,
+        environment_factory=lambda: os.environ.copy(),
         os_name=os.name,
     )
 
@@ -4371,19 +4365,17 @@ def serialize_agent_run(row):
         "status": row.get("status"),
         "current_step": row.get("current_step") or "",
         "suite_uid": row.get("suite_uid") or "",
-        "summary": redact_runtime_value(summary),
+        "summary": summary,
         "pipeline_version": int(summary.get("pipeline_version") or 1),
-        "plan_generation": redact_runtime_value(
-            load_json_column(
-                row.get("plan_generation_json"),
-                {
-                    "coverage_profile": DEFAULT_COVERAGE_PROFILE,
-                    "coverage_prompt": COVERAGE_PROFILES[DEFAULT_COVERAGE_PROFILE]["template_prompt"],
-                    "prompt_customized": False,
-                },
-            )
+        "plan_generation": load_json_column(
+            row.get("plan_generation_json"),
+            {
+                "coverage_profile": DEFAULT_COVERAGE_PROFILE,
+                "coverage_prompt": COVERAGE_PROFILES[DEFAULT_COVERAGE_PROFILE]["template_prompt"],
+                "prompt_customized": False,
+            },
         ),
-        "error": redact_sensitive_text(row.get("error") or ""),
+        "error": row.get("error") or "",
         "created_by": row.get("created_by") or "",
         "started_at": row.get("started_at"),
         "finished_at": row.get("finished_at"),
@@ -4402,16 +4394,10 @@ def serialize_agent_step(row):
         "step_key": row.get("step_key"),
         "step_name": row.get("step_name") or agent_step_name(row.get("step_key")),
         "status": row.get("status"),
-        "input": redact_runtime_value(
-            load_json_column(row.get("input_json"), {})
-        ),
-        "output": redact_runtime_value(
-            load_json_column(row.get("output_json"), {})
-        ),
-        "counts": redact_runtime_value(
-            load_json_column(row.get("counts_json"), {})
-        ),
-        "error": redact_sensitive_text(row.get("error") or ""),
+        "input": load_json_column(row.get("input_json"), {}),
+        "output": load_json_column(row.get("output_json"), {}),
+        "counts": load_json_column(row.get("counts_json"), {}),
+        "error": row.get("error") or "",
         "started_at": row.get("started_at"),
         "finished_at": row.get("finished_at"),
         "created_at": row.get("created_at"),
@@ -4428,12 +4414,8 @@ def serialize_agent_event(row):
         "run_id": row.get("run_id"),
         "step_key": row.get("step_key") or "",
         "event_type": row.get("event_type"),
-        "message": redact_sensitive_text(
-            row.get("message") or ""
-        ),
-        "payload": redact_runtime_value(
-            load_json_column(row.get("payload_json"), {})
-        ),
+        "message": row.get("message") or "",
+        "payload": load_json_column(row.get("payload_json"), {}),
         "job_id": row.get("job_id") or "",
         "asset_id": row.get("asset_id"),
         "test_run_id": row.get("test_run_id") or "",
@@ -4471,29 +4453,11 @@ def serialize_agent_attempt(row):
         "revision_id": row.get("revision_id"),
         "source_asset_id": row.get("source_asset_id"),
         "error_type": row.get("error_type") or "",
-        "error": redact_sensitive_text(
-            row.get("error_message") or ""
-        ),
-        "error_stack": "",
-        "error_stack_available": bool(row.get("error_stack")),
-        "input_snapshot": redact_runtime_value(
-            load_json_column(
-                row.get("input_snapshot_json"),
-                {},
-            )
-        ),
-        "output_summary": redact_runtime_value(
-            load_json_column(
-                row.get("output_summary_json"),
-                {},
-            )
-        ),
-        "artifact_refs": redact_runtime_value(
-            load_json_column(
-                row.get("artifact_refs_json"),
-                [],
-            )
-        ),
+        "error": row.get("error_message") or "",
+        "error_stack": row.get("error_stack") or "",
+        "input_snapshot": load_json_column(row.get("input_snapshot_json"), {}),
+        "output_summary": load_json_column(row.get("output_summary_json"), {}),
+        "artifact_refs": load_json_column(row.get("artifact_refs_json"), []),
         "started_at": row.get("started_at"),
         "finished_at": row.get("finished_at"),
         "failed_at": row.get("finished_at") if status == "failed" else None,
@@ -4606,11 +4570,7 @@ def start_agent_attempt(
                     str(module_name or "")[:255] or None,
                     str(plan_filename or "")[:255] or None,
                     str(filename or "")[:255] or None,
-                    compact_json_dumps(
-                        redact_runtime_value(
-                            input_snapshot or {}
-                        )
-                    ),
+                    compact_json_dumps(input_snapshot or {}),
                     started_at,
                     now_ms,
                     now_ms,
@@ -4658,14 +4618,8 @@ def finish_agent_attempt(
         "revision_id": revision_id,
         "source_asset_id": source_asset_id,
         "error_type": str(error_type or "")[:32] or None,
-        "error_message": (
-            redact_sensitive_text(error_message)
-            or None
-        ),
-        "error_stack": (
-            redact_sensitive_text(error_stack)
-            or None
-        ),
+        "error_message": str(error_message or "") or None,
+        "error_stack": str(error_stack or "") or None,
     }
     for field, value in optional_values.items():
         if value is not None:
@@ -4673,18 +4627,10 @@ def finish_agent_attempt(
             values.append(value)
     if output_summary is not None:
         fields.append("output_summary_json = %s")
-        values.append(
-            compact_json_dumps(
-                redact_runtime_value(output_summary)
-            )
-        )
+        values.append(compact_json_dumps(output_summary))
     if artifact_refs is not None:
         fields.append("artifact_refs_json = %s")
-        values.append(
-            compact_json_dumps(
-                redact_runtime_value(artifact_refs)
-            )
-        )
+        values.append(compact_json_dumps(artifact_refs))
     values.extend([project_id, validate_uid(run_id, "run_id"), validate_uid(attempt_id, "attempt_id")])
     with platform_mysql_connection(config) as connection:
         with connection.cursor() as cursor:
@@ -4748,18 +4694,14 @@ def serialize_agent_item_retry_flow(row):
         "filename": row.get("filename") or "",
         "status": row.get("status") or "queued",
         "current_phase": row.get("current_phase") or "queued",
-        "progress_message": redact_sensitive_text(
-            row.get("progress_message") or ""
-        ),
+        "progress_message": row.get("progress_message") or "",
         "auto_repair": bool(row.get("auto_repair")),
         "generation_attempt_id": row.get("generation_attempt_id") or "",
         "execution_attempt_id": row.get("execution_attempt_id") or "",
         "repair_attempt_id": row.get("repair_attempt_id") or "",
         "verification_attempt_id": row.get("verification_attempt_id") or "",
-        "result": redact_runtime_value(
-            load_json_column(row.get("result_json"), {})
-        ),
-        "error": redact_sensitive_text(row.get("error") or ""),
+        "result": load_json_column(row.get("result_json"), {}),
+        "error": row.get("error") or "",
         "cancel_requested": bool(row.get("cancel_requested")),
         "created_by": row.get("created_by") or "",
         "started_at": row.get("started_at"),
@@ -4961,17 +4903,13 @@ def update_agent_item_retry_flow(run_id, retry_flow_id, *, expected_statuses=Non
     for key, value in updates.items():
         column = column_by_key.get(key, key)
         if key in json_fields:
-            value = compact_json_dumps(
-                redact_runtime_value(
-                    value if isinstance(value, dict) else {}
-                )
-            )
+            value = compact_json_dumps(value if isinstance(value, dict) else {})
         elif key in bool_fields:
             value = 1 if value else 0
         elif key in {"generation_attempt_id", "execution_attempt_id", "repair_attempt_id", "verification_attempt_id"}:
             value = str(value or "")[:64] or None
         elif key in {"progress_message", "error"}:
-            value = redact_sensitive_text(value)
+            value = str(value or "")
         fields.append(f"{column} = %s")
         values.append(value)
 
@@ -5343,11 +5281,7 @@ def _agent_diagnostic_dependencies():
         current_time_ms=lambda: current_time_ms(),
         platform_version=lambda: platform.platform(),
         python_version=sys.version,
-        run_process=lambda *args, **kwargs: subprocess.run(
-            *args,
-            env=execution_environment.build_isolated_tool_environment(),
-            **kwargs,
-        ),
+        run_process=lambda *args, **kwargs: subprocess.run(*args, **kwargs),
         format_timestamp=lambda value: time.strftime(value),
         bundle_format_version=DIAGNOSTIC_BUNDLE_FORMAT_VERSION,
         playwright_config_filenames=PLAYWRIGHT_CONFIG_FILENAMES,
@@ -5463,7 +5397,8 @@ def get_active_agent_run_row():
                 f"""
                 SELECT *
                 FROM {table}
-                WHERE project_id = %s AND status IN ('queued', 'running', 'cancelling', 'awaiting_failure_action')
+                WHERE project_id = %s
+                  AND status IN ('queued', 'running', 'cancelling', 'awaiting_script_action')
                 ORDER BY created_at DESC
                 LIMIT 1
                 """,
@@ -5490,11 +5425,7 @@ def create_agent_run_record(requirement, created_by, plan_generation=None):
     project_id = get_current_project_id()
     run_id = f"agent-{uuid.uuid4().hex}"
     now_ms = current_time_ms()
-    plan_generation = redact_runtime_value(
-        normalize_plan_generation_request(
-            plan_generation or {}
-        )
-    )
+    plan_generation = normalize_plan_generation_request(plan_generation or {})
     with platform_mysql_connection(config) as connection:
         with connection.cursor() as cursor:
             cursor.execute(
@@ -5586,14 +5517,10 @@ def update_agent_run(run_id, status=None, current_step=None, suite_uid=None, sum
         values.append(str(suite_uid or "")[:64] or None)
     if summary is not None:
         fields.append("summary_json = %s")
-        values.append(
-            compact_json_dumps(
-                redact_runtime_value(summary)
-            )
-        )
+        values.append(compact_json_dumps(summary))
     if error is not None:
         fields.append("error = %s")
-        values.append(redact_sensitive_text(error))
+        values.append(str(error or ""))
     if finished:
         fields.append("finished_at = %s")
         values.append(current_time_ms())
@@ -5618,28 +5545,16 @@ def update_agent_step(run_id, step_key, status=None, input_data=None, output_dat
         values.append(validate_agent_step_status(status))
     if input_data is not None:
         fields.append("input_json = %s")
-        values.append(
-            compact_json_dumps(
-                redact_runtime_value(input_data)
-            )
-        )
+        values.append(compact_json_dumps(input_data))
     if output_data is not None:
         fields.append("output_json = %s")
-        values.append(
-            compact_json_dumps(
-                redact_runtime_value(output_data)
-            )
-        )
+        values.append(compact_json_dumps(output_data))
     if counts is not None:
         fields.append("counts_json = %s")
-        values.append(
-            compact_json_dumps(
-                redact_runtime_value(counts)
-            )
-        )
+        values.append(compact_json_dumps(counts))
     if error is not None:
         fields.append("error = %s")
-        values.append(redact_sensitive_text(error))
+        values.append(str(error or ""))
     if started:
         fields.append("started_at = COALESCE(started_at, %s)")
         values.append(current_time_ms())
@@ -6072,10 +5987,8 @@ def append_agent_event(run_id, step_key, event_type, message="", payload=None, j
                     validate_uid(run_id, "run_id"),
                     str(step_key or "")[:64] or None,
                     str(event_type or "log")[:32],
-                    redact_sensitive_text(message),
-                    compact_json_dumps(
-                        redact_runtime_value(payload or {})
-                    ),
+                    str(message or ""),
+                    compact_json_dumps(payload or {}),
                     job_id,
                     asset_id,
                     test_run_id,
@@ -6112,75 +6025,8 @@ def append_agent_item_retry_event(run_id, flow, message, event_type="status", st
 
 
 def supersede_agent_failed_script_review(run_id, flow, final_script):
-    config = require_platform_database()
-    table = get_agent_run_steps_table(config)
-    project_id = get_current_project_id()
-    run_id = validate_uid(run_id, "run_id")
-    flow = serialize_agent_item_retry_flow(flow) if flow and "result_json" in flow else dict(flow or {})
-    now_ms = current_time_ms()
-    with AGENT_RETRY_STEP_MERGE_LOCK:
-        with platform_mysql_connection(config) as connection:
-            with connection.cursor() as cursor:
-                cursor.execute(
-                    f"""
-                    SELECT output_json, counts_json
-                    FROM {table}
-                    WHERE project_id = %s AND run_id = %s AND step_key = 'review_failed_scripts'
-                    FOR UPDATE
-                    """,
-                    (project_id, run_id),
-                )
-                row = cursor.fetchone()
-                if not row:
-                    return None
-                output = load_json_column(row.get("output_json"), {})
-                output = output if isinstance(output, dict) else {}
-                decisions = list(output.get("decisions") if isinstance(output.get("decisions"), list) else [])
-                updated_decisions = []
-                superseded = 0
-                for decision in decisions:
-                    if agent_retry_flow_matches_item(flow, decision):
-                        decision = {
-                            **decision,
-                            "status": "superseded",
-                            "superseded": True,
-                            "superseded_by_retry_flow_id": flow.get("retry_flow_id") or "",
-                            "superseded_at": now_ms,
-                        }
-                        superseded += 1
-                    updated_decisions.append(decision)
-
-                scripts = list(output.get("scripts") if isinstance(output.get("scripts"), list) else [])
-                scripts = [item for item in scripts if not agent_retry_flow_matches_item(flow, item)]
-                output.update({"scripts": scripts, "decisions": updated_decisions})
-                counts = dict(load_json_column(row.get("counts_json"), {}))
-                counts["recovered"] = len(scripts)
-                counts["superseded"] = sum(
-                    1 for decision in updated_decisions if isinstance(decision, dict) and decision.get("superseded")
-                )
-                counts["excluded"] = sum(
-                    1
-                    for decision in updated_decisions
-                    if isinstance(decision, dict)
-                    and not decision.get("superseded")
-                    and decision.get("action") in {"exclude", "keep", None, ""}
-                )
-                cursor.execute(
-                    f"""
-                    UPDATE {table}
-                    SET output_json = %s, counts_json = %s, updated_at = %s
-                    WHERE project_id = %s AND run_id = %s AND step_key = 'review_failed_scripts'
-                    """,
-                    (
-                        compact_json_dumps(output),
-                        compact_json_dumps(counts),
-                        now_ms,
-                        project_id,
-                        run_id,
-                    ),
-                )
-            connection.commit()
-    return {"output": output, "counts": counts, "superseded": superseded}
+    del run_id, flow, final_script
+    return None
 
 
 def mark_agent_suite_stale_after_item_retry(run_id, flow, final_script):
@@ -6342,7 +6188,6 @@ def _requirement_module_model_dependencies():
         dedupe_chinese_artifact_naming_notice=lambda prompt: (
             dedupe_chinese_artifact_naming_notice(prompt)
         ),
-        redact_value=redact_natural_language_value,
     )
 
 
@@ -6373,7 +6218,6 @@ def _requirement_repository_dependencies():
         get_requirement_module=lambda requirement_id, module_uid: (
             get_requirement_module(requirement_id, module_uid)
         ),
-        redact_value=redact_natural_language_value,
     )
 
 
@@ -6914,7 +6758,6 @@ def stream_requirement_analysis(requirement):
     create_test_job("requirement_analysis", job_id=job_id, status="queued", prompt=full_prompt)
 
     def emit_status(status, error=None, extra=None):
-        error = redact_sensitive_text(error) if error else error
         payload = {
             "status": status,
             "requirement_uid": requirement.get("requirement_uid"),
@@ -6927,7 +6770,6 @@ def stream_requirement_analysis(requirement):
         return sse_payload("status", payload)
 
     def emit_log(message):
-        message = redact_sensitive_text(message)
         append_test_job_log(job_id, f"{message}\n")
         return sse_payload("log", {"message": message})
 
@@ -6937,12 +6779,8 @@ def stream_requirement_analysis(requirement):
         yield emit_log("需求解析任务已创建，正在调用 OpenCode。")
         response = send_opencode_prompt(full_prompt, default_agent="requirement-analyst")
         output_text = collect_opencode_response_text(response)
-        safe_output_text = redact_sensitive_text(output_text)
-        append_test_job_log(
-            job_id,
-            safe_output_text[-JOB_LOG_TAIL_LIMIT:],
-        )
-        yield sse_payload("delta", {"text": safe_output_text})
+        append_test_job_log(job_id, output_text[-JOB_LOG_TAIL_LIMIT:])
+        yield sse_payload("delta", {"text": output_text})
         parsed = extract_json_object_from_text(output_text)
         modules = normalize_analysis_json(parsed)
         saved_modules = save_requirement_modules_from_analysis(requirement, modules, job_id)
@@ -6952,12 +6790,11 @@ def stream_requirement_analysis(requirement):
         yield emit_log(f"需求解析完成，生成候选模块 {len(serialized_modules)} 个。")
         yield sse_payload("done", {"ok": True, "modules": serialized_modules, "job_id": job_id})
     except Exception as exc:
-        safe_error = redact_sensitive_text(exc)
-        append_test_job_log(job_id, f"需求解析失败：{safe_error}\n")
-        finish_test_job(job_id, "failed", error=safe_error)
-        yield emit_status("failed", safe_error)
-        yield emit_log(f"需求解析失败：{safe_error}")
-        yield sse_payload("done", {"ok": False, "status": "failed", "error": safe_error, "job_id": job_id})
+        append_test_job_log(job_id, f"需求解析失败：{exc}\n")
+        finish_test_job(job_id, "failed", error=str(exc))
+        yield emit_status("failed", str(exc))
+        yield emit_log(f"需求解析失败：{exc}")
+        yield sse_payload("done", {"ok": False, "status": "failed", "error": str(exc), "job_id": job_id})
 
 
 def agent_register_task(run_id):
@@ -7990,83 +7827,26 @@ def agent_generate_plans(run_id, requirement, modules, resume_output=None):
     return generated_plans
 
 
-def agent_review_plans(run_id, plans):
-    step_key = "review_plans"
-    agent_start_step(run_id, step_key, {"plan_count": len(plans)})
-    kept = []
-    decisions = []
-    counts = {"generated": len(plans), "kept": 0, "updated": 0, "deleted": 0}
-    for plan in plans:
-        agent_raise_if_cancelled(run_id)
-        key = (plan.get("module_name"), plan.get("plan_filename"))
-        path = Path(plan.get("path") or get_plan_file(plan["module_name"], plan["plan_filename"]))
-        content = path.read_text(encoding="utf-8") if path.exists() else ""
-        review_item = {**plan, "markdown": content[:40000]}
-        append_agent_event(run_id, step_key, "status", f"正在审查计划：{key[0]}/{key[1]}。", {"plan": {k: v for k, v in plan.items() if k != "markdown"}})
-        parsed = call_agent_reviewer(
-            run_id,
-            step_key,
-            f"审查 Markdown 测试计划：{key[0]}/{key[1]}。",
-            {
-                "kind": "plans",
-                "plans": [review_item],
-                "instructions": "Return exactly one decision with module_name, plan_filename, action, reason, optional markdown for update.",
-            },
-        )
-        plan_decisions = normalize_reviewer_decisions(parsed, ["plans"])
-        decision = next(
-            (
-                item
-                for item in plan_decisions
-                if item.get("module_name") == key[0] and item.get("plan_filename") == key[1]
-            ),
-            plan_decisions[0] if len(plan_decisions) == 1 else None,
-        ) or {"action": "keep", "reason": "reviewer 未返回该计划，默认保留。"}
-        decision = {
-            **decision,
-            "module_name": decision.get("module_name") or key[0],
-            "plan_filename": decision.get("plan_filename") or key[1],
-        }
-        decisions.append(decision)
-        action = decision.get("action")
-        plan_file = get_plan_file(plan["module_name"], plan["plan_filename"])
-        reason = decision.get("reason") or ""
-        if action == "delete":
-            delete_result = delete_plan_asset(
-                plan["module_name"],
-                plan["plan_filename"],
-                f"agent delete plan: {plan['module_name']}/{plan['plan_filename']}",
-            )
-            counts["deleted"] += 1
-            append_agent_event(
-                run_id,
-                step_key,
-                "decision",
-                f"归档删除计划：{key[0]}/{key[1]}。{reason}",
-                {**decision, "archive": delete_result.get("archive"), "asset": serialize_asset(delete_result.get("asset"))},
-                asset_id=(delete_result.get("asset") or {}).get("asset_id") if delete_result.get("asset") else None,
-            )
-            continue
-        if action == "update" and isinstance(decision.get("markdown"), str) and decision["markdown"].strip():
-            plan_file.write_text(decision["markdown"], encoding="utf-8", newline="")
-            asset = sync_plan_asset(
-                plan["module_name"],
-                plan_file,
-                change_source="agent_review",
-                message=f"agent review plan: {plan['module_name']}/{plan['plan_filename']}",
-            )
-            plan["asset"] = serialize_asset(asset)
-            counts["updated"] += 1
-            append_agent_event(run_id, step_key, "decision", f"修改计划：{key[0]}/{key[1]}。{reason}", decision, asset_id=asset.get("asset_id") if asset else None)
-        else:
-            append_agent_event(run_id, step_key, "decision", f"保留计划：{key[0]}/{key[1]}。{reason}", decision)
-        kept.append(plan)
-    counts["kept"] = len(kept)
-    agent_finish_step(run_id, step_key, {"plans": kept, "decisions": decisions}, counts)
-    return kept
+def build_agent_script_generation_prompt(plan):
+    module_name = validate_module_name(plan["module_name"])
+    plan_filename = validate_plan_filename(plan["plan_filename"])
+    return (
+        "@playwright-test-generator\n"
+        f"请根据 specs/{module_name}/{plan_filename} 生成Playwright测试文件。\n"
+        "每个测试文件里面只能有一个测试，测试文件名字必须为中文业务测试名.spec.ts，文件名主体不能包含英文字母。\n"
+        "平台会在提交任务时提供候选脚本路径，请只把生成结果写入候选路径；不要直接修改正式 tests 文件。\n"
+        "注意：每个Step下面尽量生成实际代码，如果实在没有代码，需要说明为什么。"
+    )
 
 
-def agent_generate_script_for_plan(run_id, step_key, plan, instructions=""):
+def agent_generate_script_for_plan(
+    run_id,
+    step_key,
+    plan,
+    *,
+    original_prompt=None,
+    supplemental_prompt="",
+):
     module_name = validate_module_name(plan["module_name"])
     plan_filename = validate_plan_filename(plan["plan_filename"])
     plan_file = get_plan_target_path(module_name, plan_filename)
@@ -8078,15 +7858,9 @@ def agent_generate_script_for_plan(run_id, step_key, plan, instructions=""):
     target_file = get_script_file(module_name, script_filename)
     plan_asset = sync_plan_asset(module_name, plan_file, change_source="manual", message=f"agent sync plan: {module_name}/{plan_filename}")
     job_id = f"generator-{uuid.uuid4().hex}"
-    prompt = (
-        "@playwright-test-generator\n"
-        f"请根据 specs/{module_name}/{plan_filename} 生成Playwright测试文件。\n"
-        "每个测试文件里面只能有一个测试，测试文件名字必须为中文业务测试名.spec.ts，文件名主体不能包含英文字母。\n"
-        "平台会在提交任务时提供候选脚本路径，请只把生成结果写入候选路径；不要直接修改正式 tests 文件。\n"
-        "注意：每个Step下面尽量生成实际代码，如果实在没有代码，需要说明为什么。"
-    )
-    if str(instructions or "").strip():
-        prompt += f"\n\n本次重新生成补充要求：\n{str(instructions).strip()}"
+    prompt = str(original_prompt or build_agent_script_generation_prompt(plan)).strip()
+    if str(supplemental_prompt or "").strip():
+        prompt += f"\n\n本次重新生成补充要求：\n{str(supplemental_prompt).strip()}"
     create_test_job("generator", job_id=job_id, status="queued", source_asset_id=plan_asset.get("asset_id") if plan_asset else None, prompt=prompt)
     candidate_file = get_script_generation_candidate_file(module_name, plan_filename, job_id)
     candidate_file.parent.mkdir(parents=True, exist_ok=True)
@@ -8527,21 +8301,44 @@ def agent_execute_generated_scripts(run_id, scripts):
     return passed, failures
 
 
-def agent_repair_script(run_id, step_key, script, instructions=""):
+def build_agent_script_repair_prompt(item, failure=None):
+    item = item if isinstance(item, dict) else {}
+    module_name = validate_module_name(item["module_name"])
+    filename = validate_script_filename(item["filename"])
+    plan_filename = validate_plan_filename(
+        item.get("plan_filename") or f"{module_name}.md"
+    )
+    prompt = (
+        "@playwright-test-healer\n"
+        f"请根据测试计划 specs/{module_name}/{plan_filename}，修复 tests/{module_name}/{filename}\n"
+        "要求：\n"
+        "1. 不允许删除或注释任何 STEP。\n"
+        "2. 保留执行视频。"
+    )
+    if isinstance(failure, dict) and failure:
+        prompt += "\n\n上次失败信息：\n" + json.dumps(
+            failure, ensure_ascii=False, indent=2
+        )
+    return prompt
+
+
+def agent_repair_script(
+    run_id,
+    step_key,
+    script,
+    *,
+    failure=None,
+    original_prompt=None,
+    supplemental_prompt="",
+):
     module_name = validate_module_name(script["module_name"])
     filename = validate_script_filename(script["filename"])
     script_file = get_script_file(module_name, filename)
     if not script_file.exists():
         raise FileNotFoundError(f"测试脚本不存在：{script_file}")
-    prompt = (
-        "@playwright-test-healer\n"
-        f"请根据测试计划 specs/{module_name}/{module_name}.md, 运行并修复 tests/{module_name}/{filename}\n"
-        "要求：\n"
-        "1. 不允许删除或注释任何 STEP。\n"
-        "2. 保留执行视频"
-    )
-    if str(instructions or "").strip():
-        prompt += f"\n\n本次重新修复补充要求：\n{str(instructions).strip()}"
+    prompt = str(original_prompt or build_agent_script_repair_prompt(script, failure)).strip()
+    if str(supplemental_prompt or "").strip():
+        prompt += f"\n\n本次重新修复补充要求：\n{str(supplemental_prompt).strip()}"
     script_asset = sync_script_asset(module_name, script_file, change_source="manual", message=f"agent sync script: {module_name}/{filename}")
     job_id = f"healer-{uuid.uuid4().hex}"
     create_test_job("healer", job_id=job_id, status="queued", target_asset_id=script_asset.get("asset_id") if script_asset else None, prompt=prompt)
@@ -8776,42 +8573,89 @@ def agent_execute_single_script_for_review(run_id, step_key, script):
     return result
 
 
-def resolve_agent_failure_dependency(name):
-    if name == "opencode_cancelled_type":
-        return OpencodeTaskCancelled
-    if name == "redact_value":
-        return lambda value: agent_diagnostics.redact_diagnostic_value(
-            value,
-            dependencies=_diagnostic_builder_dependencies(),
-        )
-    return globals()[name]
+def get_agent_script_preparation_output(run_id, step_key):
+    row = get_agent_step_row(run_id, step_key)
+    if not row:
+        return None
+    output = load_json_column(row.get("output_json"), None)
+    return output if isinstance(output, dict) else None
 
 
-agent_failure_handling.configure_failure_handling(
-    agent_failure_handling.failure_handling_dependencies_from_resolver(
-        AGENT_PROJECT_OPERATION_LOCK,
-        resolve_agent_failure_dependency,
+def get_agent_script_preparation_item_for_web(run_id, item_id):
+    item = agent_script_preparation.get_script_preparation_item(run_id, item_id)
+    script = item.get("current_script") if isinstance(item.get("current_script"), dict) else None
+    if script:
+        script_file = get_script_file(item["module_name"], item["filename"])
+        if script_file.is_file():
+            item["current_script"] = {
+                **script,
+                "content": script_file.read_text(encoding="utf-8"),
+            }
+    return item
+
+
+def save_agent_prepared_script(run_id, item, content, expected_revision_id=None):
+    del run_id, expected_revision_id
+    module_name = validate_module_name(item["module_name"])
+    filename = validate_script_filename(item["filename"])
+    script_file = get_script_file(module_name, filename)
+    script_file.parent.mkdir(parents=True, exist_ok=True)
+    script_file.write_text(str(content), encoding="utf-8", newline="")
+    asset = sync_script_asset(
+        module_name,
+        script_file,
+        change_source="manual",
+        message=f"agent manual edit: {module_name}/{filename}",
+    )
+    return {
+        "module_name": module_name,
+        "plan_filename": item.get("plan_filename") or "",
+        "filename": filename,
+        "path": str(script_file),
+        "asset": serialize_asset(asset),
+    }
+
+
+def analyze_agent_script_preparation_failure(run_id, step_key, payload):
+    return call_agent_failure_analyst(
+        run_id,
+        step_key,
+        "分析脚本准备失败，并在重新生成或重新修复之间给出唯一建议与补充 Prompt。",
+        payload,
+    )
+
+
+def resolve_agent_script_preparation_dependency(name):
+    dependencies = {
+        "load_step_output": get_agent_script_preparation_output,
+        "get_agent_run": get_agent_run_row,
+        "update_agent_step": update_agent_step,
+        "update_agent_run": update_agent_run,
+        "append_agent_event": append_agent_event,
+        "generate_script": agent_generate_script_for_plan,
+        "execute_script": agent_execute_generated_script,
+        "repair_script": agent_repair_script,
+        "analyze_failure": analyze_agent_script_preparation_failure,
+        "save_script": save_agent_prepared_script,
+        "build_generation_prompt": build_agent_script_generation_prompt,
+        "build_repair_prompt": build_agent_script_repair_prompt,
+        "resolve_script_filename": lambda plan: get_generated_script_filename_from_plan_filename(
+            plan["plan_filename"]
+        ),
+        "current_time_ms": current_time_ms,
+        "redact_value": lambda value: value,
+        "is_cancelled_error": lambda error: isinstance(error, OpencodeTaskCancelled),
+        "make_id": lambda prefix: f"{prefix}-{uuid.uuid4().hex}",
+        "waiting_run_status": "awaiting_script_action",
+    }
+    return dependencies[name]
+
+
+agent_script_preparation.configure_script_preparation(
+    agent_script_preparation.script_preparation_dependencies_from_resolver(
+        resolve_agent_script_preparation_dependency
     )
 )
-
-
-skip_agent_plan_review = agent_failure_handling.skip_agent_plan_review
-normalize_agent_failure_checkpoint_output = agent_failure_handling.normalize_agent_failure_checkpoint_output
-get_agent_failure_checkpoint_output = agent_failure_handling.get_agent_failure_checkpoint_output
-get_agent_failure_item = agent_failure_handling.get_agent_failure_item
-prepare_agent_failure_checkpoint = agent_failure_handling.prepare_agent_failure_checkpoint
-analyze_agent_failure_item = agent_failure_handling.analyze_agent_failure_item
-retry_agent_failure_item = agent_failure_handling.retry_agent_failure_item
-execute_agent_failure_item = agent_failure_handling.execute_agent_failure_item
-read_agent_failure_item_script = agent_failure_handling.read_agent_failure_item_script
-save_agent_failure_item_script = agent_failure_handling.save_agent_failure_item_script
-delete_agent_failure_item = agent_failure_handling.delete_agent_failure_item
-ignore_agent_failure_item = agent_failure_handling.ignore_agent_failure_item
-collect_agent_checkpoint_final_scripts = agent_failure_handling.collect_agent_checkpoint_final_scripts
-get_agent_failure_coverage_gap = agent_failure_handling.get_agent_failure_coverage_gap
-continue_agent_failure_checkpoint = agent_failure_handling.continue_agent_failure_checkpoint
-cancel_agent_failure_checkpoint = agent_failure_handling.cancel_agent_failure_checkpoint
-resume_agent_failure_checkpoint = agent_failure_handling.resume_agent_failure_checkpoint
 
 
 def agent_create_suite(run_id, requirement, scripts):
@@ -8882,6 +8726,112 @@ def agent_run_suite(run_id, suite):
     return output
 
 
+def finish_agent_after_script_preparation(
+    run_id,
+    requirement,
+    modules,
+    plans,
+    scripts,
+    preparation,
+    *,
+    suite=None,
+    resumed_from_step="",
+):
+    counts = preparation.get("counts") if isinstance(preparation, dict) else {}
+    if scripts:
+        suite = suite or agent_create_suite(run_id, requirement, scripts)
+        execution = agent_run_suite(run_id, suite)
+        execution_summary = execution.get("summary") or {}
+        final_status = "succeeded"
+    else:
+        skip_reason = "所有脚本均已放弃，没有脚本进入测试集。"
+        for step_key, output, skipped_counts in (
+            ("create_suite", {"suite": None}, {"scripts": 0, "skipped": 1}),
+            ("run_suite", {"summary": {}}, {"total": 0, "skipped": 1}),
+        ):
+            update_agent_step(
+                run_id, step_key, status="skipped",
+                input_data={"script_count": 0},
+                output_data={**output, "reason": skip_reason},
+                counts=skipped_counts, error="", started=True, finished=True,
+            )
+        suite = None
+        execution_summary = {}
+        final_status = "succeeded_with_unresolved"
+    final_summary = {
+        "requirement": serialize_requirement(requirement, include_content=False),
+        "module_count": len(modules),
+        "plan_count": len(plans),
+        "script_count": len(scripts),
+        "abandoned_script_count": int((counts or {}).get("abandoned") or 0),
+        "suite": suite,
+        "execution": execution_summary,
+        "pipeline_version": CURRENT_AGENT_PIPELINE_VERSION,
+    }
+    if resumed_from_step:
+        final_summary["resumed_from_step"] = resumed_from_step
+    update_agent_run(
+        run_id,
+        status=final_status,
+        current_step="run_suite",
+        summary=final_summary,
+        error="",
+        finished=True,
+    )
+    append_agent_event(run_id, "run_suite", "status", "Agent 全流程执行完成。", final_summary)
+
+
+def claim_agent_script_preparation_continue(run_id):
+    config = require_platform_database()
+    return agent_script_preparation.claim_script_preparation_continue_record(
+        connection_factory=lambda: platform_mysql_connection(config),
+        runs_table=get_agent_runs_table(config),
+        steps_table=get_agent_run_steps_table(config),
+        project_id=get_current_project_id(),
+        run_id=validate_uid(run_id, "run_id"),
+        now_ms=current_time_ms(),
+    )
+
+
+def get_prepared_scripts(preparation):
+    return [
+        item["current_script"]
+        for item in (preparation or {}).get("items") or []
+        if item.get("status") == "ready"
+        and item.get("included_in_suite")
+        and isinstance(item.get("current_script"), dict)
+    ]
+
+
+def mark_agent_workflow_cancelled(run_id, error):
+    steps = [serialize_agent_step(row) for row in list_agent_steps(run_id)]
+    for step in steps:
+        if step.get("status") == "running":
+            update_agent_step(
+                run_id,
+                step["step_key"],
+                status="cancelled",
+                error=str(error),
+                finished=True,
+            )
+    update_agent_run(run_id, status="cancelled", error=str(error), finished=True)
+    append_agent_event(run_id, "", "status", "Agent 任务已取消。", {"error": str(error)})
+
+
+def mark_agent_workflow_failed(run_id, error, fallback_step=""):
+    current_step = (get_agent_run_row(run_id) or {}).get("current_step") or fallback_step
+    if current_step:
+        agent_fail_step(run_id, current_step, error)
+    update_agent_run(run_id, status="failed", error=str(error), finished=True)
+    append_agent_event(
+        run_id,
+        current_step,
+        "error",
+        f"Agent 任务失败：{error}",
+        {"error": str(error)},
+    )
+
+
 def run_agent_workflow(run_id, project, author):
     agent_register_task(run_id)
     with use_project_context(project), use_author_context(f"agent:{author or 'platform'}"):
@@ -8892,7 +8842,6 @@ def run_agent_workflow(run_id, project, author):
             requirement = get_requirement_by_uid(run.get("requirement_uid"))
             if not requirement:
                 raise RuntimeError("需求不存在。")
-
             update_agent_run(run_id, status="running", current_step="upload_requirement")
             update_agent_step(
                 run_id,
@@ -8903,49 +8852,65 @@ def run_agent_workflow(run_id, project, author):
                 started=True,
                 finished=True,
             )
-            append_agent_event(run_id, "upload_requirement", "status", "需求已准备完成。", {"requirement_uid": requirement.get("requirement_uid")})
-
-            modules = agent_analyze_requirement(run_id, requirement)
-            modules = agent_review_modules(run_id, requirement, modules)
+            append_agent_event(
+                run_id,
+                "upload_requirement",
+                "status",
+                "需求已准备完成。",
+                {"requirement_uid": requirement.get("requirement_uid")},
+            )
+            modules = agent_review_modules(
+                run_id,
+                requirement,
+                agent_analyze_requirement(run_id, requirement),
+            )
             plans = agent_generate_plans(run_id, requirement, modules)
-            plans = skip_agent_plan_review(run_id, plans)
-            generated_scripts, generation_failures = agent_generate_scripts(run_id, plans)
-            passed_scripts, execution_failures = agent_execute_generated_scripts(run_id, generated_scripts)
-            repaired_scripts, repair_failures = agent_repair_scripts(run_id, execution_failures)
-            failure_items = prepare_agent_failure_checkpoint(run_id, generation_failures, repair_failures)
-            if failure_items:
+            preparation = agent_script_preparation.run_agent_script_preparation(run_id, plans)
+            if preparation.get("paused"):
                 return
-            final_scripts = dedupe_agent_scripts([*passed_scripts, *repaired_scripts])
-            suite = agent_create_suite(run_id, requirement, final_scripts)
-            execution = agent_run_suite(run_id, suite)
-            final_summary = {
-                "requirement": serialize_requirement(requirement, include_content=False),
-                "module_count": len(modules),
-                "plan_count": len(plans),
-                "script_count": len(final_scripts),
-                "suite": suite,
-                "execution": execution.get("summary") or {},
-                "pipeline_version": CURRENT_AGENT_PIPELINE_VERSION,
-                "partial_success": False,
-                "coverage_gap": {"count": 0, "items": []},
-            }
-            update_agent_run(run_id, status="succeeded", current_step="run_suite", summary=final_summary, error="", finished=True)
-            append_agent_event(run_id, "run_suite", "status", "Agent 全流程执行完成。", final_summary)
+            finish_agent_after_script_preparation(
+                run_id,
+                requirement,
+                modules,
+                plans,
+                preparation.get("final_scripts") or [],
+                preparation,
+            )
         except OpencodeTaskCancelled as exc:
-            for step_key, _ in AGENT_STEP_ORDER:
-                step_rows = [serialize_agent_step(row) for row in list_agent_steps(run_id)]
-                step = next((item for item in step_rows if item["step_key"] == step_key), None)
-                if step and step["status"] == "running":
-                    update_agent_step(run_id, step_key, status="cancelled", error=str(exc), finished=True)
-            update_agent_run(run_id, status="cancelled", error=str(exc), finished=True)
-            append_agent_event(run_id, "", "status", "Agent 任务已取消。", {"error": str(exc)})
+            mark_agent_workflow_cancelled(run_id, exc)
         except Exception as exc:
-            current_run = get_agent_run_row(run_id) or {}
-            current_step = current_run.get("current_step") or ""
-            if current_step:
-                agent_fail_step(run_id, current_step, exc)
-            update_agent_run(run_id, status="failed", error=str(exc), finished=True)
-            append_agent_event(run_id, current_step, "error", f"Agent 任务失败：{exc}", {"error": str(exc)})
+            mark_agent_workflow_failed(run_id, exc)
+        finally:
+            agent_set_current_job(run_id, "")
+            agent_cleanup_task(run_id)
+
+
+def run_agent_script_preparation_continue_workflow(run_id, project, author):
+    agent_register_task(run_id)
+    with use_project_context(project), use_author_context(f"agent:{author or 'platform'}"):
+        try:
+            run = get_agent_run_row(run_id)
+            if not run or run.get("status") in AGENT_TERMINAL_STATUSES:
+                return
+            requirement = get_requirement_by_uid(run.get("requirement_uid"))
+            if not requirement:
+                raise RuntimeError("需求不存在。")
+            modules = require_agent_step_list_output(run_id, "review_modules", "modules")
+            plans = require_agent_step_list_output(run_id, "generate_plans", "plans")
+            preparation = agent_script_preparation.get_script_preparation_snapshot(run_id)
+            update_agent_run(run_id, status="running", current_step="create_suite", error="")
+            finish_agent_after_script_preparation(
+                run_id,
+                requirement,
+                modules,
+                plans,
+                get_prepared_scripts(preparation),
+                preparation,
+            )
+        except OpencodeTaskCancelled as exc:
+            mark_agent_workflow_cancelled(run_id, exc)
+        except Exception as exc:
+            mark_agent_workflow_failed(run_id, exc, "prepare_scripts")
         finally:
             agent_set_current_job(run_id, "")
             agent_cleanup_task(run_id)
@@ -8961,14 +8926,17 @@ def run_agent_resume_workflow(run_id, project, author, from_step, resume_context
             run = get_agent_run_row(run_id)
             if not run:
                 return
-            pipeline_version = (serialize_agent_run(run) or {}).get("pipeline_version") or 1
             requirement = get_requirement_by_uid(run.get("requirement_uid"))
             if not requirement:
                 raise RuntimeError("需求不存在。")
-
-            append_agent_event(run_id, from_step, "status", f"开始从步骤继续执行：{agent_step_name(from_step)}。", {"from_step": from_step})
-
-            if resume_index <= AGENT_STEP_INDEX_BY_KEY["upload_requirement"]:
+            append_agent_event(
+                run_id,
+                from_step,
+                "status",
+                f"开始从步骤继续执行：{agent_step_name(from_step)}。",
+                {"from_step": from_step},
+            )
+            if resume_index == 0:
                 update_agent_run(run_id, status="running", current_step="upload_requirement")
                 update_agent_step(
                     run_id,
@@ -8979,128 +8947,55 @@ def run_agent_resume_workflow(run_id, project, author, from_step, resume_context
                     started=True,
                     finished=True,
                 )
-                append_agent_event(run_id, "upload_requirement", "status", "需求已准备完成。", {"requirement_uid": requirement.get("requirement_uid")})
-
-            if resume_index <= AGENT_STEP_INDEX_BY_KEY["analyze_requirement"]:
-                modules = agent_analyze_requirement(run_id, requirement)
-            elif resume_index <= AGENT_STEP_INDEX_BY_KEY["review_modules"]:
-                modules = require_agent_step_list_output(run_id, "analyze_requirement", "modules")
-            else:
-                modules = require_agent_step_list_output(run_id, "review_modules", "modules")
-
+            modules = (
+                agent_analyze_requirement(run_id, requirement)
+                if resume_index <= AGENT_STEP_INDEX_BY_KEY["analyze_requirement"]
+                else require_agent_step_list_output(run_id, "analyze_requirement", "modules")
+            )
             if resume_index <= AGENT_STEP_INDEX_BY_KEY["review_modules"]:
                 modules = agent_review_modules(run_id, requirement, modules)
-
-            if resume_index <= AGENT_STEP_INDEX_BY_KEY["generate_plans"]:
-                plans = agent_generate_plans(
+            else:
+                modules = require_agent_step_list_output(run_id, "review_modules", "modules")
+            plans = (
+                agent_generate_plans(
                     run_id,
                     requirement,
                     modules,
                     resume_output=resume_context.get("generate_plans"),
                 )
+                if resume_index <= AGENT_STEP_INDEX_BY_KEY["generate_plans"]
+                else require_agent_step_list_output(run_id, "generate_plans", "plans")
+            )
+            if resume_index <= AGENT_STEP_INDEX_BY_KEY["prepare_scripts"]:
+                preparation = agent_script_preparation.run_agent_script_preparation(run_id, plans)
+                scripts = preparation.get("final_scripts") or []
             else:
-                plans = require_agent_step_list_output(run_id, "generate_plans", "plans")
-
-            if resume_index <= AGENT_STEP_INDEX_BY_KEY["review_plans"]:
-                plans = skip_agent_plan_review(run_id, plans)
-            elif pipeline_version < CURRENT_AGENT_PIPELINE_VERSION:
-                plans = require_agent_step_list_output(run_id, "review_plans", "plans")
-
-            if resume_index <= AGENT_STEP_INDEX_BY_KEY["generate_scripts"]:
-                generated_scripts, generation_failures = agent_generate_scripts(run_id, plans)
-            else:
-                generate_scripts_output = get_agent_step_output(run_id, "generate_scripts")
-                generated_scripts = generate_scripts_output.get("scripts") or []
-                generation_failures = generate_scripts_output.get("failures") or []
-                if not isinstance(generated_scripts, list) or not isinstance(generation_failures, list):
-                    raise RuntimeError("脚本生成步骤输出格式无效，无法恢复。")
-
-            if resume_index <= AGENT_STEP_INDEX_BY_KEY["execute_scripts"]:
-                passed_scripts, execution_failures = agent_execute_generated_scripts(run_id, generated_scripts)
-            else:
-                execute_scripts_output = get_optional_agent_step_output(run_id, "execute_scripts")
-                if execute_scripts_output is None:
-                    passed_scripts = []
-                    execution_failures = generated_scripts
-                    append_agent_event(
-                        run_id,
-                        "execute_scripts",
-                        "status",
-                        "未找到脚本执行步骤输出，按旧流程将生成脚本交给修复步骤。",
-                        {"scripts": len(generated_scripts)},
-                    )
-                else:
-                    passed_scripts = execute_scripts_output.get("scripts") or []
-                    execution_failures = execute_scripts_output.get("failures") or []
-                    if not isinstance(passed_scripts, list) or not isinstance(execution_failures, list):
-                        raise RuntimeError("脚本执行步骤输出格式无效，无法恢复。")
-
-            if resume_index <= AGENT_STEP_INDEX_BY_KEY["repair_scripts"]:
-                repaired_scripts, repair_failures = agent_repair_scripts(run_id, execution_failures)
-            else:
-                repair_scripts_output = get_agent_step_output(run_id, "repair_scripts")
-                repaired_scripts = repair_scripts_output.get("scripts") or []
-                repair_failures = repair_scripts_output.get("failures") or []
-                if not isinstance(repaired_scripts, list) or not isinstance(repair_failures, list):
-                    raise RuntimeError("脚本修复步骤输出格式无效，无法恢复。")
-
-            if resume_index <= AGENT_STEP_INDEX_BY_KEY["review_failed_scripts"]:
-                failure_items = prepare_agent_failure_checkpoint(run_id, generation_failures, repair_failures)
-                if failure_items:
-                    return
-                recovered_scripts = []
-            else:
-                recovered_scripts = require_agent_step_list_output(run_id, "review_failed_scripts", "scripts")
-
-            final_scripts = dedupe_agent_scripts([*passed_scripts, *repaired_scripts, *recovered_scripts])
-
-            if resume_index <= AGENT_STEP_INDEX_BY_KEY["create_suite"]:
-                suite = agent_create_suite(run_id, requirement, final_scripts)
-            else:
-                create_suite_output = get_agent_step_output(run_id, "create_suite")
-                suite = create_suite_output.get("suite")
+                preparation = agent_script_preparation.get_script_preparation_snapshot(run_id)
+                scripts = get_prepared_scripts(preparation)
+            if preparation.get("paused"):
+                return
+            suite = None
+            if resume_index > AGENT_STEP_INDEX_BY_KEY["create_suite"]:
+                suite = get_agent_step_output(run_id, "create_suite").get("suite")
                 if not isinstance(suite, dict):
                     raise RuntimeError("测试集步骤输出格式无效，无法恢复。")
-
-            execution = agent_run_suite(run_id, suite)
-            coverage_gap = get_agent_failure_coverage_gap(run_id)
-            partial_success = bool(coverage_gap["count"])
-            final_summary = {
-                "requirement": serialize_requirement(requirement, include_content=False),
-                "module_count": len(modules),
-                "plan_count": len(plans),
-                "script_count": len(final_scripts),
-                "suite": suite,
-                "execution": execution.get("summary") or {},
-                "resumed_from_step": from_step,
-                "pipeline_version": CURRENT_AGENT_PIPELINE_VERSION,
-                "partial_success": partial_success,
-                "coverage_gap": coverage_gap,
-            }
-            final_status = "succeeded_with_unresolved" if partial_success else "succeeded"
-            update_agent_run(run_id, status=final_status, current_step="run_suite", summary=final_summary, error="", finished=True)
-            append_agent_event(run_id, "run_suite", "status", "Agent 恢复流程执行完成。", final_summary)
+            finish_agent_after_script_preparation(
+                run_id,
+                requirement,
+                modules,
+                plans,
+                scripts,
+                preparation,
+                suite=suite,
+                resumed_from_step=from_step,
+            )
         except OpencodeTaskCancelled as exc:
-            for step_key, _ in AGENT_STEP_ORDER:
-                step_rows = [serialize_agent_step(row) for row in list_agent_steps(run_id)]
-                step = next((item for item in step_rows if item["step_key"] == step_key), None)
-                if step and step["status"] == "running":
-                    update_agent_step(run_id, step_key, status="cancelled", error=str(exc), finished=True)
-            update_agent_run(run_id, status="cancelled", error=str(exc), finished=True)
-            append_agent_event(run_id, "", "status", "Agent 恢复任务已取消。", {"error": str(exc)})
+            mark_agent_workflow_cancelled(run_id, exc)
         except Exception as exc:
-            current_run = get_agent_run_row(run_id) or {}
-            current_step = current_run.get("current_step") or from_step
-            if current_step:
-                agent_fail_step(run_id, current_step, exc)
-            update_agent_run(run_id, status="failed", error=str(exc), finished=True)
-            append_agent_event(run_id, current_step, "error", f"Agent 恢复任务失败：{exc}", {"error": str(exc), "from_step": from_step})
+            mark_agent_workflow_failed(run_id, exc, from_step)
         finally:
             agent_set_current_job(run_id, "")
             agent_cleanup_task(run_id)
-
-
-run_agent_failure_continue_workflow = agent_failure_handling.run_agent_failure_continue_workflow
 
 
 def start_agent_thread(run_id, project, author):
@@ -9109,9 +9004,9 @@ def start_agent_thread(run_id, project, author):
     return thread
 
 
-def start_agent_failure_continue_thread(run_id, project, author):
+def start_agent_script_preparation_continue_thread(run_id, project, author):
     thread = threading.Thread(
-        target=run_agent_failure_continue_workflow,
+        target=run_agent_script_preparation_continue_workflow,
         args=(run_id, project, author),
         daemon=True,
     )
@@ -10199,11 +10094,23 @@ def resolve_optional_path(value, base_dir=None):
     return (base_dir / path).resolve(strict=False)
 
 
+def resolve_database_baseline_marker_path(config):
+    project_root = get_project_root()
+    marker_path = resolve_optional_path(config.get("marker_path"), project_root)
+    if marker_path:
+        return marker_path
+    return project_root / ".database-baseline" / "baseline.marker.json"
+
+
 def resolve_database_baseline_lock_path(config):
     project_root = get_project_root()
     lock_path = resolve_optional_path(config.get("lock_path"), project_root)
     if lock_path:
         return lock_path
+
+    mode = config.get("mode")
+    if mode == "command":
+        return resolve_database_baseline_marker_path(config).parent / DATABASE_BASELINE_LOCK_DIR_NAME
 
     baseline_path = resolve_optional_path(config.get("baseline_path"))
     database_path = resolve_optional_path(config.get("database_path"))
@@ -10452,10 +10359,6 @@ def finalize_script_generation(module_name, plan_filename, plan_file, target_fil
         )
         source_content = source_file.read_text(encoding="utf-8")
         validate_generated_script_content(source_content, target_file.name)
-        source_security.assert_no_embedded_secrets(
-            source_content,
-            source_label="Generated Playwright script",
-        )
         source_bytes = source_content.encode("utf-8")
 
         allowed_changed = {target_key}
@@ -10517,8 +10420,10 @@ def get_import_path_between(source_file, importing_dir):
 
 def build_database_baseline_runtime_config(config):
     project_root = get_project_root()
+    working_directory = resolve_optional_path(config.get("working_directory"))
     database_path = resolve_optional_path(config.get("database_path"))
     baseline_path = resolve_optional_path(config.get("baseline_path"))
+    marker_path = resolve_database_baseline_marker_path(config)
     lock_path = resolve_database_baseline_lock_path(config)
 
     return {
@@ -10527,7 +10432,11 @@ def build_database_baseline_runtime_config(config):
         "projectRoot": str(project_root),
         "databasePath": str(database_path) if database_path else "",
         "baselinePath": str(baseline_path) if baseline_path else "",
+        "markerPath": str(marker_path) if marker_path else "",
         "lockPath": str(lock_path),
+        "workingDirectory": str(working_directory) if working_directory else "",
+        "backupCommand": config.get("backup_command", ""),
+        "restoreCommand": config.get("restore_command", ""),
         "timeoutSeconds": config.get("timeout_seconds") or DEFAULT_DATABASE_BASELINE_TIMEOUT_SECONDS,
     }
 
@@ -10536,6 +10445,7 @@ def database_baseline_global_setup_source():
     return r"""const fs = require("node:fs");
 const fsp = require("node:fs/promises");
 const path = require("node:path");
+const { spawn } = require("node:child_process");
 
 const configPath = path.join(__dirname, "database-baseline.config.json");
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -10593,6 +10503,40 @@ async function acquireLock(config) {
   }
 }
 
+async function runCommand(command, workingDirectory, timeoutSeconds, label) {
+  if (!command || (Array.isArray(command) && command.length === 0)) {
+    throw new Error(`Database baseline ${label} command is not configured.`);
+  }
+
+  if (workingDirectory && !(await pathExists(workingDirectory))) {
+    throw new Error(`Database baseline working directory does not exist: ${workingDirectory}`);
+  }
+
+  const timeoutMs = Math.max(Number(timeoutSeconds || 1800), 1) * 1000;
+
+  const child = Array.isArray(command)
+    ? spawn(command[0], command.slice(1), { cwd: workingDirectory || undefined, windowsHide: true })
+    : spawn(command, [], { cwd: workingDirectory || undefined, shell: true, windowsHide: true });
+
+  const timer = setTimeout(() => {
+    child.kill("SIGTERM");
+  }, timeoutMs);
+
+  child.stdout?.resume();
+  child.stderr?.resume();
+
+  const exitCode = await new Promise((resolve, reject) => {
+    child.on("error", reject);
+    child.on("close", resolve);
+  }).finally(() => clearTimeout(timer));
+
+  if (exitCode !== 0) {
+    throw new Error(`Database baseline ${label} failed with exit code ${exitCode}.`);
+  }
+
+  console.log(`Database baseline ${label} completed.`);
+}
+
 async function prepareFileBaseline(config) {
   if (!config.databasePath) {
     throw new Error("databasePath is not configured.");
@@ -10615,6 +10559,26 @@ async function prepareFileBaseline(config) {
   console.log("Database baseline created.");
 }
 
+async function prepareCommandBaseline(config) {
+  if (!config.markerPath) {
+    throw new Error("markerPath is not configured.");
+  }
+
+  await fsp.mkdir(path.dirname(config.markerPath), { recursive: true });
+  if (await pathExists(config.markerPath)) {
+    await runCommand(config.restoreCommand, config.workingDirectory, config.timeoutSeconds, "restore");
+    return;
+  }
+
+  await runCommand(config.backupCommand, config.workingDirectory, config.timeoutSeconds, "backup");
+  await fsp.writeFile(
+    config.markerPath,
+    JSON.stringify({ createdAt: new Date().toISOString(), mode: "command" }, null, 2),
+    "utf8",
+  );
+  console.log("Database baseline marker created.");
+}
+
 async function main() {
   if (!fs.existsSync(configPath)) {
     return;
@@ -10629,6 +10593,10 @@ async function main() {
   try {
     if (config.mode === "file") {
       await prepareFileBaseline(config);
+      return;
+    }
+    if (config.mode === "command") {
+      await prepareCommandBaseline(config);
       return;
     }
     throw new Error(`Unsupported database baseline mode: ${config.mode}`);
@@ -10716,6 +10684,30 @@ def ensure_database_baseline_playwright_files(config):
     return [f"已同步 Playwright 数据库基线文件：{', '.join(changed)}"]
 
 
+def run_database_baseline_command(command, working_directory, timeout_seconds, action_label):
+    if not command:
+        raise RuntimeError(f"已启用数据库基线，但未配置 {action_label} 命令。")
+
+    cwd = resolve_optional_path(working_directory) if working_directory else None
+    if cwd and not cwd.exists():
+        raise RuntimeError(f"数据库基线工作目录不存在：{cwd}")
+
+    shell = isinstance(command, str)
+    completed = subprocess.run(
+        command,
+        cwd=str(cwd) if cwd else None,
+        shell=shell,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        timeout=timeout_seconds,
+    )
+
+    if completed.returncode != 0:
+        raise RuntimeError(f"数据库基线{action_label}失败，退出码：{completed.returncode}")
+
+    return f"数据库基线{action_label}完成。"
+
+
 def prepare_file_database_baseline(config):
     database_path = resolve_optional_path(config.get("database_path"))
     baseline_path = resolve_optional_path(config.get("baseline_path"))
@@ -10736,6 +10728,41 @@ def prepare_file_database_baseline(config):
     return ["数据库基线创建完成。"]
 
 
+def prepare_command_database_baseline(config):
+    marker_path = resolve_database_baseline_marker_path(config)
+    marker_path.parent.mkdir(parents=True, exist_ok=True)
+    timeout_seconds = config.get("timeout_seconds") or DEFAULT_DATABASE_BASELINE_TIMEOUT_SECONDS
+    working_directory = config.get("working_directory")
+
+    if marker_path.exists():
+        message = run_database_baseline_command(
+            config.get("restore_command"),
+            working_directory,
+            timeout_seconds,
+            "恢复",
+        )
+        return [message]
+
+    message = run_database_baseline_command(
+        config.get("backup_command"),
+        working_directory,
+        timeout_seconds,
+        "备份",
+    )
+    marker_path.write_text(
+        json.dumps(
+            {
+                "created_at": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
+                "mode": "command",
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    return [message]
+
+
 def prepare_database_baseline_for_test():
     config = get_database_baseline_config()
     if not config.get("enabled"):
@@ -10743,9 +10770,13 @@ def prepare_database_baseline_for_test():
 
     messages = ensure_database_baseline_playwright_files(config)
     with database_baseline_lock(config):
-        if config.get("mode") == "file":
+        mode = config.get("mode")
+        if mode == "file":
             return [*messages, *prepare_file_database_baseline(config)]
-    raise RuntimeError("数据库基线只支持 file 模式。")
+        if mode == "command":
+            return [*messages, *prepare_command_database_baseline(config)]
+
+    raise RuntimeError(f"不支持的数据库基线模式：{mode}")
 
 
 def get_npx_executable():
@@ -11274,10 +11305,9 @@ def make_job_snapshot(job):
 
 
 def update_generation_job(job_id, **updates):
-    safe_updates = redact_runtime_value(updates)
     with PLAN_GENERATION_LOCK:
         job = PLAN_GENERATION_JOBS[job_id]
-        job.update(safe_updates)
+        job.update(updates)
         job["updated_at"] = time.time()
         snapshot = make_job_snapshot(job)
 
@@ -11289,7 +11319,6 @@ def update_generation_job(job_id, **updates):
 
 
 def append_generation_log(job_id, message):
-    message = redact_sensitive_text(message)
     with PLAN_GENERATION_LOCK:
         job = PLAN_GENERATION_JOBS[job_id]
         job["logs"].append(message)
@@ -11342,7 +11371,7 @@ def opencode_request(path, payload=None, timeout=None, method=None, query=None, 
     data = None
     headers = opencode_headers(accept=accept)
     if payload is not None:
-        data = json.dumps(redact_natural_language_value(payload), ensure_ascii=False).encode("utf-8")
+        data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         headers["Content-Type"] = "application/json"
 
     request_method = method or ("POST" if payload is not None else "GET")
@@ -11358,18 +11387,9 @@ def opencode_request(path, payload=None, timeout=None, method=None, query=None, 
             body = response.read().decode("utf-8")
     except urlerror.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")
-        detail = redact_sensitive_text(
-            body or exc.reason,
-            limit=2000,
-        )
-        raise RuntimeError(
-            f"OpenCode HTTP {exc.code}: {detail}"
-        ) from exc
+        raise RuntimeError(f"OpenCode HTTP {exc.code}: {body or exc.reason}") from exc
     except urlerror.URLError as exc:
-        detail = redact_sensitive_text(exc.reason, limit=1000)
-        raise RuntimeError(
-            f"无法连接 OpenCode Server: {detail}"
-        ) from exc
+        raise RuntimeError(f"无法连接 OpenCode Server: {exc.reason}") from exc
 
     if not body:
         return {}
@@ -11377,9 +11397,7 @@ def opencode_request(path, payload=None, timeout=None, method=None, query=None, 
     try:
         return json.loads(body)
     except json.JSONDecodeError:
-        return {
-            "raw": redact_sensitive_text(body, limit=4000)
-        }
+        return {"raw": body}
 
 
 def register_opencode_task(job_id, label=None):
@@ -11483,19 +11501,9 @@ def opencode_event_stream(timeout=None):
         return urlrequest.urlopen(request_obj, timeout=timeout)
     except urlerror.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")
-        detail = redact_sensitive_text(
-            body or exc.reason,
-            limit=2000,
-        )
-        raise RuntimeError(
-            "OpenCode Event Stream HTTP "
-            f"{exc.code}: {detail}"
-        ) from exc
+        raise RuntimeError(f"OpenCode Event Stream HTTP {exc.code}: {body or exc.reason}") from exc
     except urlerror.URLError as exc:
-        detail = redact_sensitive_text(exc.reason, limit=1000)
-        raise RuntimeError(
-            f"无法连接 OpenCode Event Stream: {detail}"
-        ) from exc
+        raise RuntimeError(f"无法连接 OpenCode Event Stream: {exc.reason}") from exc
 
 
 def format_opencode_execution_error(message):
@@ -11644,8 +11652,6 @@ def stream_plan_generation(
     job_id=None,
 ):
     session_id = None
-    script_target = Path(target_file) if Path(target_file).name.endswith(".spec.ts") else None
-    script_snapshot = read_file_bytes(script_target) if script_target else None
     prompt_error = []
     seen_tool_states = set()
     seen_tool_inputs = set()
@@ -11668,7 +11674,6 @@ def stream_plan_generation(
         return target_file.exists()
 
     def emit_log(message):
-        message = redact_sensitive_text(message)
         if job_id and message:
             append_test_job_log(job_id, f"{message}\n")
         return sse_payload("log", {"message": message})
@@ -11706,7 +11711,6 @@ def stream_plan_generation(
         yield sse_payload("done", done_payload)
 
     def emit_status(status, error=None, extra=None):
-        error = redact_sensitive_text(error) if error else error
         payload = {
             "status": status,
             "module_name": module_name,
@@ -11740,7 +11744,6 @@ def stream_plan_generation(
         nonlocal streamed_any_text
         if not text:
             return ""
-        text = redact_sensitive_text(text)
         streamed_any_text = True
         if job_id:
             append_test_job_log(job_id, text)
@@ -12215,21 +12218,12 @@ def stream_plan_generation(
 
         yield from emit_success_result()
     except OpencodeTaskCancelled as exc:
-        safe_error = redact_sensitive_text(exc)
         if job_id:
-            append_test_job_log(job_id, f"{safe_error}\n")
-            finish_test_job(
-                job_id,
-                "cancelled",
-                error=safe_error,
-            )
-        yield emit_status("cancelled", safe_error)
-        yield emit_log(safe_error)
-        done_payload = {
-            "ok": False,
-            "status": "cancelled",
-            "error": safe_error,
-        }
+            append_test_job_log(job_id, f"{exc}\n")
+            finish_test_job(job_id, "cancelled", error=str(exc))
+        yield emit_status("cancelled", str(exc))
+        yield emit_log(str(exc))
+        done_payload = {"ok": False, "status": "cancelled", "error": str(exc)}
         if job_id:
             done_payload["job_id"] = job_id
             done_payload["job"] = serialize_job(get_test_job(job_id))
@@ -12242,40 +12236,17 @@ def stream_plan_generation(
                 pass
         raise
     except Exception as exc:
-        safe_error = redact_sensitive_text(exc)
         if job_id:
-            append_test_job_log(
-                job_id,
-                f"任务失败：{safe_error}\n",
-            )
-            finish_test_job(
-                job_id,
-                "failed",
-                error=safe_error,
-            )
-        yield emit_status("failed", safe_error)
-        yield emit_log(f"任务失败：{safe_error}")
-        done_payload = {
-            "ok": False,
-            "error": safe_error,
-            "status": "failed",
-        }
+            append_test_job_log(job_id, f"任务失败：{exc}\n")
+            finish_test_job(job_id, "failed", error=str(exc))
+        yield emit_status("failed", str(exc))
+        yield emit_log(f"任务失败：{exc}")
+        done_payload = {"ok": False, "error": str(exc), "status": "failed"}
         if job_id:
             done_payload["job_id"] = job_id
             done_payload["job"] = serialize_job(get_test_job(job_id))
         yield sse_payload("done", done_payload)
     finally:
-        if script_target and script_target.exists():
-            try:
-                source_security.assert_no_embedded_secrets(
-                    script_target.read_text(encoding="utf-8"),
-                    source_label="Generated Playwright script",
-                )
-            except (UnicodeDecodeError, ValueError):
-                if script_snapshot is None:
-                    script_target.unlink(missing_ok=True)
-                else:
-                    write_file_atomically(script_target, script_snapshot)
         cleanup_opencode_task(cancel_job_id)
 
 
@@ -12302,16 +12273,8 @@ def run_plan_generation_job(job_id, full_prompt, target_file, default_agent=None
         update_generation_job(job_id, status="succeeded")
         append_generation_log(job_id, f"任务成功，文件已生成：{target_file}")
     except Exception as exc:
-        safe_error = redact_sensitive_text(exc)
-        update_generation_job(
-            job_id,
-            status="failed",
-            error=safe_error,
-        )
-        append_generation_log(
-            job_id,
-            f"任务失败：{safe_error}",
-        )
+        update_generation_job(job_id, status="failed", error=str(exc))
+        append_generation_log(job_id, f"任务失败：{exc}")
 
 
 def get_script_file(module_name, filename):
@@ -13056,9 +13019,6 @@ def agent_run_response(run_id, include_events=False):
     retry_flow_rows = list_agent_item_retry_flows(run_id=run_id)
     retry_flows = [serialize_agent_item_retry_flow(row) for row in retry_flow_rows]
     steps = [serialize_agent_step(row) for row in list_agent_steps(run_id)]
-    for step in steps:
-        if step.get("step_key") == "review_failed_scripts":
-            step["output"] = normalize_agent_failure_checkpoint_output(step.get("output"))
     payload = {
         "run": serialize_agent_run(run),
         "steps": steps,
@@ -13145,10 +13105,31 @@ def get_agent_run_api(run_id):
 
 
 app.register_blueprint(
-    create_agent_failures_blueprint(
-        agent_failure_web_services_from_resolver(
-            AgentFailureCheckpointConflict,
-            lambda name: globals()[name],
+    create_agent_script_preparation_blueprint(
+        AgentScriptPreparationWebServices(
+            get_script_preparation_snapshot=(
+                agent_script_preparation.get_script_preparation_snapshot
+            ),
+            get_script_preparation_item=(
+                get_agent_script_preparation_item_for_web
+            ),
+            apply_script_preparation_action=(
+                agent_script_preparation.apply_script_preparation_action
+            ),
+            apply_script_preparation_batch_action=(
+                agent_script_preparation.apply_script_preparation_batch_action
+            ),
+            start_script_preparation_continue=lambda run_id: (
+                start_agent_script_preparation_continue_thread(
+                    run_id,
+                    get_current_project(),
+                    current_platform_author(),
+                )
+            ),
+            claim_script_preparation_continue=(
+                claim_agent_script_preparation_continue
+            ),
+            conflict_type=agent_script_preparation.ScriptPreparationConflict,
         )
     )
 )
@@ -13461,15 +13442,33 @@ def cancel_agent_run_api(run_id):
             return jsonify({"error": "Agent 任务不存在。"}), 404
         if run.get("status") in AGENT_TERMINAL_STATUSES:
             return jsonify({"run": serialize_agent_run(run), "cancelled": False, "error": None})
-        if run.get("status") == "awaiting_failure_action":
-            cancelled_run = cancel_agent_failure_checkpoint(run_id)
-            return jsonify({"run": serialize_agent_run(cancelled_run), "cancelled": True, "error": None})
+        if run.get("status") == "awaiting_script_action":
+            update_agent_step(
+                run_id,
+                "prepare_scripts",
+                status="cancelled",
+                error="用户请求取消。",
+                finished=True,
+            )
+            update_agent_run(run_id, status="cancelled", error="用户请求取消。", finished=True)
+            append_agent_event(
+                run_id,
+                "prepare_scripts",
+                "status",
+                "用户已取消脚本准备。",
+                {"cancelled": True},
+            )
+            return jsonify(
+                {
+                    "run": serialize_agent_run(get_agent_run_row(run_id)),
+                    "cancelled": True,
+                    "error": None,
+                }
+            )
         update_agent_run(run_id, status="cancelling", error="用户请求取消。")
         result = agent_request_cancel(run_id)
         append_agent_event(run_id, run.get("current_step") or "", "status", "用户请求取消 Agent 任务。", result)
         return jsonify({"run": serialize_agent_run(get_agent_run_row(run_id)), "cancelled": True, **result, "error": None})
-    except agent_failure_handling.AgentFailureCheckpointConflict as exc:
-        return jsonify({"error": str(exc)}), 409
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
     except Exception as exc:
@@ -13500,24 +13499,6 @@ def resume_agent_run_api(run_id):
         if active and active.get("run_id") != run.get("run_id"):
             return jsonify({"error": "当前项目已有 Agent 任务正在运行。", "run": serialize_agent_run(active)}), 409
 
-        serialized_run = serialize_agent_run(run) or {}
-        if (
-            run.get("status") == "cancelled"
-            and run.get("current_step") == "review_failed_scripts"
-            and serialized_run.get("pipeline_version", 1) >= CURRENT_AGENT_PIPELINE_VERSION
-        ):
-            resume_agent_failure_checkpoint(run_id)
-            return jsonify(
-                {
-                    **agent_run_response(run_id, include_events=True),
-                    "resumed": True,
-                    "checkpoint_restored": True,
-                    "requested_from_step": "review_failed_scripts",
-                    "from_step": "review_failed_scripts",
-                    "error": None,
-                }
-            )
-
         requested_step = str(payload.get("from_step") or "").strip()
         if not requested_step:
             requested_step = run.get("current_step") or ""
@@ -13544,8 +13525,6 @@ def resume_agent_run_api(run_id):
         ), 202
     except AgentItemRetryConflict as exc:
         return jsonify({"error": str(exc), "retry_flow": serialize_agent_item_retry_flow(exc.flow)}), 409
-    except agent_failure_handling.AgentFailureCheckpointConflict as exc:
-        return jsonify({"error": str(exc)}), 409
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
     except Exception as exc:
@@ -14662,11 +14641,9 @@ def execute_test_script():
                 capture_output=True,
                 timeout=get_script_execution_timeout_seconds(),
             )
-            output = redact_sensitive_text(
-                summarize_process_output(
-                    completed.stdout,
-                    completed.stderr,
-                )
+            output = summarize_process_output(
+                completed.stdout,
+                completed.stderr,
             )
             if database_logs:
                 output = "\n".join([*database_logs, output]).strip()
@@ -14691,11 +14668,9 @@ def execute_test_script():
             result.update(
                 {
                     "status": "failed",
-                    "output": redact_sensitive_text(
-                        summarize_process_output(
-                            exc.stdout,
-                            exc.stderr,
-                        )
+                    "output": summarize_process_output(
+                        exc.stdout,
+                        exc.stderr,
                     ),
                     "error": "脚本执行超时，已停止等待结果。",
                 }
@@ -14763,7 +14738,6 @@ def stream_script_execution(module_name, filename, context):
     def emit_delta(text):
         if not text:
             return ""
-        text = redact_sensitive_text(text)
         output_parts.append(text)
         append_test_job_log(job_id, text)
         return sse_payload("delta", {"text": text})
@@ -14981,7 +14955,6 @@ def stream_module_script_execution(module_name, filenames, context):
     def emit_delta(text):
         if not text:
             return ""
-        text = redact_sensitive_text(text)
         output_parts.append(text)
         append_test_job_log(job_id, text)
         return sse_payload("delta", {"text": text})
@@ -15086,14 +15059,10 @@ def stream_module_script_execution(module_name, filenames, context):
                     for message in item_setup_logs:
                         yield emit_log(message)
                 yield emit_log(f"执行命令：{command_text}")
-                env = get_playwright_execution_env(
-                    {
-                        "TEST_PLAN_VIEWER_BLOB_OUTPUT_FILE": (
-                            blob_output_file
-                        ),
-                        "TEST_PLAN_VIEWER_OUTPUT_DIR": part_results_dir,
-                    }
-                )
+                env = os.environ.copy()
+                env.update(get_playwright_execution_env())
+                env["TEST_PLAN_VIEWER_BLOB_OUTPUT_FILE"] = str(blob_output_file)
+                env["TEST_PLAN_VIEWER_OUTPUT_DIR"] = str(part_results_dir)
                 part_started_at = time.time()
                 try:
                     process = subprocess.Popen(
@@ -15156,7 +15125,6 @@ def stream_module_script_execution(module_name, filenames, context):
                 merge_completed = subprocess.run(
                     context["merge_command"],
                     cwd=context["project_root"],
-                    env=get_playwright_execution_env(),
                     capture_output=True,
                     timeout=get_script_execution_timeout_seconds(),
                 )
@@ -15425,7 +15393,6 @@ def stream_test_suite_execution(suite_id, suite_name, items, context):
     def emit_delta(text):
         if not text:
             return ""
-        text = redact_sensitive_text(text)
         output_parts.append(text)
         append_test_job_log(job_id, text)
         return sse_payload("delta", {"text": text})
@@ -15599,14 +15566,10 @@ def stream_test_suite_execution(suite_id, suite_name, items, context):
                     for message in item_setup_logs:
                         yield emit_log(message)
                 yield emit_log(f"执行命令：{command_text}")
-                env = get_playwright_execution_env(
-                    {
-                        "TEST_PLAN_VIEWER_BLOB_OUTPUT_FILE": (
-                            blob_output_file
-                        ),
-                        "TEST_PLAN_VIEWER_OUTPUT_DIR": part_results_dir,
-                    }
-                )
+                env = os.environ.copy()
+                env.update(get_playwright_execution_env())
+                env["TEST_PLAN_VIEWER_BLOB_OUTPUT_FILE"] = str(blob_output_file)
+                env["TEST_PLAN_VIEWER_OUTPUT_DIR"] = str(part_results_dir)
                 part_started_at = time.time()
                 try:
                     process = subprocess.Popen(
@@ -15678,7 +15641,6 @@ def stream_test_suite_execution(suite_id, suite_name, items, context):
                 merge_completed = subprocess.run(
                     context["merge_command"],
                     cwd=context["project_root"],
-                    env=get_playwright_execution_env(),
                     capture_output=True,
                     timeout=get_script_execution_timeout_seconds(),
                 )
@@ -15920,9 +15882,6 @@ def record_test_script():
         return jsonify({"error": str(exc)}), 404
     except (RuntimeError, ValueError) as exc:
         return jsonify({"error": str(exc)}), 400
-    original_script_content = read_file_bytes(
-        context["script_file"]
-    )
 
     result = {
         "status": "running",
@@ -15940,15 +15899,12 @@ def record_test_script():
         completed = subprocess.run(
             context["command"],
             cwd=context["project_root"],
-            env=get_playwright_execution_env(),
             capture_output=True,
             timeout=get_script_execution_timeout_seconds(),
         )
-        output = redact_sensitive_text(
-            summarize_process_output(
-                completed.stdout,
-                completed.stderr,
-            )
+        output = summarize_process_output(
+            completed.stdout,
+            completed.stderr,
         )
         result.update(
             {
@@ -15970,11 +15926,9 @@ def record_test_script():
         result.update(
             {
                 "status": "failed",
-                "output": redact_sensitive_text(
-                    summarize_process_output(
-                        exc.stdout,
-                        exc.stderr,
-                    )
+                "output": summarize_process_output(
+                    exc.stdout,
+                    exc.stderr,
                 ),
                 "error": "脚本录制超时，已停止等待结果。",
             }
@@ -15989,10 +15943,6 @@ def record_test_script():
 
     try:
         result["content"] = context["script_file"].read_text(encoding="utf-8")
-        source_security.assert_no_embedded_secrets(
-            result["content"],
-            source_label="Recorded Playwright script",
-        )
         if result["status"] == "succeeded":
             asset = sync_script_asset(
                 module_name,
@@ -16015,15 +15965,6 @@ def record_test_script():
         result["error"] = result["error"] or f"Failed to read file: {exc}"
         result["status"] = "failed"
     except Exception as exc:
-        if original_script_content is not None:
-            try:
-                write_file_atomically(
-                    context["script_file"],
-                    original_script_content,
-                )
-            except OSError:
-                pass
-        result["content"] = ""
         result["error"] = result["error"] or f"保存录制脚本版本失败：{exc}"
         result["status"] = "failed"
 
@@ -16401,10 +16342,6 @@ def save_test_script(module_name, filename):
 
     try:
         script_file = get_script_file(module_name, filename)
-        source_security.assert_no_embedded_secrets(
-            payload["content"],
-            source_label="Playwright script",
-        )
     except (RuntimeError, ValueError) as exc:
         return jsonify({"error": str(exc)}), 400
 

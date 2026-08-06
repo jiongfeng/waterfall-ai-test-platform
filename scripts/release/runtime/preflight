@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+readonly SCRIPT_DIR
+# shellcheck source=scripts/release/runtime/.release-common
+source "${SCRIPT_DIR}/.release-common"
+BUNDLE_ROOT="$(release_bundle_root)"
+readonly BUNDLE_ROOT
+
+command -v python3 >/dev/null 2>&1 || release_fail "python3 is required"
+command -v docker >/dev/null 2>&1 || release_fail "Docker Engine is required"
+docker compose version >/dev/null 2>&1 || release_fail "Docker Compose v2 is required"
+[[ "$(uname -s)" == "Linux" ]] || release_fail "this release supports Linux only"
+case "$(uname -m)" in
+    x86_64|amd64) ;;
+    *) release_fail "this release supports linux/amd64 only" ;;
+esac
+
+python3 "${BUNDLE_ROOT}/scripts/release/validate-metadata.py" \
+    "${BUNDLE_ROOT}/RELEASE-METADATA.json" \
+    --bundle-root "${BUNDLE_ROOT}"
+(
+    cd -- "${BUNDLE_ROOT}"
+    sha256sum --check --strict SHA256SUMS
+)
+release_import_image_environment "${BUNDLE_ROOT}/.env.images"
+
+printf 'Release bundle preflight passed (%s, %s).\n' \
+    "$(release_metadata_value "${BUNDLE_ROOT}/RELEASE-METADATA.json" version)" \
+    "$(release_metadata_value "${BUNDLE_ROOT}/RELEASE-METADATA.json" bundleType)"

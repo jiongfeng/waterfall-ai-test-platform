@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+readonly SCRIPT_DIR
+# shellcheck source=scripts/release/runtime/.release-common
+source "${SCRIPT_DIR}/.release-common"
+BUNDLE_ROOT="$(release_bundle_root)"
+readonly BUNDLE_ROOT
+
+"${SCRIPT_DIR}/preflight"
+release_import_image_environment "${BUNDLE_ROOT}/.env.images"
+expected_revision="$(release_metadata_value "${BUNDLE_ROOT}/RELEASE-METADATA.json" revision)"
+expected_platform_id="$(release_metadata_value "${BUNDLE_ROOT}/RELEASE-METADATA.json" images.platform.configDigest)"
+expected_mysql_id="$(release_metadata_value "${BUNDLE_ROOT}/RELEASE-METADATA.json" images.mysql.configDigest)"
+expected_platform_manifest="$(release_metadata_value "${BUNDLE_ROOT}/RELEASE-METADATA.json" images.platform.digest)"
+expected_mysql_manifest="$(release_metadata_value "${BUNDLE_ROOT}/RELEASE-METADATA.json" images.mysql.digest)"
+for service in opencode platform; do
+    container_id="$("${SCRIPT_DIR}/platform-compose" ps --quiet "${service}")"
+    [[ -n "${container_id}" ]] || release_fail "${service} has no Compose container"
+    python3 "${BUNDLE_ROOT}/scripts/release/docker_image_config_digest.py" \
+        --container \
+        --expected-manifest "${expected_platform_manifest}" \
+        --expected-config "${expected_platform_id}" \
+        "${container_id}" >/dev/null \
+        || release_fail "${service} is running a stale or unexpected image"
+    actual_revision="$(docker inspect \
+        --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' \
+        "${container_id}")"
+    [[ "${actual_revision}" == "${expected_revision}" ]] \
+        || release_fail "${service} image revision mismatch: expected ${expected_revision}, got ${actual_revision:-<empty>}"
+done
+container_id="$("${SCRIPT_DIR}/platform-compose" ps --quiet mysql)"
+[[ -n "${container_id}" ]] || release_fail "mysql has no Compose container"
+python3 "${BUNDLE_ROOT}/scripts/release/docker_image_config_digest.py" \
+    --container \
+    --expected-manifest "${expected_mysql_manifest}" \
+    --expected-config "${expected_mysql_id}" \
+    "${container_id}" >/dev/null \
+    || release_fail "mysql is running a stale or unexpected image"
+
+"${SCRIPT_DIR}/platform-compose" verify
+
+printf 'Release services are running with revision %s.\n' "${expected_revision}"

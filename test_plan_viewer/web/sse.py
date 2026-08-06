@@ -1,10 +1,6 @@
-"""Server-sent event parsing and safe serialization."""
+"""Server-sent event parsing and serialization."""
 
 import json
-
-from test_plan_viewer.security.runtime import (
-    redact_runtime_value,
-)
 
 
 def iter_sse_events(response):
@@ -33,10 +29,9 @@ def iter_sse_events(response):
 
 
 def sse_payload(event, payload):
-    safe_payload = redact_runtime_value(payload)
     return (
         f"event: {event}\n"
-        f"data: {json.dumps(safe_payload, ensure_ascii=False)}\n\n"
+        f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
     )
 
 

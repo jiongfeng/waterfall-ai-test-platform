@@ -1,14 +1,17 @@
 # 配置参考
 
-本文说明公开 Beta 的配置结构、秘密注入方式和迁移边界。安全假设与部署要求分别
+本文说明公开 Beta 候选的配置结构、凭据保存方式和迁移边界。安全假设与部署要求分别
 见[安全模型](./security-model.md)和[部署指南](./deployment.md)。
 
 ## 配置文件
 
-应用从 JSON 文件读取非秘密配置：
+应用从 JSON 文件读取项目和连接配置，其中可能包含密码：
 
-- 默认路径是应用目录下的 `config.json`；
-- 推荐通过 `PLATFORM_CONFIG_PATH` 指向部署者维护的只读文件；
+- 本地开发默认读取应用目录下的 `config.json`，也可通过
+  `PLATFORM_CONFIG_PATH` 指定其他路径；
+- 源码检出只通过 `./deploy/platform-compose` 操作；经过验证的 Release 安装副本只
+  通过 `./bin/platform-compose` 操作。两条路径最终都委托同一部署包装脚本，读取
+  模式为 `0600` 的宿主配置，严格校验后暂存为 Compose file-backed secret；
 - `config.json`、`.env`、secret 文件和私有 runbook 不得提交到平台源码仓库
   或项目工作区 Git；
 - URL 只接受 HTTP(S)，并拒绝 `user:password@host` 形式的内嵌凭据；
@@ -17,6 +20,26 @@
 本地无数据库示例见 [`config.example.json`](../config.example.json)，Docker
 Compose 示例见 [`deploy/config.example.json`](../deploy/config.example.json)。
 两者都不包含可用秘密。
+
+Docker 包装脚本默认读取仓库根目录 `config.json`，也可用
+`PLATFORM_CONFIG_FILE` 指定宿主源文件。它将规范化副本写入
+`deploy/.runtime/secrets/platform-config.json`：两个私有目录模式为 `0700`，
+副本模式为 `0444`，再以只读 secret 挂载到容器。`0444` 只在无法被其他用户遍历
+的私有父目录内使用，用于兼容容器非 root UID；宿主源文件仍必须保持 `0600`。
+
+`.runtime` 已被 Git 忽略但仍是含秘密的持久运行数据，不得提交、公开分享或进入
+未加密/公开备份。不要直接编辑暂存副本。修改源文件后运行对应入口（不要混用）：
+
+```bash
+# 源码检出
+./deploy/platform-compose apply-config
+
+# 已安装的 Release bundle
+./bin/platform-compose apply-config
+```
+
+直接调用 `docker compose` 会缺少包装脚本生成的运行时 secret 路径，属于不支持
+的操作方式。
 
 ## Docker 示例结构
 
@@ -27,7 +50,7 @@ Compose 示例见 [`deploy/config.example.json`](../deploy/config.example.json)�
   "project_workspace_root": "/data/playwright-workspaces",
   "opencode_server_url": "http://opencode:4096",
   "opencode_username": "opencode",
-  "opencode_password_env": "OPENCODE_SERVER_PASSWORD",
+  "opencode_password": "",
   "auth": {
     "enabled": true,
     "initial_admin_username": "admin"
@@ -38,6 +61,7 @@ Compose 示例见 [`deploy/config.example.json`](../deploy/config.example.json)�
     "host": "mysql",
     "port": 3306,
     "user": "playwright",
+    "password": "",
     "database": "playwright_platform",
     "create_database": false
   },
@@ -51,8 +75,8 @@ Compose 示例见 [`deploy/config.example.json`](../deploy/config.example.json)�
       "target_system": {
         "base_url": "https://test.example.invalid",
         "login_url": "/login",
-        "username_env": "TARGET_SYSTEM_USERNAME",
-        "password_env": "TARGET_SYSTEM_PASSWORD"
+        "username": "",
+        "password": ""
       },
       "database_baseline": {
         "enabled": false
@@ -77,13 +101,15 @@ Compose 示例见 [`deploy/config.example.json`](../deploy/config.example.json)�
 
 | 名称 | 必需条件 | 用途 |
 | --- | --- | --- |
-| `PLATFORM_CONFIG_PATH` | 推荐 | 指向仓库外或只读挂载的 JSON |
+| `PLATFORM_CONFIG_FILE` | Docker 可选 | 包装脚本读取的宿主 `0600` JSON；默认根目录 `config.json` |
+| `PLATFORM_RUNTIME_DIR` | Docker 可选 | 私有暂存目录；默认 `deploy/.runtime` |
+| `PLATFORM_CONFIG_PATH` | 本地开发可选 | 应用读取的 JSON；公开 Compose 固定为容器 secret 路径 |
 | `PLATFORM_AUTH_ENABLED` | 可选 | 覆盖 `auth.enabled` |
 | `PLATFORM_SESSION_SECRET` | 启用认证时必需 | 会话签名；至少 32 字符高熵值 |
 | `PLATFORM_ADMIN_PASSWORD` | 初始化管理员时必需 | 独立强密码 |
-| `PLATFORM_DB_PASSWORD` | 启用 MySQL 时必需 | 平台数据库账号密码 |
+| `PLATFORM_DB_PASSWORD` | Compose 启用 MySQL 时必需 | 初始化 MySQL 应用账号；同一值还需写入 `platform_database.password` |
 | `MYSQL_ROOT_PASSWORD` | Compose 首次初始化必需 | 只由 MySQL 容器使用 |
-| `OPENCODE_SERVER_PASSWORD` | OpenCode 启用认证时必需 | 模型服务密码 |
+| `OPENCODE_SERVER_PASSWORD` | Compose 启用 OpenCode 认证时必需 | OpenCode 服务端密码；同一值还需写入 `opencode_password` |
 | `PLATFORM_COOKIE_SECURE` | HTTPS 部署必需 | 为会话 Cookie 设置 `Secure` |
 | `PLATFORM_BIND_ADDRESS` | Compose 可选 | 默认只绑定 `127.0.0.1` |
 | `PLATFORM_PORT` | Compose 可选 | 默认 `5000` |
@@ -93,52 +119,60 @@ Compose 示例见 [`deploy/config.example.json`](../deploy/config.example.json)�
 公开 Compose 清单把测试执行默认设为 `false`，并始终禁用宿主准备脚本。执行
 开关不是隔离措施；开启后，代码仍与平台共享容器操作系统边界。
 
-### 被测系统凭据
+### 文件中的连接与被测系统凭据
 
-示例使用：
+OpenCode、平台数据库和被测系统凭据按原有配置字段保存：
 
-```dotenv
-TARGET_SYSTEM_USERNAME=
-TARGET_SYSTEM_PASSWORD=
+```json
+{
+  "opencode_password": "<OpenCode 服务密码>",
+  "platform_database": {
+    "password": "<平台数据库密码>"
+  },
+  "projects": [
+    {
+      "target_system": {
+        "username": "demo-user",
+        "password": "<专用测试密码>"
+      }
+    }
+  ]
+}
 ```
 
-项目的 `username_env` 和 `password_env` 必须引用 `TARGET_` 前缀变量。自定义
-引用还需要由部署者显式注入容器。模型和配置 API只能接触变量名，不能接触实际
-值。
-
-页面清单中的账号也只记录引用，例如：
+页面清单沿用 `username` 和可选的 `password_ref` 元数据，例如：
 
 ```json
 {
   "accounts": [
     {
-      "username_ref": "TARGET_ADMIN_USERNAME",
-      "password_ref": "TARGET_ADMIN_PASSWORD",
+      "username": "demo-admin",
+      "password_ref": "admin-test-account",
       "purpose": "管理员登录"
     }
   ]
 }
 ```
 
-`username_ref` 和 `password_ref` 同样必须使用 `TARGET_` 前缀。新的明文
-`username`、`password` 或 `sample_data` 凭据字段会被拒绝；旧记录只返回迁移
-标记，不会把值发送到 API、Prompt 或执行进程。
+`password_ref` 是页面清单中的业务标识，不会自动解析环境变量。项目设置中的
+用户名和密码可能进入计划/脚本生成 Prompt、seed 脚本、工作区 Git 和执行产物。
+因此只能使用隔离非生产系统中的可撤销、最小权限测试账号，并将模型服务和所有
+相关产物纳入同一敏感数据边界。
 
-不要把秘密放入命令行、Compose YAML、JSON、镜像层、Prompt、测试脚本、日志、
-截图、Issue 或诊断包。`.env` 只适合本机快速开始；正式部署应使用 secret store
-或权限受限的 secret 文件。
+不要把秘密放入命令行、Compose YAML、镜像层、公开示例、Issue 或诊断附件。
+实际 `config.json` 和 `.env` 必须保持未跟踪、权限受限；正式部署还应加密其备份。
 
 ## 配置优先级
 
 1. `PLATFORM_CONFIG_PATH` 决定 JSON 路径。
 2. `PLATFORM_AUTH_ENABLED` 覆盖 `auth.enabled`。
-3. 会话、初始管理员和数据库密码分别从对应 `PLATFORM_*` 变量读取。
-4. OpenCode 密码从 `opencode_password_env` 指定的变量读取。
-5. 被测系统凭据只在执行时从 `TARGET_*` 引用解析。
-6. 项目级 OpenCode、被测系统、数据库基线和计划生成配置覆盖全局默认值。
-
-旧明文字段只作为迁移输入识别，不应继续使用。发现明文后先轮换，再迁移并清理
-Git 历史、数据库、备份、导出包和旧镜像。
+3. `PLATFORM_SESSION_SECRET` 和 `PLATFORM_ADMIN_PASSWORD` 分别覆盖
+   `auth.session_secret` 与 `auth.initial_admin_password`；未设置时读取文件值。
+4. 平台数据库密码从 `platform_database.password` 读取。
+5. OpenCode 密码从全局或项目级 `opencode_password` 读取。
+6. 被测系统凭据从项目的 `target_system.username` 和
+   `target_system.password` 读取。
+7. 项目级 OpenCode、被测系统、数据库基线和计划生成配置覆盖全局默认值。
 
 ## 项目配置
 
@@ -158,11 +192,11 @@ Git 历史、数据库、备份、导出包和旧镜像。
 
 ## OpenCode
 
-全局或项目级配置只记录：
+全局或项目级配置记录：
 
 - `opencode_server_url`；
 - `opencode_username`，它是服务标识，不是密码；
-- `opencode_password_env`，默认 `OPENCODE_SERVER_PASSWORD`。
+- `opencode_password`。
 
 URL 不得内嵌用户名或密码。OpenCode/模型属于外部数据处理边界，发送需求、
 页面内容和日志前应完成授权与合规评估。
@@ -185,21 +219,20 @@ URL 不得内嵌用户名或密码。OpenCode/模型属于外部数据处理边�
 准备脚本是任意 shell 代码，默认禁止执行，只允许可信管理员配置。它们不是安全
 沙箱，不得运行来自上传文件、模型输出或不可信用户的未评审代码。
 
-秘密通过 `environment_refs` 映射：
+子进程环境通过 `environment_overrides` 直接配置：
 
 ```json
 {
-  "environment_refs": {
-    "TEST_USERNAME": "TARGET_SYSTEM_USERNAME",
-    "TEST_PASSWORD": "TARGET_SYSTEM_PASSWORD"
+  "environment_overrides": {
+    "TEST_USERNAME": "demo-user",
+    "TEST_PASSWORD": "<专用测试密码>"
   }
 }
 ```
 
-左侧是子进程变量名，右侧必须是 `TARGET_` 前缀的平台变量名。不能覆盖
-`PATH`、`HOME` 等受保护基础变量。旧 `environment_overrides` 不再接受、
-返回或执行。schema 升级会幂等清除当前准备脚本表中的实际值，只保留变量名和
-迁移标记；部署者仍需重新绑定引用，并轮换、清理升级前备份中的旧值。
+这些值会保存到平台数据库，并在准备脚本执行时加入子进程环境。只允许可信管理
+员维护，不要复用平台、数据库、OpenCode、云服务或生产系统凭据。准备脚本和其
+输出应按含秘密内容管理。
 
 ## 数据库基线：仅 file
 
@@ -233,30 +266,37 @@ URL 不得内嵌用户名或密码。OpenCode/模型属于外部数据处理边�
 公开 Beta 的平台元数据只支持 MySQL：
 
 - 使用只能访问平台数据库的独立账号；
-- 密码通过 `PLATFORM_DB_PASSWORD` 注入；
+- 密码保存在受保护的 `platform_database.password` 字段；Compose 中还要把同一
+  值作为 `PLATFORM_DB_PASSWORD` 提供给 MySQL 容器初始化账号；
 - 推荐预先创建数据库并设 `create_database: false`；
 - 数据库名和表前缀必须符合解析器标识符规则；
-- 备份必须同时覆盖 MySQL、项目工作区和每个工作区的 `.git`。
+- 备份必须把 `mysql_data`、`platform_projects`（含 file baseline）、
+  `platform_workspaces` 及每个工作区的 `.git`、OpenCode config/data/cache/state 四卷
+  和 `config.json`/`.env`/Release 元数据作为同一恢复点。
 
-## 旧版迁移
+## 旧版配置边界
 
-升级前：
+任何未来的首个公开 Beta 都不支持旧环境原地升级，也不支持把旧数据库或工作区直接挂到新
+环境。旧内部安装包及其配置转换逻辑已退役；未知来源必须按
+[安装与升级策略](./upgrade-policy.md)拒绝。
 
-1. 停止新的生成和执行任务。
-2. 一致备份 MySQL 与工作区。
-3. 轮换所有历史明文秘密。
-4. 将密码、目标账号和 OpenCode 密码迁移到环境引用。
-5. 将准备脚本环境改成 `environment_refs`，确认 schema 已清除当前表中的旧值，
-   再轮换并清理升级前备份。
-6. 删除数据库基线旧命令字段，只保留 file 配置。
-7. 在隔离副本验证 schema、登录、授权、项目读取和执行默认关闭。
+如需在全新环境手工重建配置：
+
+1. 先把旧 `mysql_data`、`platform_projects`、`platform_workspaces` 及其 `.git`、
+   OpenCode 四个 XDG 卷和 `config.json`/`.env`/Release 元数据保存为同一个加密、
+   只读恢复点，但不要让新版本迁移它。
+2. 轮换历史明文秘密，不要复制旧 `.env`、SSH 文件、Provider 认证文件或平台会话秘密。
+3. 只按当前 `deploy/config.example.json` 重新录入经过批准的字段。
+4. 删除 database baseline 的旧命令字段，只保留 file 配置。
+5. 准备脚本和环境绑定必须重新人工评审，不能自动带入旧内网命令。
+6. 分别验证平台健康和 Provider 认证推理，后者不能由 OpenCode 健康检查替代。
 
 ## 启动前检查
 
 - JSON 可以严格解析，没有重复项目 key；
 - 示例保留域名已替换为授权测试目标；
 - 认证秘密和管理员密码相互独立并满足强度要求；
-- 所有凭据都由运行时注入，仓库和 Git 历史通过秘密扫描；
+- 实际配置文件未被 Git 跟踪、权限受限，仓库和待发布历史通过秘密扫描；
 - MySQL 账号只能访问平台数据库；
 - 工作区属于非 root 容器用户，且未挂载宿主机敏感目录或 Docker Socket；
 - 测试和准备执行保持关闭，直到完成显式风险评审；
@@ -269,4 +309,5 @@ URL 不得内嵌用户名或密码。OpenCode/模型属于外部数据处理边�
 - [架构概览](./architecture.md)
 - [安全模型](./security-model.md)
 - [部署指南](./deployment.md)
+- [安装与升级策略](./upgrade-policy.md)
 - [支持矩阵](./support-matrix.md)

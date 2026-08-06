@@ -43,7 +43,8 @@
                   </span>
                   <button class="secondary-button" data-agent-id="retryStatusView" type="button">查看详情</button>
                 </section>
-                <section class="artifact-panel">
+                {% include "partials/agent_script_preparation.html" %}
+                <section class="artifact-panel" data-agent-id="artifactPanel">
                   <div class="artifact-header">
                     <div>
                       <p class="path-label" data-agent-id="runSubtitle">暂无运行任务</p>
@@ -60,36 +61,6 @@
                     </summary>
                     <pre class="event-log" data-agent-id="planGenerationPrompt"></pre>
                   </details>
-
-                  <section class="failure-workspace hidden" data-agent-id="failureWorkspace" aria-labelledby="agentFailureWorkspaceTitle">
-                    <header class="failure-workspace-header">
-                      <div>
-                        <h3 id="agentFailureWorkspaceTitle">失败分析与处置</h3>
-                        <p>失败证据会保留在任务中；分析结果只提供建议，不会自动修改或删除脚本。</p>
-                      </div>
-                      <div class="failure-summary" data-agent-id="failureSummary" aria-label="失败项汇总"></div>
-                    </header>
-                    <section class="failure-group" aria-labelledby="agentGenerationFailuresTitle">
-                      <header class="failure-group-header">
-                        <div>
-                          <h4 id="agentGenerationFailuresTitle">脚本生成失败</h4>
-                          <p>没有生成正式脚本的项目只能查看、分析、重试或忽略。</p>
-                        </div>
-                        <span class="count-pill" data-agent-id="generationFailureCount">0 项</span>
-                      </header>
-                      <div class="failure-table-wrap" data-agent-id="generationFailureList"></div>
-                    </section>
-                    <section class="failure-group" aria-labelledby="agentRepairFailuresTitle">
-                      <header class="failure-group-header">
-                        <div>
-                          <h4 id="agentRepairFailuresTitle">脚本修复失败</h4>
-                          <p>可以继续编辑、执行验证或重新修复仍然存在的脚本。</p>
-                        </div>
-                        <span class="count-pill" data-agent-id="repairFailureCount">0 项</span>
-                      </header>
-                      <div class="failure-table-wrap" data-agent-id="repairFailureList"></div>
-                    </section>
-                  </section>
 
                   <div class="artifact-list" data-agent-id="artifactList"></div>
 
@@ -186,97 +157,6 @@
                     <button class="primary-button hidden" data-agent-id="artifactRetryButton" type="button">重试并验证</button>
                     <button class="secondary-button" data-agent-id="artifactDiagnosticDownload" type="button">下载诊断包</button>
                   </div>
-                </footer>
-              </section>
-            </div>
-
-            <div class="task-modal hidden" data-agent-id="failureActionModal" role="dialog" aria-modal="true" aria-labelledby="agentFailureActionModalTitle">
-              <button class="modal-backdrop" data-agent-id="failureActionModalBackdrop" type="button" aria-label="关闭"></button>
-              <section class="failure-action-dialog">
-                <header class="task-dialog-header">
-                  <div>
-                    <p data-agent-id="failureActionModalMeta">失败项</p>
-                    <h2 id="agentFailureActionModalTitle" data-agent-id="failureActionModalTitle">失败详情</h2>
-                  </div>
-                  <button class="icon-button" data-agent-id="failureActionModalClose" type="button" title="关闭" aria-label="关闭失败项弹窗">×</button>
-                </header>
-                <div class="failure-action-body">
-                  <section class="failure-evidence-view hidden" data-agent-id="failureEvidenceView">
-                    <div class="failure-context-card" data-agent-id="failureContextCard"></div>
-                    <div class="failure-evidence-list" data-agent-id="failureEvidenceList"></div>
-                  </section>
-                  <section class="failure-analysis-view hidden" data-agent-id="failureAnalysisView" aria-live="polite">
-                    <div class="failure-analysis-loading hidden" data-agent-id="failureAnalysisLoading">
-                      <span class="agent-loading-spinner" aria-hidden="true"></span>
-                      <div>
-                        <strong>正在分析失败原因</strong>
-                        <p>大模型正在结合失败证据生成原因分析和下一步建议。</p>
-                      </div>
-                    </div>
-                    <div class="failure-analysis-content" data-agent-id="failureAnalysisContent"></div>
-                  </section>
-                  <section class="failure-retry-view hidden" data-agent-id="failureRetryView">
-                    <div class="failure-record-card">
-                      <div>
-                        <span class="failure-record-label" data-agent-id="failureRetryKind">重新生成</span>
-                        <strong data-agent-id="failureRetryName">脚本</strong>
-                      </div>
-                      <span class="status-badge failed">失败后重试</span>
-                    </div>
-                    <label class="form-field">
-                      <span>失败原因</span>
-                      <textarea data-agent-id="failureRetryReason" readonly></textarea>
-                    </label>
-                    <label class="form-field">
-                      <span>本次重试补充说明</span>
-                      <textarea data-agent-id="failureRetryInstructions" spellcheck="false" placeholder="可根据“分析和建议”补充生成或修复要求"></textarea>
-                    </label>
-                    <label class="form-field">
-                      <span>目标脚本</span>
-                      <input data-agent-id="failureRetryTarget" type="text" readonly />
-                    </label>
-                  </section>
-                  <section class="failure-edit-view hidden" data-agent-id="failureEditView">
-                    <div class="failure-record-card">
-                      <div>
-                        <span class="failure-record-label" data-agent-id="failureEditKind">正式脚本</span>
-                        <strong data-agent-id="failureEditName">脚本</strong>
-                      </div>
-                      <span class="status-badge blocked">人工编辑</span>
-                    </div>
-                    <label class="form-field">
-                      <span>脚本内容</span>
-                      <textarea class="failure-script-editor" data-agent-id="failureScriptEditor" spellcheck="false"></textarea>
-                    </label>
-                  </section>
-                </div>
-                <footer class="task-dialog-actions failure-action-footer">
-                  <button class="secondary-button" data-agent-id="failureActionCancel" type="button">关闭</button>
-                  <button class="primary-button hidden" data-agent-id="failureActionConfirm" type="button">确认</button>
-                </footer>
-              </section>
-            </div>
-
-            <div class="task-modal hidden" data-agent-id="continueTaskModal" role="dialog" aria-modal="true" aria-labelledby="agentContinueTaskModalTitle">
-              <button class="modal-backdrop" data-agent-id="continueTaskModalBackdrop" type="button" aria-label="关闭"></button>
-              <section class="continue-task-dialog">
-                <header class="task-dialog-header">
-                  <div>
-                    <p>失败分析与处置</p>
-                    <h2 id="agentContinueTaskModalTitle">保留失败项目并继续？</h2>
-                  </div>
-                  <button class="icon-button" data-agent-id="continueTaskModalClose" type="button" title="关闭" aria-label="关闭继续任务确认框">×</button>
-                </header>
-                <div class="continue-task-body">
-                  <div class="continue-warning-icon" aria-hidden="true">!</div>
-                  <div>
-                    <strong data-agent-id="continueTaskSummary">仍有未解决的失败项目</strong>
-                    <p data-agent-id="continueTaskDescription">继续后这些项目不会进入本次测试集，但失败证据、分析和历史记录会继续保留。</p>
-                  </div>
-                </div>
-                <footer class="task-dialog-actions">
-                  <button class="secondary-button" data-agent-id="continueTaskCancel" type="button">返回处理</button>
-                  <button class="primary-button" data-agent-id="continueTaskConfirm" type="button">保留并继续</button>
                 </footer>
               </section>
             </div>

@@ -298,8 +298,8 @@ class PromptBuilderTests(unittest.TestCase):
         target_system = {
             "base_url": "https://example.test",
             "login_url": "https://example.test/login",
-            "username_env": "TARGET_DEMO_USERNAME",
-            "password_env": "TARGET_DEMO_PASSWORD",
+            "username": "测试员",
+            "password": "secret",
         }
 
         seed_prompt = prompts.build_seed_generation_prompt(
@@ -318,15 +318,6 @@ class PromptBuilderTests(unittest.TestCase):
         self.assertIn("https://example.test/login", seed_prompt)
         self.assertIn("tests/seed/seed.spec.ts", seed_prompt)
         self.assertIn(
-            "process.env.TARGET_DEMO_USERNAME",
-            seed_prompt,
-        )
-        self.assertIn(
-            "process.env.TARGET_DEMO_PASSWORD",
-            seed_prompt,
-        )
-        self.assertNotIn("secret", seed_prompt)
-        self.assertIn(
             '{"locations": ["tests/登录/登录成功.spec.ts"]}',
             run_prompt,
         )
@@ -336,14 +327,14 @@ class PromptBuilderTests(unittest.TestCase):
         complete = {
             "base_url": "https://example.test",
             "login_url": "https://example.test/login",
-            "username_env": "TARGET_DEMO_USERNAME",
-            "password_env": "TARGET_DEMO_PASSWORD",
+            "username": "user",
+            "password": "password",
         }
         expectations = {
             "base_url": "被测系统地址",
             "login_url": "登录页地址",
-            "username_env": "登录用户名环境变量",
-            "password_env": "登录密码环境变量",
+            "username": "登录用户名",
+            "password": "登录密码",
         }
         for missing_field, message in expectations.items():
             value = {**complete, missing_field: ""}

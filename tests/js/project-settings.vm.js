@@ -30,8 +30,8 @@ function field(value = "") {
 const fields = {
   "#projectTargetBaseUrl": field("https://example.com"),
   "#projectTargetLoginUrl": field("/login"),
-  "#projectTargetUsernameEnv": field("TARGET_DEMO_USERNAME"),
-  "#projectTargetPasswordEnv": field("TARGET_DEMO_PASSWORD"),
+  "#projectTargetUsername": field("qa"),
+  "#projectTargetPassword": field("secret"),
   "#projectDefaultCoverageProfile": field("full"),
   "#projectSettingsOutput": field(),
 };
@@ -93,8 +93,8 @@ const feature = context.window.createProjectSettingsFeature({
         target_system: {
           base_url: "https://target.example",
           login_url: "/signin",
-          username_env: "TARGET_USERNAME",
-          password_env: "TARGET_PASSWORD",
+          username: "runner",
+          password: "masked",
         },
         database_baseline: { enabled: true },
         plan_generation: { default_coverage_profile: "full" },
@@ -119,16 +119,14 @@ const feature = context.window.createProjectSettingsFeature({
 const normalized = feature.normalizeTargetSystem({
   base_url: " https://example.com ",
   login_url: "",
-  username_env: 42,
+  username: 42,
 });
 assert.strictEqual(normalized.base_url, " https://example.com ");
 assert.strictEqual(normalized.login_url, "/login");
-assert.strictEqual(normalized.username_env, "TARGET_SYSTEM_USERNAME");
+assert.strictEqual(normalized.username, "");
 
 const payload = feature.collectProjectSettingsForm();
 assert.strictEqual(payload.target_system.base_url, "https://example.com");
-assert.strictEqual(payload.target_system.username_env, "TARGET_DEMO_USERNAME");
-assert.strictEqual(payload.target_system.password_env, "TARGET_DEMO_PASSWORD");
 assert.strictEqual(payload.plan_generation.default_coverage_profile, "full");
 
 let streamResult = { status: "running", logs: "" };

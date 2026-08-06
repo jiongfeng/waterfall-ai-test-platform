@@ -5,7 +5,6 @@ import json
 from test_plan_viewer.configuration import (
     PROJECT_STATUS_ACTIVE,
     parse_plan_generation_config,
-    parse_project_opencode_config,
     parse_target_system_config,
 )
 
@@ -54,22 +53,14 @@ def serialize_project(
     *,
     parse_target_system=parse_target_system_config,
     parse_plan_generation=parse_plan_generation_config,
-    parse_opencode_config=parse_project_opencode_config,
 ):
     """Serialize resolved project data for the public HTTP contract."""
 
     if not project:
         return None
     target_system = parse_target_system(project.get("target_system"))
-    database_baseline = project.get("database_baseline")
-    public_database_baseline = (
-        {
-            "enabled": bool(database_baseline.get("enabled")),
-            "mode": database_baseline.get("mode") or "file",
-        }
-        if isinstance(database_baseline, dict)
-        else None
-    )
+    if not include_sensitive:
+        target_system = {**target_system, "password": ""}
     project_key = project.get("project_key") or project.get("key")
     return {
         "project_id": project.get("project_id"),
@@ -81,10 +72,8 @@ def serialize_project(
         "specs_dir": project.get("specs_dir") or "specs",
         "tests_dir": project.get("tests_dir") or "tests",
         "target_system": target_system,
-        "database_baseline": public_database_baseline,
-        "opencode_config": parse_opencode_config(
-            project.get("opencode_config")
-        ),
+        "database_baseline": project.get("database_baseline"),
+        "opencode_config": project.get("opencode_config"),
         "plan_generation": parse_plan_generation(
             project.get("plan_generation")
         ),

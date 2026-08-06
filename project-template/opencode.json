@@ -4,8 +4,11 @@
     "playwright-test": {
       "type": "local",
       "command": [
-        "bash",
-        ".opencode/run-playwright-mcp.sh"
+        "npx",
+        "playwright",
+        "run-test-mcp-server",
+        "--config",
+        "playwright.config.ts"
       ],
       "enabled": true
     }
@@ -19,7 +22,7 @@
       "mode": "subagent",
       "prompt": "{file:.opencode/prompts/requirement-analyst.md}",
       "permission": {
-        "external_directory": "deny"
+        "external_directory": "allow"
       },
       "tools": {
         "ls": true,
@@ -33,7 +36,7 @@
       "mode": "subagent",
       "prompt": "{file:.opencode/prompts/test-platform-reviewer.md}",
       "permission": {
-        "external_directory": "deny"
+        "external_directory": "allow"
       },
       "tools": {
         "ls": true,
@@ -59,7 +62,7 @@
       "mode": "subagent",
       "prompt": "{file:.opencode/prompts/plan-markdown-splitter.md}",
       "permission": {
-        "external_directory": "deny"
+        "external_directory": "allow"
       },
       "tools": {
         "ls": true,
@@ -73,7 +76,7 @@
       "mode": "subagent",
       "prompt": "{file:.opencode/prompts/playwright-test-generator.md}",
       "permission": {
-        "external_directory": "deny"
+        "external_directory": "allow"
       },
       "tools": {
         "ls": true,
@@ -82,6 +85,7 @@
         "read": true,
         "playwright-test*browser_click": true,
         "playwright-test*browser_drag": true,
+        "playwright-test*browser_evaluate": true,
         "playwright-test*browser_file_upload": true,
         "playwright-test*browser_handle_dialog": true,
         "playwright-test*browser_hover": true,
@@ -105,7 +109,7 @@
       "mode": "subagent",
       "prompt": "{file:.opencode/prompts/playwright-test-healer.md}",
       "permission": {
-        "external_directory": "deny"
+        "external_directory": "allow"
       },
       "tools": {
         "ls": true,
@@ -115,6 +119,7 @@
         "edit": true,
         "write": true,
         "playwright-test*browser_console_messages": true,
+        "playwright-test*browser_evaluate": true,
         "playwright-test*browser_generate_locator": true,
         "playwright-test*browser_network_request": true,
         "playwright-test*browser_network_requests": true,
@@ -129,7 +134,7 @@
       "mode": "subagent",
       "prompt": "{file:.opencode/prompts/playwright-test-planner.md}",
       "permission": {
-        "external_directory": "deny"
+        "external_directory": "allow"
       },
       "tools": {
         "ls": true,
@@ -140,6 +145,7 @@
         "playwright-test*browser_close": true,
         "playwright-test*browser_console_messages": true,
         "playwright-test*browser_drag": true,
+        "playwright-test*browser_evaluate": true,
         "playwright-test*browser_file_upload": true,
         "playwright-test*browser_handle_dialog": true,
         "playwright-test*browser_hover": true,
@@ -148,6 +154,7 @@
         "playwright-test*browser_network_request": true,
         "playwright-test*browser_network_requests": true,
         "playwright-test*browser_press_key": true,
+        "playwright-test*browser_run_code_unsafe": true,
         "playwright-test*browser_select_option": true,
         "playwright-test*browser_snapshot": true,
         "playwright-test*browser_take_screenshot": true,

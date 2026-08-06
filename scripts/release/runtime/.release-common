@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+release_fail() {
+    printf 'release bundle: %s\n' "$*" >&2
+    exit 1
+}
+
+release_bundle_root() {
+    local script_dir
+    script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[1]}")" && pwd -P)"
+    cd -- "${script_dir}/.." && pwd -P
+}
+
+release_metadata_value() {
+    local metadata_path="$1"
+    local expression="$2"
+    python3 - "${metadata_path}" "${expression}" <<'PY'
+import json
+import sys
+
+value = json.load(open(sys.argv[1], encoding="utf-8"))
+for key in sys.argv[2].split("."):
+    value = value[key]
+if not isinstance(value, (str, int)):
+    raise SystemExit(f"metadata value {sys.argv[2]} is not scalar")
+print(value)
+PY
+}
+
+release_import_image_environment() {
+    local env_file="$1"
+    local line
+    local key
+    local value
+    [[ -f "${env_file}" ]] || release_fail "missing immutable image environment: ${env_file}"
+    while IFS= read -r line || [[ -n "${line}" ]]; do
+        [[ -z "${line}" || "${line}" == \#* ]] && continue
+        [[ "${line}" == *=* ]] || release_fail "invalid line in ${env_file}"
+        key="${line%%=*}"
+        value="${line#*=}"
+        case "${key}" in
+            PLATFORM_IMAGE)
+                [[ "${value}" =~ ^[^[:space:]@]+@sha256:[0-9a-f]{64}$ \
+                    || "${value}" =~ ^playwright-test-platform\.local/platform:sha256-[0-9a-f]{64}$ ]] \
+                    || release_fail "${key} is not an approved registry digest or offline archive tag"
+                export "${key}=${value}"
+                ;;
+            MYSQL_IMAGE)
+                [[ "${value}" =~ ^[^[:space:]@]+@sha256:[0-9a-f]{64}$ \
+                    || "${value}" =~ ^playwright-test-platform\.local/mysql:sha256-[0-9a-f]{64}$ ]] \
+                    || release_fail "${key} is not an approved registry digest or offline archive tag"
+                export "${key}=${value}"
+                ;;
+            *)
+                release_fail "unsupported key in ${env_file}: ${key}"
+                ;;
+        esac
+    done < "${env_file}"
+    : "${PLATFORM_IMAGE:?PLATFORM_IMAGE missing from image environment}"
+    : "${MYSQL_IMAGE:?MYSQL_IMAGE missing from image environment}"
+}

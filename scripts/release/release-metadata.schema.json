@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/playwright-test-platform/release-metadata.schema.json",
+  "title": "Playwright Test Platform release metadata",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "project",
+    "version",
+    "tag",
+    "revision",
+    "deploymentContractVersion",
+    "sourceUrl",
+    "sourceDateEpoch",
+    "architecture",
+    "bundleType",
+    "images",
+    "artifacts"
+  ],
+  "properties": {
+    "schemaVersion": {"const": 1},
+    "project": {"const": "playwright-test-platform"},
+    "version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:[.-][0-9A-Za-z.-]+)?$"
+    },
+    "tag": {
+      "type": "string",
+      "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+(?:[.-][0-9A-Za-z.-]+)?$"
+    },
+    "revision": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "deploymentContractVersion": {"const": 1},
+    "sourceUrl": {"type": "string", "pattern": "^https://github\\.com/[^/]+/[^/]+$"},
+    "sourceDateEpoch": {"type": "integer", "minimum": 1},
+    "architecture": {"const": "linux/amd64"},
+    "bundleType": {"enum": ["online", "offline"]},
+    "images": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["platform", "mysql"],
+      "properties": {
+        "platform": {"$ref": "#/$defs/image"},
+        "mysql": {"$ref": "#/$defs/image"}
+      }
+    },
+    "artifacts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["checksums", "sbomDirectory", "assemblyManifest"],
+      "properties": {
+        "checksums": {"const": "SHA256SUMS"},
+        "sbomDirectory": {"const": "sbom"},
+        "assemblyManifest": {"const": "assembly/bundle-manifest.json"}
+      }
+    }
+  },
+  "$defs": {
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "reference",
+        "digest",
+        "configDigest",
+        "runtimeReference",
+        "archive",
+        "archiveSha256"
+      ],
+      "properties": {
+        "reference": {
+          "type": "string",
+          "pattern": "^[^\\s@]+@sha256:[0-9a-f]{64}$"
+        },
+        "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "configDigest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "runtimeReference": {
+          "type": "string",
+          "pattern": "^(?:[^\\s@]+@sha256:[0-9a-f]{64}|playwright-test-platform\\.local/(?:platform|mysql):sha256-[0-9a-f]{64})$"
+        },
+        "archive": {"type": ["string", "null"]},
+        "archiveSha256": {
+          "type": ["string", "null"],
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    }
+  }
+}

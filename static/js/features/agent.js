@@ -18,11 +18,7 @@ const AGENT_STEPS = [
   ["analyze_requirement", "需求解析"],
   ["review_modules", "模块审查"],
   ["generate_plans", "计划生成"],
-  ["review_plans", "计划审查"],
-  ["generate_scripts", "脚本生成"],
-  ["execute_scripts", "脚本执行"],
-  ["repair_scripts", "脚本修复"],
-  ["review_failed_scripts", "失败分析与处置"],
+  ["prepare_scripts", "脚本准备"],
   ["create_suite", "测试集"],
   ["run_suite", "执行"],
 ];
@@ -67,14 +63,6 @@ const state = {
   retryRequestPending: false,
   retryTerminalRefreshPending: false,
   artifactModalOpener: null,
-  failureItems: [],
-  failureActionItemId: "",
-  failureActionMode: "",
-  failureActionPending: false,
-  failureActionOpener: null,
-  failureEditContentSha256: "",
-  continueTaskPending: false,
-  continueTaskOpener: null,
 };
 
 const elements = {
@@ -104,13 +92,8 @@ const elements = {
   planGenerationMeta: agentElement("planGenerationMeta"),
   planGenerationPrompt: agentElement("planGenerationPrompt"),
   stepTimeline: agentElement("stepTimeline"),
+  artifactPanel: agentElement("artifactPanel"),
   artifactStageSummary: agentElement("artifactStageSummary"),
-  failureWorkspace: agentElement("failureWorkspace"),
-  failureSummary: agentElement("failureSummary"),
-  generationFailureCount: agentElement("generationFailureCount"),
-  repairFailureCount: agentElement("repairFailureCount"),
-  generationFailureList: agentElement("generationFailureList"),
-  repairFailureList: agentElement("repairFailureList"),
   artifactList: agentElement("artifactList"),
   eventSummary: agentElement("eventSummary"),
   eventLog: agentElement("eventLog"),
@@ -149,36 +132,6 @@ const elements = {
   retryStatusTitle: agentElement("retryStatusTitle"),
   retryStatusMeta: agentElement("retryStatusMeta"),
   retryStatusView: agentElement("retryStatusView"),
-  failureActionModal: agentElement("failureActionModal"),
-  failureActionModalBackdrop: agentElement("failureActionModalBackdrop"),
-  failureActionModalClose: agentElement("failureActionModalClose"),
-  failureActionModalMeta: agentElement("failureActionModalMeta"),
-  failureActionModalTitle: agentElement("failureActionModalTitle"),
-  failureEvidenceView: agentElement("failureEvidenceView"),
-  failureContextCard: agentElement("failureContextCard"),
-  failureEvidenceList: agentElement("failureEvidenceList"),
-  failureAnalysisView: agentElement("failureAnalysisView"),
-  failureAnalysisLoading: agentElement("failureAnalysisLoading"),
-  failureAnalysisContent: agentElement("failureAnalysisContent"),
-  failureRetryView: agentElement("failureRetryView"),
-  failureRetryKind: agentElement("failureRetryKind"),
-  failureRetryName: agentElement("failureRetryName"),
-  failureRetryReason: agentElement("failureRetryReason"),
-  failureRetryInstructions: agentElement("failureRetryInstructions"),
-  failureRetryTarget: agentElement("failureRetryTarget"),
-  failureEditView: agentElement("failureEditView"),
-  failureEditKind: agentElement("failureEditKind"),
-  failureEditName: agentElement("failureEditName"),
-  failureScriptEditor: agentElement("failureScriptEditor"),
-  failureActionCancel: agentElement("failureActionCancel"),
-  failureActionConfirm: agentElement("failureActionConfirm"),
-  continueTaskModal: agentElement("continueTaskModal"),
-  continueTaskModalBackdrop: agentElement("continueTaskModalBackdrop"),
-  continueTaskModalClose: agentElement("continueTaskModalClose"),
-  continueTaskSummary: agentElement("continueTaskSummary"),
-  continueTaskDescription: agentElement("continueTaskDescription"),
-  continueTaskCancel: agentElement("continueTaskCancel"),
-  continueTaskConfirm: agentElement("continueTaskConfirm"),
   newTaskModal: agentElement("newTaskModal"),
   newTaskModalBackdrop: agentElement("newTaskModalBackdrop"),
   newTaskModalClose: agentElement("newTaskModalClose"),
@@ -197,28 +150,16 @@ const {
   requestJson,
   getDownloadFilename,
 } = agentApiClient;
-const failureWorkspace = createAgentFailureWorkspace({
-  state,
-  elements,
-  asArray,
-  isPlainObject,
-  formatJsonPreview,
-  escapeHtml,
-  artifactMeta,
-  statusText,
-  encodePathPart,
-  getStepOutput,
-  isFailureCheckpointRun,
-  requestJson,
-  refreshSelectedRun,
-  renderRunList,
-  renderArtifacts,
-  setNotice,
-  shouldObserveSelectedRun,
-  startEventStream,
-  window,
-  document,
-});
+const scriptPreparation = createAgentScriptPreparationFeature(
+  root.querySelector('[data-script-preparation-id="root"]'),
+  {
+    apiClient: agentApiClient,
+    getRunId: () => state.selectedRunId,
+    setNotice,
+    window,
+    document,
+  },
+);
 
 function agentCoverageProfile(key = elements.coverageProfile.value) {
   return state.coverageProfiles.find((item) => item.key === key) || state.coverageProfiles[0] || null;
@@ -387,8 +328,14 @@ function statusText(status) {
       verifying: "复验中",
       excluded: "已排除",
       awaiting_action: "等待处理",
-      awaiting_failure_action: "等待处理",
-      waiting_for_failure_action: "等待处理",
+      awaiting_script_action: "待人工处理",
+      awaiting_human: "待人工处理",
+      ready: "已通过",
+      abandoned: "已放弃",
+      generating: "生成中",
+      executing: "执行中",
+      repairing: "修复中",
+      analyzing: "分析中",
       unresolved: "未解决",
       ignored: "保留未解决",
       kept_unresolved: "保留未解决",
@@ -407,15 +354,11 @@ function isResumableStatus(status) {
   return ["failed", "cancelled"].includes(status);
 }
 
-function isFailureCheckpointStatus(status) {
-  return ["awaiting_failure_action", "waiting_for_failure_action"].includes(String(status || "").toLowerCase());
-}
-
-function isFailureCheckpointRun(run = state.selectedRun) {
+function isScriptPreparationPaused(run = state.selectedRun) {
   return Boolean(
     run &&
-      (isFailureCheckpointStatus(run.status) ||
-        (run.current_step === "review_failed_scripts" && getStep("review_failed_scripts")?.status === "awaiting_action")),
+      (run.status === "awaiting_script_action" ||
+        (run.current_step === "prepare_scripts" && getStep("prepare_scripts")?.status === "awaiting_action")),
   );
 }
 
@@ -465,7 +408,7 @@ function isActiveRetryFlow(flow) {
 }
 
 function shouldObserveSelectedRun() {
-  return Boolean(isActiveStatus(state.selectedRun?.status) || isFailureCheckpointRun() || state.activeRetryFlows.length);
+  return Boolean(isActiveStatus(state.selectedRun?.status) || isScriptPreparationPaused() || state.activeRetryFlows.length);
 }
 
 function shouldRefreshAgentProject() {
@@ -705,17 +648,8 @@ function progressText(stepKey, step) {
   if (stepKey === "generate_plans" && (counts.modules || counts.generated || counts.failed)) {
     return `${Number(counts.generated || 0)} / ${Number(counts.modules || counts.generated || 0)}`;
   }
-  if (stepKey === "generate_scripts" && (counts.plans || counts.generated || counts.failed)) {
-    return `${Number(counts.generated || 0)} / ${Number(counts.plans || counts.generated || 0)}`;
-  }
-  if (stepKey === "execute_scripts" && (counts.scripts || counts.passed || counts.failed)) {
-    return `${Number(counts.passed || 0)} / ${Number(counts.scripts || counts.passed || 0)}`;
-  }
-  if (stepKey === "repair_scripts" && (counts.scripts || counts.repaired || counts.failed)) {
-    return `${Number(counts.repaired || 0)} / ${Number(counts.scripts || counts.repaired || 0)}`;
-  }
-  if (stepKey === "review_failed_scripts" && (counts.failed || counts.handled)) {
-    return `${Number(counts.handled || 0)} / ${Number(counts.failed || 0)}`;
+  if (stepKey === "prepare_scripts" && counts.total) {
+    return `${Number(counts.ready || 0) + Number(counts.abandoned || 0)} / ${Number(counts.total)}`;
   }
   if (stepKey === "run_suite" && (counts.total || counts.passed || counts.failed)) {
     return `${Number(counts.passed || 0)} / ${Number(counts.total || counts.passed || 0)}`;
@@ -741,7 +675,7 @@ function progressText(stepKey, step) {
 function renderRunList() {
   const run = state.selectedRun || state.runs.find((item) => item.run_id === state.selectedRunId) || null;
   const activeRun = getActiveRun();
-  const checkpointRun = state.runs.find((item) => isFailureCheckpointStatus(item.status)) || null;
+  const pausedRun = state.runs.find((item) => item.status === "awaiting_script_action") || null;
   const activeRetryRun = state.runs.find(runHasActiveRetrySummary) || null;
   const selectedRetryCount = state.activeRetryFlows.length;
   const normalizedQuery = state.runSearchQuery.trim().toLocaleLowerCase("zh-CN");
@@ -763,42 +697,30 @@ function renderRunList() {
     setBadge(elements.currentRunStatus, selectedRetryCount ? "retrying" : run.status);
   }
 
-  elements.newRunButton.disabled = Boolean(activeRun || activeRetryRun);
-  if (checkpointRun) {
-    elements.newRunButton.disabled = true;
-  }
+  elements.newRunButton.disabled = Boolean(activeRun || pausedRun || activeRetryRun);
   elements.newRunButton.title = activeRun
     ? "当前项目已有任务运行中"
-    : checkpointRun
-      ? "当前项目有任务等待失败项处理"
+    : pausedRun
+      ? "当前项目有脚本等待人工处理"
     : activeRetryRun
       ? "当前项目有脚本正在重试并验证"
       : "新建 Agent 任务";
 
-  const atFailureCheckpoint = Boolean(run && isFailureCheckpointRun(run));
-  const canContinue = atFailureCheckpoint && !activeRetryRun && !state.failureActionPending && !state.continueTaskPending;
-  const canResume = Boolean(run && isResumableStatus(run.status) && !activeRun && !activeRetryRun);
-  const canResumeAvailable = canResume && !checkpointRun;
-  elements.resumeButton.textContent = atFailureCheckpoint ? "继续任务" : "恢复任务";
-  elements.resumeButton.disabled = atFailureCheckpoint ? !canContinue : !canResumeAvailable;
-  elements.resumeButton.title = atFailureCheckpoint
-    ? canContinue
-      ? "保留已记录的失败项并继续创建测试集"
-      : activeRetryRun
-        ? "请等待单项重试或执行完成"
-        : "当前有失败项操作正在进行"
-    : canResumeAvailable
+  const canResume = Boolean(run && isResumableStatus(run.status) && !activeRun && !pausedRun && !activeRetryRun);
+  elements.resumeButton.textContent = "恢复任务";
+  elements.resumeButton.disabled = !canResume;
+  elements.resumeButton.title = canResume
       ? "从当前阶段恢复任务"
       : activeRun
         ? "当前项目已有任务运行中"
-        : checkpointRun
-          ? "请先完成等待处理的失败任务"
+        : pausedRun
+          ? "请先完成脚本准备中的人工处理"
           : activeRetryRun
             ? "请等待单项重试并验证完成"
             : "只有失败或已取消的任务可以恢复";
 
   const isCancelling = run?.status === "cancelling";
-  const canStop = Boolean(run && (["queued", "running"].includes(run.status) || isFailureCheckpointRun(run)));
+  const canStop = Boolean(run && ["queued", "running", "awaiting_script_action"].includes(run.status));
   elements.cancelButton.disabled = !canStop;
   elements.cancelButtonLabel.textContent = isCancelling ? "正在停止…" : "停止任务";
   elements.cancelButton.title = canStop ? "停止当前任务" : isCancelling ? "任务正在停止" : "当前任务未在运行";
@@ -868,15 +790,6 @@ function retryTimelineMeta(stepKey) {
   return "";
 }
 
-function agentStepsForTimeline() {
-  const planReviewOutput = getStepOutput("review_plans");
-  const planReviewRemoved =
-    Number(state.selectedRun?.pipeline_version || 1) >= 2 ||
-    planReviewOutput.removed_in_failure_checkpoint_v2 === true ||
-    planReviewOutput.reason === "removed_in_failure_checkpoint_v2";
-  return planReviewRemoved ? AGENT_STEPS.filter(([key]) => key !== "review_plans") : AGENT_STEPS;
-}
-
 function renderRetryStatusBar() {
   const flows = state.activeRetryFlows;
   elements.retryStatusBar.classList.toggle("hidden", !flows.length);
@@ -893,8 +806,7 @@ function renderRetryStatusBar() {
 }
 
 function renderTimeline() {
-  const visibleSteps = agentStepsForTimeline();
-  elements.stepTimeline.innerHTML = visibleSteps.map(([key, label], index) => {
+  elements.stepTimeline.innerHTML = AGENT_STEPS.map(([key, label], index) => {
     const step = getStep(key) || { status: "queued", counts: {}, error: "" };
     const status = step.status || "queued";
     const active = key === state.activeStepKey;
@@ -1502,11 +1414,27 @@ function artifactsForStep(stepKey) {
 
 function renderArtifacts() {
   const run = state.selectedRun;
+  const showScriptPreparation = Boolean(run && state.activeStepKey === "prepare_scripts");
+  elements.artifactPanel.classList.toggle("hidden", showScriptPreparation);
+  if (showScriptPreparation) {
+    const preparationState = scriptPreparation.getState();
+    if (preparationState.runId !== state.selectedRunId) {
+      scriptPreparation.setRun(state.selectedRunId);
+      void scriptPreparation.activate(state.selectedRunId);
+    } else if (!scriptPreparation.getState().active) {
+      void scriptPreparation.activate(state.selectedRunId);
+    } else {
+      scriptPreparation.render();
+    }
+    state.currentArtifacts = [];
+    return;
+  }
+  if (scriptPreparation.getState().active) {
+    scriptPreparation.deactivate();
+  }
   const step = getStep(state.activeStepKey);
   const stepLabel = agentStepLabel(state.activeStepKey);
-  const failureData = state.activeStepKey === "review_failed_scripts" ? failureWorkspace.getData() : { modern: false, items: [] };
-  const showFailureWorkspace = state.activeStepKey === "review_failed_scripts" && failureData.modern;
-  const artifacts = showFailureWorkspace ? [] : artifactsForStep(state.activeStepKey);
+  const artifacts = artifactsForStep(state.activeStepKey);
   state.currentArtifacts = artifacts;
 
   if (!run) {
@@ -1521,21 +1449,11 @@ function renderArtifacts() {
     const planGeneration = isPlainObject(run.plan_generation) ? run.plan_generation : {};
     elements.runSubtitle.textContent = `${run.run_id} · ${agentCoverageMeta(run)} · ${formatDateTime(run.created_at)}`;
     elements.runTitle.textContent = run.requirement_title || run.run_id;
-    elements.artifactStageSummary.textContent = showFailureWorkspace
-      ? `${stepLabel} · ${statusText(step?.status || "queued")} · ${failureData.items.length} 个失败项`
-      : `${stepLabel} · ${statusText(step?.status || "queued")} · ${artifacts.length} 个生成物`;
+    elements.artifactStageSummary.textContent = `${stepLabel} · ${statusText(step?.status || "queued")} · ${artifacts.length} 个生成物`;
     elements.planGenerationDetails.classList.remove("hidden");
     elements.planGenerationMeta.textContent = agentCoverageMeta(run);
     elements.planGenerationPrompt.textContent = planGeneration.coverage_prompt || "未保存策略文本。";
     setBadge(elements.runStatus, state.activeRetryFlows.length ? "retrying" : run.status);
-  }
-
-  elements.failureWorkspace.classList.toggle("hidden", !showFailureWorkspace);
-  elements.artifactList.classList.toggle("hidden", showFailureWorkspace);
-  if (showFailureWorkspace) {
-    failureWorkspace.render(failureData);
-  } else {
-    state.failureItems = [];
   }
 
   elements.artifactList.innerHTML = artifacts.length
@@ -2257,8 +2175,8 @@ function openNewTaskModal() {
     setNotice("当前项目有脚本正在重试并验证，完成或取消后才能新建任务。", "error");
     return;
   }
-  if (state.runs.some((run) => isFailureCheckpointStatus(run.status))) {
-    setNotice("当前项目有任务等待失败项处理，继续或终止该任务后才能新建任务。", "error");
+  if (state.runs.some((run) => run.status === "awaiting_script_action")) {
+    setNotice("当前项目有脚本等待人工处理，完成处理或终止任务后才能新建任务。", "error");
     return;
   }
   populateAgentCoveragePrompt(state.defaultCoverageProfile);
@@ -2381,6 +2299,9 @@ function mergeEvents(events) {
       state.lastEventId = Math.max(state.lastEventId, eventId);
       applyRetryFlowProgressEvent(event);
       applyAgentStepProgressEvent(event);
+      if (event.step_key === "prepare_scripts") {
+        scriptPreparation.applyEvent(event);
+      }
     }
   });
 }
@@ -2642,7 +2563,7 @@ async function submitRun(event) {
 }
 
 async function cancelRun() {
-  if (!state.selectedRunId || !(["queued", "running"].includes(state.selectedRun?.status) || isFailureCheckpointRun())) {
+  if (!state.selectedRunId || !["queued", "running", "awaiting_script_action"].includes(state.selectedRun?.status)) {
     return;
   }
   if (!window.confirm("确定停止当前任务吗？已生成的结果会保留。")) {
@@ -2690,14 +2611,6 @@ async function resumeRun() {
   }
 }
 
-function resumeOrContinueRun() {
-  if (isFailureCheckpointRun()) {
-    failureWorkspace.openContinue();
-    return;
-  }
-  resumeRun();
-}
-
 function resetAgentProjectState() {
   state.runDetailRequestId += 1;
   state.selectedRunId = "";
@@ -2716,7 +2629,7 @@ function resetAgentProjectState() {
   state.retryRequestPending = false;
   state.retryTerminalRefreshPending = false;
   state.artifactModalOpener = null;
-  failureWorkspace.reset();
+  scriptPreparation.setRun("");
   resetAgentExecutionResult();
   state.jobCache.clear();
   state.contentCache.clear();
@@ -2776,17 +2689,12 @@ function deactivate() {
   state.isActive = false;
   stopEventStream();
   stopRefreshTimer();
+  scriptPreparation.deactivate();
   elements.artifactModal.classList.add("hidden");
-  elements.failureActionModal.classList.add("hidden");
-  elements.continueTaskModal.classList.add("hidden");
   elements.newTaskModal.classList.add("hidden");
   state.openArtifact = null;
   state.openRetryFlowId = "";
   state.artifactModalOpener = null;
-  state.failureActionItemId = "";
-  state.failureActionMode = "";
-  state.failureActionOpener = null;
-  state.continueTaskOpener = null;
   document.body.classList.remove("agent-modal-open");
 }
 
@@ -2846,21 +2754,7 @@ function trapAgentModalFocus(event, modal) {
 }
 
 root.addEventListener("keydown", (event) => {
-  if (!elements.failureActionModal.classList.contains("hidden")) {
-    if (event.key === "Escape" && !state.failureActionPending) {
-      event.preventDefault();
-      failureWorkspace.closeActionModal();
-      return;
-    }
-    trapAgentModalFocus(event, elements.failureActionModal);
-  } else if (!elements.continueTaskModal.classList.contains("hidden")) {
-    if (event.key === "Escape" && !state.continueTaskPending) {
-      event.preventDefault();
-      failureWorkspace.closeContinue();
-      return;
-    }
-    trapAgentModalFocus(event, elements.continueTaskModal);
-  } else if (!elements.artifactModal.classList.contains("hidden")) {
+  if (!elements.artifactModal.classList.contains("hidden")) {
     if (event.key === "Escape") {
       event.preventDefault();
       closeArtifactModal();
@@ -2876,7 +2770,7 @@ root.addEventListener("keydown", (event) => {
 });
 elements.newRunButton.addEventListener("click", openNewTaskModal);
 elements.launchForm.addEventListener("submit", submitRun);
-elements.resumeButton.addEventListener("click", resumeOrContinueRun);
+elements.resumeButton.addEventListener("click", resumeRun);
 elements.cancelButton.addEventListener("click", cancelRun);
 elements.artifactModalClose.addEventListener("click", closeArtifactModal);
 elements.artifactModalBackdrop.addEventListener("click", closeArtifactModal);
@@ -2884,22 +2778,6 @@ elements.artifactDiagnosticDownload.addEventListener("click", downloadArtifactDi
 elements.artifactRetryCancelButton.addEventListener("click", cancelArtifactRetry);
 elements.artifactRetryButton.addEventListener("click", retryArtifactAndVerify);
 elements.retryStatusView.addEventListener("click", () => showRetryFlowDetails(elements.retryStatusView.dataset.retryFlowId));
-elements.failureActionModalClose.addEventListener("click", failureWorkspace.closeActionModal);
-elements.failureActionModalBackdrop.addEventListener("click", () => {
-  if (!state.failureActionPending) {
-    failureWorkspace.closeActionModal();
-  }
-});
-elements.failureActionCancel.addEventListener("click", failureWorkspace.closeActionModal);
-elements.failureActionConfirm.addEventListener("click", failureWorkspace.confirmAction);
-elements.continueTaskModalClose.addEventListener("click", failureWorkspace.closeContinue);
-elements.continueTaskModalBackdrop.addEventListener("click", () => {
-  if (!state.continueTaskPending) {
-    failureWorkspace.closeContinue();
-  }
-});
-elements.continueTaskCancel.addEventListener("click", failureWorkspace.closeContinue);
-elements.continueTaskConfirm.addEventListener("click", () => failureWorkspace.continueTask({ keepUnresolved: true }));
 elements.newTaskModalClose.addEventListener("click", closeNewTaskModal);
 elements.newTaskModalBackdrop.addEventListener("click", closeNewTaskModal);
 elements.newTaskCancelButton.addEventListener("click", closeNewTaskModal);
@@ -2928,10 +2806,6 @@ const handleKeydown = (event) => {
   }
   if (event.key === "Escape" && !elements.artifactModal.classList.contains("hidden")) {
     closeArtifactModal();
-  } else if (event.key === "Escape" && !elements.failureActionModal.classList.contains("hidden") && !state.failureActionPending) {
-    failureWorkspace.closeActionModal();
-  } else if (event.key === "Escape" && !elements.continueTaskModal.classList.contains("hidden") && !state.continueTaskPending) {
-    failureWorkspace.closeContinue();
   } else if (event.key === "Escape" && !elements.newTaskModal.classList.contains("hidden")) {
     closeNewTaskModal();
   }
@@ -2946,6 +2820,7 @@ window.addEventListener("beforeunload", handleBeforeUnload);
 
 function destroy() {
   deactivate();
+  scriptPreparation.destroy();
   window.removeEventListener("keydown", handleKeydown);
   window.removeEventListener("beforeunload", handleBeforeUnload);
 }

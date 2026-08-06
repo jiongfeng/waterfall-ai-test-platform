@@ -57,7 +57,7 @@ flowchart LR
 
 兼容包装必须只做参数转发、依赖装配或返回值适配。新业务规则不应继续写入包装函数。
 
-当前仍是渐进迁移期，而不是“入口已经完全清空”的状态。Agent 主工作流编排、生成/执行 SSE、项目 seed 与数据库基线操作、测试资产编辑及部分执行记录接口仍暂留在 `app.py`；它们是后续迁移边界，不是新增代码的默认落点。Agent 失败检查点的数据归一化、状态转换和分析缓存规则已经由 `agent/failure_handling.py` 拥有，装配根只注入持久化、模型、脚本操作和时间等外部能力。已抽出的诊断、失败处置、验证、Prompt、结果解析等能力不能回填到入口。
+当前仍是渐进迁移期，而不是“入口已经完全清空”的状态。Agent 主工作流装配、生成/执行 SSE、项目 seed 与数据库基线操作、测试资产编辑及部分执行记录接口仍暂留在 `app.py`；它们是后续迁移边界，不是新增代码的默认落点。逐脚本的生成、执行、一次自动修复、复验、模型分析和人工操作状态机由 `agent/script_preparation.py` 拥有，`web/agent_script_preparation.py` 只负责 HTTP 交付。装配根只注入持久化、模型、脚本操作和时间等外部能力。已抽出的诊断、脚本准备、验证、Prompt 和结果解析能力不能回填到入口。
 
 ### `test_plan_viewer/web/`
 
@@ -84,14 +84,15 @@ Blueprint 的 endpoint 名称不是外部契约；URL、method、状态码、JSO
 | `requirements` | 需求和候选模块的非流式 CRUD（8 条） |
 | `page_inventory` | 页面清单 CRUD 与文档导入（5 条） |
 | `test_suites` | 测试集及测试集条目的非执行接口（8 条） |
+| `agent_script_preparation` | Agent 脚本准备快照、详情、单项操作和批量操作（4 条） |
 
-同一路由族中仍留在 `app.py` 的 Agent HTTP、项目 seed/数据库测试、需求分析与计划生成流、计划/脚本生成执行流、测试集执行、jobs 和 assets 接口不应被误认为已迁移；迁移时继续使用独立 Blueprint，并先补齐 SSE 与失败状态 parity 测试。
+同一路由族中除脚本准备外仍留在 `app.py` 的 Agent HTTP、项目 seed/数据库测试、需求分析与计划生成流、计划/脚本生成执行流、测试集执行、jobs 和 assets 接口不应被误认为已迁移；迁移时继续使用独立 Blueprint，并先补齐 SSE 与失败状态 parity 测试。
 
 ## 3. 后端目录职责
 
 ```text
 test_plan_viewer/
-├── agent/              # Agent 诊断包，以及失败检查点的数据模型、状态转换与分析缓存
+├── agent/              # Agent 脚本准备状态机、诊断包及独立失败分析能力
 ├── artifacts/          # 中文资产命名、安全路径、生成前后快照
 ├── auth/               # 登录、角色、权限的策略与领域规则
 ├── core/               # 无框架通用验证
@@ -147,7 +148,23 @@ class ExampleDependencies:
 - 完整日志和 Playwright 产物保存在当前项目工作区；MySQL 保存状态、尾部日志和产物索引。
 - 后台线程启动时要复制项目/作者上下文，结束时清理进程内任务状态。
 - SSE 终态必须与数据库终态一致；失败和取消也必须发出可解析的最终事件。
-- Agent 进入 `awaiting_failure_action` 时属于持久化暂停点；SSE 必须发送 `paused` 后结束连接，不能把等待人工处置误报为失败或让流无限保持。
+- Agent 进入 `awaiting_script_action` 时属于持久化暂停点；SSE 必须发送 `paused` 后结束连接，不能把等待人工处理误报为失败或让流无限保持。
+
+### Agent 七阶段主流程
+
+产品只展示以下七个主阶段，并保持左侧导航顺序稳定：
+
+1. 需求；
+2. 需求解析；
+3. 模块审查；
+4. 计划生成；
+5. 脚本准备；
+6. 测试集；
+7. 执行。
+
+`prepare_scripts` 是一个主阶段，不再把生成、执行、修复和失败处置展示为四个平级阶段。每个脚本在该阶段中独立运行唯一状态机：生成后执行；首次执行失败后自动修复并复验；复验仍失败时调用模型生成分析、建议动作和补充 Prompt，然后进入 `awaiting_human`。一个脚本等待人工时不阻塞其余脚本继续准备。
+
+人工处理支持人工编辑、重新执行、放弃、重新生成和重新修复。每次操作都追加不可变历史节点；人工编辑和重新修复继承当前最新脚本版本，重新执行使用最新版本，重新生成继承原始 Prompt 与可编辑补充 Prompt 但不继承代码内容，放弃脚本不得进入测试集。批量操作按脚本分别使用各自 Prompt，并以 `accepted` / `rejected` 返回逐项结果。
 
 ## 4. 前端装配
 
@@ -169,7 +186,7 @@ api-client → sse → timers
 → generation → script-repair → module-execution
 → module-plan-generation → admin → projects
 → project-settings → setup-preparation
-→ agent-failure-workspace → agent
+→ agent-script-preparation → agent
 → app.js
 ```
 
@@ -210,8 +227,8 @@ function createExampleFeature(deps) {
 | `features/script-repair.js` | 单脚本执行、取消和修复 |
 | `features/module-execution.js` | 模块批量执行与批量修复 |
 | `features/setup-preparation.js` | 准备脚本和绑定配置 |
-| `features/agent-failure-workspace.js` | 失败双列表、证据/分析/重试/编辑弹窗与继续确认 |
-| `features/agent.js` | Agent 任务、事件、阶段时间线及失败工作区装配 |
+| `features/agent-script-preparation.js` | 脚本列表、动态历史、人工操作编辑器和逐项批量操作 |
+| `features/agent.js` | Agent 任务、事件、七阶段时间线及脚本准备功能装配 |
 
 功能文件通过 `tests/js/*.vm.js` 在 Node VM 中测试。测试应覆盖工厂装配、状态转换、SSE 分片、终态清理和持久化 adapter，而不依赖真实浏览器。
 
@@ -243,6 +260,7 @@ styles.css
 └── css/features/project-settings.css
 
 css/features/agent.css  # 独立 link，后加载
+css/features/agent-script-preparation.css  # 脚本准备列表与详情弹窗
 ```
 
 移动规则时必须保持原选择器文本、同特异性规则的相对顺序和媒体查询语义。相关测试会比较选择器所有权、重复/泄漏和关键级联顺序。
@@ -260,9 +278,10 @@ css/features/agent.css  # 独立 link，后加载
 - 静态资源 URL 与依赖顺序；
 - 项目工作区中的计划、脚本、日志和产物路径；
 - MySQL 表结构和已有数据迁移语义。
-- 新 Agent 流程跳过计划审查，但保留 `review_plans=skipped` 的兼容步骤；旧任务中已经完成的计划审查仍可读取和显示。
-- Agent 失败检查点按脚本生成与修复分组。重试或编辑产物必须先进入 `pending_verification`，只有单项执行通过的脚本才能进入测试集。
-- 继续任务可以保留未解决项并形成覆盖缺口；没有任何可执行脚本时必须阻止创建空测试集。
+- Agent 主阶段固定为需求、需求解析、模块审查、计划生成、脚本准备、测试集和执行。
+- 脚本准备历史按真实操作动态追加；成功、失败和待人工状态不能覆盖已有节点。
+- 自动流程最多执行一次自动修复；复验仍失败必须进入人工处理，不能无限重试。
+- 只有 `ready` 脚本可以进入测试集，`abandoned` 脚本必须排除；全部脚本均放弃时跳过测试集和执行阶段，以 `succeeded_with_unresolved` 安全结束，禁止创建空测试集。
 
 契约由不同层次的测试共同维护：
 

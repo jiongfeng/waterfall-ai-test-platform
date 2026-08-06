@@ -26,15 +26,8 @@ function normalizeTargetSystem(value) {
   return {
     base_url: typeof target.base_url === "string" ? target.base_url : "",
     login_url: typeof target.login_url === "string" && target.login_url ? target.login_url : "/login",
-    username_env:
-      typeof target.username_env === "string" && target.username_env
-        ? target.username_env
-        : "TARGET_SYSTEM_USERNAME",
-    password_env:
-      typeof target.password_env === "string" && target.password_env
-        ? target.password_env
-        : "TARGET_SYSTEM_PASSWORD",
-    credentials_migration_required: target.credentials_migration_required === true,
+    username: typeof target.username === "string" ? target.username : "",
+    password: typeof target.password === "string" ? target.password : "",
   };
 }
 
@@ -47,8 +40,8 @@ function collectProjectSettingsForm() {
     target_system: {
       base_url: projectSettingsField("projectTargetBaseUrl").value.trim().replace(/\/+$/, ""),
       login_url: projectSettingsField("projectTargetLoginUrl").value.trim() || "/login",
-      username_env: projectSettingsField("projectTargetUsernameEnv").value.trim(),
-      password_env: projectSettingsField("projectTargetPasswordEnv").value.trim(),
+      username: projectSettingsField("projectTargetUsername").value.trim(),
+      password: projectSettingsField("projectTargetPassword").value,
     },
     database_baseline: isPlainObject(state.projectSettings.databaseBaseline)
       ? { ...state.projectSettings.databaseBaseline }
@@ -353,23 +346,18 @@ function renderProjectSettingsPanel() {
             <input id="projectTargetLoginUrl" type="text" value="${escapeHtml(target.login_url)}" placeholder="/login" />
           </label>
           <label class="form-field">
-            <span>登录用户名环境变量</span>
-            <input id="projectTargetUsernameEnv" type="text" value="${escapeHtml(target.username_env)}" autocomplete="off" spellcheck="false" />
+            <span>登录用户名</span>
+            <input id="projectTargetUsername" type="text" value="${escapeHtml(target.username)}" autocomplete="username" />
           </label>
           <label class="form-field">
-            <span>登录密码环境变量</span>
-            <input id="projectTargetPasswordEnv" type="text" value="${escapeHtml(target.password_env)}" autocomplete="off" spellcheck="false" />
+            <span>登录密码</span>
+            <input id="projectTargetPassword" type="password" value="${escapeHtml(target.password)}" autocomplete="current-password" />
           </label>
           <label class="form-field">
             <span>Seed 脚本</span>
             <input type="text" value="${escapeHtml(settings.seedScriptPath)}" readonly />
           </label>
         </div>
-        ${
-          target.credentials_migration_required
-            ? '<p class="field-hint warning">检测到旧版明文凭据。保存本页后将只保留环境变量名称；请先在运行环境中配置对应变量。</p>'
-            : '<p class="field-hint">平台只保存环境变量名称，不读取、回显或发送真实凭据给模型。</p>'
-        }
         <div class="project-settings-actions">
           <button class="secondary-button" id="projectSeedGenerate" type="button" ${busy ? "disabled" : ""}>生成 Seed</button>
           <button class="secondary-button" id="projectSeedTest" type="button" ${busy ? "disabled" : ""}>测试 Seed</button>

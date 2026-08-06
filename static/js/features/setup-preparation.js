@@ -122,21 +122,18 @@ function normalizeSetupScriptRun(value) {
 
 function normalizeSetupScript(value) {
   const script = isPlainObject(value) ? value : {};
-  const environmentRefs = isPlainObject(script.environment_refs)
-    ? script.environment_refs
-    : {};
-  const legacyEnvironmentKeys = Array.isArray(script.legacy_environment_keys)
-    ? script.legacy_environment_keys.map((key) => String(key || "")).filter(Boolean)
-    : [];
+  const environment = isPlainObject(script.environment_overrides)
+    ? script.environment_overrides
+    : isPlainObject(script.environment)
+      ? script.environment
+      : {};
   return {
     uid: String(setupValue(script, "uid", "script_uid", "id") || ""),
     name: String(script.name || "未命名准备脚本"),
     description: String(script.description || ""),
     script_content: String(script.script_content || script.content || ""),
     working_directory: String(script.working_directory || ""),
-    environment_refs: { ...environmentRefs },
-    credentials_migration_required: script.credentials_migration_required === true,
-    legacy_environment_keys: legacyEnvironmentKeys,
+    environment_overrides: { ...environment },
     timeout_seconds: Math.max(1, Number(script.timeout_seconds) || 300),
     concurrency_key: String(script.concurrency_key || ""),
     enabled: script.enabled !== false,
@@ -250,16 +247,11 @@ async function loadSetupPreparation(options = {}) {
   }
 }
 
-function setupScriptEnvironmentRows(environmentRefs, legacyKeys = []) {
-  const references = isPlainObject(environmentRefs) ? environmentRefs : {};
-  const childNames = [
-    ...Object.keys(references),
-    ...legacyKeys.filter((key) => !Object.prototype.hasOwnProperty.call(references, key)),
-  ];
-  return childNames.map((key, index) => ({
+function setupScriptEnvironmentRows(environment) {
+  return Object.entries(environment || {}).map(([key, value], index) => ({
     uid: `environment-${Date.now()}-${index}`,
     key,
-    reference: String(references[key] ?? ""),
+    value: String(value ?? ""),
   }));
 }
 
@@ -287,10 +279,7 @@ function openSetupScriptModal(scriptUid = "") {
   setup.scriptDraftSourceUid = existing?.uid || "";
   setup.scriptDraft = draft;
   setup.draftBinding = existing ? { ...(getSetupScriptBindings(existing.uid)[0] || defaultSetupScriptBinding(existing.uid)) } : defaultSetupScriptBinding();
-  setup.draftEnvironmentRows = setupScriptEnvironmentRows(
-    draft.environment_refs,
-    draft.credentials_migration_required ? draft.legacy_environment_keys : [],
-  );
+  setup.draftEnvironmentRows = setupScriptEnvironmentRows(draft.environment_overrides);
   setup.scriptModalOpen = true;
   setup.runDetailModalOpen = false;
   setSetupNotice("", "");
@@ -312,31 +301,25 @@ function readSetupEnvironmentRows(strict = true) {
   const rows = [...root.querySelectorAll("[data-setup-environment-row]")].map((row) => ({
     uid: row.dataset.setupEnvironmentRow,
     key: row.querySelector("[data-setup-environment-key]")?.value.trim() || "",
-    reference: row.querySelector("[data-setup-environment-reference]")?.value.trim() || "",
+    value: row.querySelector("[data-setup-environment-value]")?.value || "",
   }));
-  const references = {};
+  const environment = {};
   rows.forEach((row) => {
-    if (!row.key && !row.reference) {
+    if (!row.key && !row.value) {
       return;
     }
     if (!row.key) {
       if (strict) {
-        throw new Error("子进程环境变量名称不能为空。");
+        throw new Error("环境变量名称不能为空。");
       }
       return;
     }
-    if (!row.reference) {
-      if (strict) {
-        throw new Error(`请为“${row.key}”填写运行平台环境变量名称。`);
-      }
-      return;
+    if (Object.prototype.hasOwnProperty.call(environment, row.key) && strict) {
+      throw new Error(`环境变量“${row.key}”重复。`);
     }
-    if (Object.prototype.hasOwnProperty.call(references, row.key) && strict) {
-      throw new Error(`子进程环境变量“${row.key}”重复。`);
-    }
-    references[row.key] = row.reference;
+    environment[row.key] = row.value;
   });
-  return { rows, references };
+  return { rows, environment };
 }
 
 function syncSetupScriptDraftFromForm(options = {}) {
@@ -355,7 +338,7 @@ function syncSetupScriptDraftFromForm(options = {}) {
   draft.enabled = Boolean(form.elements.namedItem("enabled")?.checked);
   const parsedEnvironment = readSetupEnvironmentRows(options.strict !== false);
   setup.draftEnvironmentRows = parsedEnvironment.rows;
-  draft.environment_refs = parsedEnvironment.references;
+  draft.environment_overrides = parsedEnvironment.environment;
   const scopeType = form.elements.namedItem("scope_type")?.value || "project";
   const targetSelect = form.elements.namedItem("scope_key");
   setup.draftBinding = {
@@ -386,7 +369,7 @@ function setupScriptPayload() {
     description: draft.description.trim(),
     script_content: draft.script_content,
     working_directory: draft.working_directory,
-    environment_refs: draft.environment_refs,
+    environment_overrides: draft.environment_overrides,
     timeout_seconds: draft.timeout_seconds,
     concurrency_key: draft.concurrency_key,
     enabled: draft.enabled,
@@ -519,11 +502,6 @@ async function trialRunSetupScript(scriptUid = setupState.runDetailScriptUid) {
   if (!script || setup.isRunning) {
     return;
   }
-  if (script.credentials_migration_required) {
-    setSetupNotice("该脚本含旧版明文环境配置，请先编辑并重新绑定环境变量引用。", "error");
-    renderHost();
-    return;
-  }
   const binding = getSetupScriptBindings(script.uid)[0] || defaultSetupScriptBinding(script.uid);
   setup.runDetailScriptUid = script.uid;
   setup.runDetailModalOpen = true;
@@ -611,7 +589,6 @@ function renderSetupScriptModal() {
       <section class="setup-modal setup-script-modal" role="dialog" aria-modal="true" aria-labelledby="setupScriptModalTitle">
         <header class="setup-modal-header"><div><h3 id="setupScriptModalTitle">${editing ? "编辑准备脚本" : "新建准备脚本"}</h3></div><button class="setup-close-button" id="setupScriptModalClose" type="button" aria-label="关闭">关闭</button></header>
         ${setup.notice ? `<div class="setup-modal-notice ${escapeHtml(setup.noticeType)}">${escapeHtml(setup.notice)}</div>` : ""}
-        ${draft.credentials_migration_required ? `<div class="setup-modal-notice error" role="alert">检测到旧版明文环境配置，原值已封存且不会执行。请为这些子进程变量重新绑定运行平台环境变量：${escapeHtml(draft.legacy_environment_keys.join("、") || "未知变量")}</div>` : ""}
         <form class="setup-script-form" id="setupScriptForm">
           <div class="setup-script-form-layout">
             <section class="setup-script-detail-column">
@@ -622,7 +599,7 @@ function renderSetupScriptModal() {
             </section>
             <aside class="setup-script-settings-column">
               <label class="setup-script-field" for="setupScriptName"><span>脚本名称 <b>*</b></span><input id="setupScriptName" name="name" type="text" maxlength="64" value="${escapeHtml(draft.name)}" placeholder="请输入脚本名称，便于识别和复用" /><small><span data-setup-name-count>${escapeHtml(draft.name.length)}</span>/64</small></label>
-              <section class="setup-settings-section"><h4>运行设置</h4><label class="setup-script-field" for="setupWorkingDirectory"><span>工作目录</span><input id="setupWorkingDirectory" name="working_directory" type="text" value="${escapeHtml(draft.working_directory)}" placeholder="默认使用仓库根目录" /></label><label class="setup-script-field" for="setupTimeoutSeconds"><span>超时时间</span><div class="setup-input-suffix"><input id="setupTimeoutSeconds" name="timeout_seconds" type="number" min="1" value="${escapeHtml(draft.timeout_seconds)}" /><span>秒</span></div></label><label class="setup-script-field" for="setupConcurrencyKey"><span>并发键（可选）</span><input id="setupConcurrencyKey" name="concurrency_key" type="text" value="${escapeHtml(draft.concurrency_key)}" placeholder="用于串行化运行的资源锁标识" /></label><div class="setup-environment-heading"><span>环境变量引用（可选）</span><button class="secondary-button compact-button" id="setupAddEnvironment" type="button">添加引用</button></div><div class="setup-binding-help">这里只保存变量名，不保存秘密值。平台变量必须以 TARGET_ 开头；PATH、HOME、LC_* 等基础变量不可覆盖。</div><div class="setup-environment-list">${setup.draftEnvironmentRows.length ? setup.draftEnvironmentRows.map((row) => `<div class="setup-environment-row" data-setup-environment-row="${escapeHtml(row.uid)}"><input data-setup-environment-key type="text" value="${escapeHtml(row.key)}" placeholder="子进程变量名" aria-label="子进程环境变量名" /><input data-setup-environment-reference type="text" value="${escapeHtml(row.reference)}" placeholder="TARGET_API_TOKEN" aria-label="运行平台环境变量名" /><button type="button" data-setup-remove-environment="${escapeHtml(row.uid)}">删除</button></div>`).join("") : '<div class="setup-environment-empty">当前未配置环境变量引用</div>'}</div><label class="setup-script-enabled"><span><strong>启用脚本</strong><small>停用后不会在 OpenCode 探索和测试执行前自动运行</small></span><input id="setupScriptEnabled" name="enabled" type="checkbox" ${draft.enabled ? "checked" : ""} /></label></section>
+              <section class="setup-settings-section"><h4>运行设置</h4><label class="setup-script-field" for="setupWorkingDirectory"><span>工作目录</span><input id="setupWorkingDirectory" name="working_directory" type="text" value="${escapeHtml(draft.working_directory)}" placeholder="默认使用仓库根目录" /></label><label class="setup-script-field" for="setupTimeoutSeconds"><span>超时时间</span><div class="setup-input-suffix"><input id="setupTimeoutSeconds" name="timeout_seconds" type="number" min="1" value="${escapeHtml(draft.timeout_seconds)}" /><span>秒</span></div></label><label class="setup-script-field" for="setupConcurrencyKey"><span>并发键（可选）</span><input id="setupConcurrencyKey" name="concurrency_key" type="text" value="${escapeHtml(draft.concurrency_key)}" placeholder="用于串行化运行的资源锁标识" /></label><div class="setup-environment-heading"><span>环境变量（可选）</span><button class="secondary-button compact-button" id="setupAddEnvironment" type="button">添加变量</button></div><div class="setup-environment-list">${setup.draftEnvironmentRows.length ? setup.draftEnvironmentRows.map((row) => `<div class="setup-environment-row" data-setup-environment-row="${escapeHtml(row.uid)}"><input data-setup-environment-key type="text" value="${escapeHtml(row.key)}" placeholder="变量名" aria-label="环境变量名" /><input data-setup-environment-value type="text" value="${escapeHtml(row.value)}" placeholder="变量值" aria-label="环境变量值" /><button type="button" data-setup-remove-environment="${escapeHtml(row.uid)}">删除</button></div>`).join("") : '<div class="setup-environment-empty">当前未配置环境变量</div>'}</div><label class="setup-script-enabled"><span><strong>启用脚本</strong><small>停用后不会在 OpenCode 探索和测试执行前自动运行</small></span><input id="setupScriptEnabled" name="enabled" type="checkbox" ${draft.enabled ? "checked" : ""} /></label></section>
               <section class="setup-settings-section setup-binding-section"><h4>绑定范围</h4><span class="setup-settings-label">绑定对象</span><div class="setup-scope-selector">${["project", "test_suite", "script"].map((scopeType) => `<label class="${binding.scope_type === scopeType ? "active" : ""}"><input type="radio" name="scope_type" value="${scopeType}" ${binding.scope_type === scopeType ? "checked" : ""} /><span>${escapeHtml(setupScopeLabel(scopeType))}</span></label>`).join("")}</div><label class="setup-script-field" for="setupScopeKey"><span>目标${escapeHtml(setupScopeLabel(binding.scope_type))} <b>*</b></span><select id="setupScopeKey" name="scope_key">${renderSetupTargetOptions(binding.scope_type, binding.scope_key)}</select></label><div class="setup-binding-help">生效优先级：脚本 &gt; 测试集 &gt; 项目。试运行日志会在独立的执行详情弹窗中展示。</div></section>
             </aside>
           </div>
@@ -740,7 +717,7 @@ function bindSetupPreparationEvents() {
   root.querySelector("#setupCodeExpand")?.addEventListener("click", () => root.querySelector(".setup-script-modal")?.classList.toggle("setup-script-editor-expanded"));
   root.querySelector("#setupAddEnvironment")?.addEventListener("click", () => {
     syncSetupScriptDraftFromForm({ strict: false });
-    setup.draftEnvironmentRows.push({ uid: `environment-${Date.now()}`, key: "", reference: "" });
+    setup.draftEnvironmentRows.push({ uid: `environment-${Date.now()}`, key: "", value: "" });
     renderHost();
     window.requestAnimationFrame(() => root.querySelector("[data-setup-environment-row]:last-child [data-setup-environment-key]")?.focus());
   });
@@ -799,8 +776,6 @@ return {
   load: loadSetupPreparation,
   renderMarkup: renderSetupPreparationMarkup,
   bindEvents: bindSetupPreparationEvents,
-  normalizeScript: normalizeSetupScript,
-  environmentRows: setupScriptEnvironmentRows,
 };
 
 }

@@ -1,0 +1,139 @@
+name: Publish verified Draft Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing verified Draft release tag
+        required: true
+        type: string
+      expected_revision:
+        description: Full 40-character commit bound by the signed Release manifest
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-release-${{ inputs.release_tag }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Reverify unchanged public assets and publish
+    runs-on: ubuntu-latest
+    environment: release-publication
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ inputs.release_tag }}
+      EXPECTED_REVISION: ${{ inputs.expected_revision }}
+    steps:
+      - name: Check out the exact tagged verifier
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ inputs.release_tag }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Require the immutable public Draft identity
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "${{ github.event.repository.visibility }}" == "public" ]]
+          [[ "${RELEASE_TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]
+          [[ "${EXPECTED_REVISION}" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$(git rev-parse HEAD)" == "${EXPECTED_REVISION}" ]]
+          [[ "$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}")" == "${EXPECTED_REVISION}" ]]
+          [[ "$(gh release view "${RELEASE_TAG}" --json isDraft --jq .isDraft)" == "true" ]]
+          python3 scripts/release/verify_remote_tag.py \
+            --repository "${GITHUB_REPOSITORY}" \
+            --tag "${RELEASE_TAG}" \
+            --expected-commit "${EXPECTED_REVISION}"
+
+      - name: Install pinned Minisign
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p "${RUNNER_TEMP}/bin"
+          bash scripts/release/install-minisign.sh "${RUNNER_TEMP}/bin/minisign"
+          printf '%s\n' "${RUNNER_TEMP}/bin" >> "${GITHUB_PATH}"
+
+      - name: Download and verify the exact signed asset set
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          assets="${RUNNER_TEMP}/release-assets"
+          mkdir -p "${assets}"
+          gh release download "${RELEASE_TAG}" --dir "${assets}"
+          minisign -Vm "${assets}/RELEASE-MANIFEST.json" \
+            -x "${assets}/RELEASE-MANIFEST.json.minisig" \
+            -p scripts/release/minisign.pub -H -q
+          python3 scripts/release/verify_release_assets.py "${assets}"
+          python3 scripts/release/release_manifest.py verify-asset \
+            --manifest "${assets}/RELEASE-MANIFEST.json" \
+            --asset-root "${assets}" \
+            --asset "${assets}/RELEASE-ASSET-SHA256SUMS" \
+            --expected-tag "${RELEASE_TAG}" \
+            --expected-revision "${EXPECTED_REVISION}" \
+            --expected-source-url "https://github.com/${GITHUB_REPOSITORY}"
+          (
+            cd "${assets}"
+            find . -maxdepth 1 -type f -print0 | sort -z | xargs -0 sha256sum
+          ) > "${RUNNER_TEMP}/first-download.sha256"
+
+      - name: Require anonymous image access
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          docker_config="${RUNNER_TEMP}/anonymous-docker-config"
+          mkdir -p "${docker_config}"
+          chmod 0700 "${docker_config}"
+          printf 'DOCKER_CONFIG=%s\n' "${docker_config}" >> "${GITHUB_ENV}"
+          [[ -z "${DOCKER_AUTH_CONFIG:-}" ]]
+          [[ ! -s "${docker_config}/config.json" ]]
+
+      - name: Run the full anonymous online bundle lifecycle
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          assets="${RUNNER_TEMP}/release-assets"
+          version="${RELEASE_TAG#v}"
+          bash scripts/release/smoke-bundle.sh \
+            --type online \
+            --bundle "${assets}/playwright-test-platform-${version}-linux-amd64-online.tar.zst" \
+            --github-repository "${GITHUB_REPOSITORY}" \
+            --source-ref "refs/tags/${RELEASE_TAG}" \
+            --source-digest "${EXPECTED_REVISION}" \
+            --release-manifest "${assets}/RELEASE-MANIFEST.json" \
+            --release-signature "${assets}/RELEASE-MANIFEST.json.minisig" \
+            --minisign-public-key scripts/release/minisign.pub \
+            --port 55002 \
+            --compose-project "publication-smoke-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+
+      - name: Re-download unchanged assets and publish as the sole state transition
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          second="${RUNNER_TEMP}/release-assets-second"
+          mkdir -p "${second}"
+          [[ "$(gh release view "${RELEASE_TAG}" --json isDraft --jq .isDraft)" == "true" ]]
+          gh release download "${RELEASE_TAG}" --dir "${second}"
+          minisign -Vm "${second}/RELEASE-MANIFEST.json" \
+            -x "${second}/RELEASE-MANIFEST.json.minisig" \
+            -p scripts/release/minisign.pub -H -q
+          python3 scripts/release/verify_release_assets.py "${second}"
+          (
+            cd "${second}"
+            find . -maxdepth 1 -type f -print0 | sort -z | xargs -0 sha256sum
+          ) > "${RUNNER_TEMP}/second-download.sha256"
+          cmp "${RUNNER_TEMP}/first-download.sha256" "${RUNNER_TEMP}/second-download.sha256"
+          python3 scripts/release/verify_remote_tag.py \
+            --repository "${GITHUB_REPOSITORY}" \
+            --tag "${RELEASE_TAG}" \
+            --expected-commit "${EXPECTED_REVISION}"
+          gh release edit "${RELEASE_TAG}" --draft=false
+          [[ "$(gh release view "${RELEASE_TAG}" --json isDraft --jq .isDraft)" == "false" ]]
+          printf 'Published %s only after signed-manifest and anonymous lifecycle verification.\n' "${RELEASE_TAG}"

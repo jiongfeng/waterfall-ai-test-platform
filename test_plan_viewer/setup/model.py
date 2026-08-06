@@ -1,10 +1,7 @@
-import json
 import re
 
 from test_plan_viewer.setup.validation import (
     DEFAULT_SETUP_SCRIPT_TIMEOUT_SECONDS,
-    SETUP_ENVIRONMENT_NAME_PATTERN,
-    validate_setup_environment_reference,
 )
 
 
@@ -13,7 +10,7 @@ SETUP_BINDING_PRECEDENCE = {
     "test_suite": 2,
     "script": 3,
 }
-SETUP_ENVIRONMENT_ENVELOPE_FIELDS = frozenset(
+SETUP_SCRUBBED_ENVIRONMENT_FIELDS = frozenset(
     {
         "version",
         "environment_refs",
@@ -29,244 +26,43 @@ class SetupPreparationError(RuntimeError):
         self.summary = summary or {}
 
 
-def legacy_setup_environment_keys(value):
-    if isinstance(value, dict):
-        candidates = value.keys()
-    elif isinstance(value, (list, tuple, set)):
-        candidates = value
-    else:
-        candidates = ()
-    return sorted(
-        {
-            str(key).strip()
-            for key in candidates
-            if str(key).strip()
-        }
+def load_setup_environment_overrides(row, load_json_column):
+    """Load literal overrides without executing a scrubbed v2 envelope.
+
+    Credential values removed by the v2 scrub cannot be recovered. Treat
+    that legacy envelope as an empty override map so its metadata never
+    becomes child-process environment variables.
+    """
+
+    value = load_json_column(
+        row.get("environment_json"),
+        row.get("environment_overrides") or {},
     )
-
-
-def _safe_setup_environment_keys(value):
-    return sorted(
-        {
-            str(key).strip()
-            for key in legacy_setup_environment_keys(value)
-            if SETUP_ENVIRONMENT_NAME_PATTERN.fullmatch(
-                str(key).strip()
-            )
-        }
-    )
-
-
-def _normalize_v2_setup_environment_envelope(value):
     if (
-        not isinstance(value, dict)
-        or value.get("version") != 2
+        isinstance(value, dict)
+        and value.get("version") == 2
+        and bool(
+            SETUP_SCRUBBED_ENVIRONMENT_FIELDS.intersection(value)
+            - {"version"}
+        )
     ):
-        return None, False
-    version_is_canonical = (
-        type(value.get("version")) is int
-    )
-
-    references_value = value.get("environment_refs")
-    references = {}
-    invalid_reference_keys = []
-    references_are_canonical = isinstance(
-        references_value,
-        dict,
-    )
-    if isinstance(references_value, dict):
-        for raw_child_name, raw_platform_name in (
-            references_value.items()
-        ):
-            child_name = str(raw_child_name).strip()
-            platform_name = str(raw_platform_name).strip()
-            if (
-                not isinstance(raw_child_name, str)
-                or raw_child_name != child_name
-                or not isinstance(raw_platform_name, str)
-                or raw_platform_name != platform_name
-            ):
-                references_are_canonical = False
-            try:
-                validate_setup_environment_reference(
-                    child_name,
-                    platform_name,
-                )
-            except ValueError:
-                references_are_canonical = False
-                if SETUP_ENVIRONMENT_NAME_PATTERN.fullmatch(
-                    child_name
-                ):
-                    invalid_reference_keys.append(child_name)
-                continue
-            references[child_name] = platform_name
-
-    keys = set(value)
-    base_keys = {"version", "environment_refs"}
-    migration_keys = {
-        *base_keys,
-        "credentials_migration_required",
-        "legacy_environment_keys",
-    }
-    metadata_keys = _safe_setup_environment_keys(
-        value.get("legacy_environment_keys")
-    )
-    raw_metadata_keys = value.get("legacy_environment_keys")
-    metadata_is_canonical = (
-        isinstance(raw_metadata_keys, list)
-        and raw_metadata_keys == metadata_keys
-    )
-    canonical = bool(
-        version_is_canonical
-        and references_are_canonical
-        and (
-            keys == base_keys
-            or (
-                keys == migration_keys
-                and value.get(
-                    "credentials_migration_required"
-                )
-                is True
-                and metadata_is_canonical
-            )
-        )
-    )
-    if canonical:
-        return value, True
-
-    legacy_keys = set(metadata_keys)
-    legacy_keys.update(invalid_reference_keys)
-    for raw_key, item in value.items():
-        key = str(raw_key).strip()
-        if key in SETUP_ENVIRONMENT_ENVELOPE_FIELDS:
-            continue
-        if key == "environment_overrides":
-            legacy_keys.update(
-                _safe_setup_environment_keys(item)
-            )
-        elif SETUP_ENVIRONMENT_NAME_PATTERN.fullmatch(key):
-            legacy_keys.add(key)
-    return {
-        "version": 2,
-        "environment_refs": references,
-        "credentials_migration_required": True,
-        "legacy_environment_keys": sorted(legacy_keys),
-    }, False
-
-
-def build_setup_environment_scrub_envelope(value):
-    if value in (None, ""):
-        return None
-    parse_failed = False
-    try:
-        parsed = (
-            json.loads(value)
-            if isinstance(value, str)
-            else value
-        )
-    except (TypeError, json.JSONDecodeError):
-        parsed = None
-        parse_failed = True
-    safe_v2_envelope, v2_is_canonical = (
-        _normalize_v2_setup_environment_envelope(parsed)
-    )
-    if safe_v2_envelope is not None:
-        return None if v2_is_canonical else safe_v2_envelope
-    legacy_keys = _safe_setup_environment_keys(parsed)
-    migration_required = bool(
-        legacy_keys
-        or parse_failed
-        or parsed not in (None, {})
-    )
-    envelope = {
-        "version": 2,
-        "environment_refs": {},
-    }
-    if migration_required:
-        envelope.update(
-            {
-                "credentials_migration_required": True,
-                "legacy_environment_keys": legacy_keys,
-            }
-        )
-    return envelope
-
-
-def deserialize_setup_environment(value):
-    safe_v2_envelope, _v2_is_canonical = (
-        _normalize_v2_setup_environment_envelope(value)
-    )
-    if safe_v2_envelope is not None:
-        return {
-            "environment_refs": dict(
-                safe_v2_envelope["environment_refs"]
-            ),
-            "credentials_migration_required": bool(
-                safe_v2_envelope.get(
-                    "credentials_migration_required"
-                )
-            ),
-            "legacy_environment_keys": list(
-                safe_v2_envelope.get(
-                    "legacy_environment_keys"
-                )
-                or []
-            ),
-        }
-
-    legacy_keys = legacy_setup_environment_keys(value)
-    return {
-        "environment_refs": {},
-        "credentials_migration_required": bool(legacy_keys),
-        "legacy_environment_keys": legacy_keys,
-    }
-
-
-def sanitize_setup_snapshot(value):
-    if isinstance(value, dict):
-        result = {}
-        for key, item in value.items():
-            if key == "environment_overrides":
-                legacy_keys = legacy_setup_environment_keys(item)
-                result["environment_refs"] = {}
-                result["credentials_migration_required"] = bool(
-                    legacy_keys
-                )
-                result["legacy_environment_keys"] = legacy_keys
-                continue
-            if key == "_resolved_environment_values":
-                continue
-            result[key] = sanitize_setup_snapshot(item)
-        return result
-    if isinstance(value, list):
-        return [sanitize_setup_snapshot(item) for item in value]
+        return {}
     return value
 
 
 def serialize_setup_script(row, load_json_column):
     if not row:
         return None
-    if (
-        row.get("environment_json") is None
-        and "environment_refs" in row
-    ):
-        environment_value = {
-            "version": 2,
-            "environment_refs": row.get("environment_refs"),
-        }
-    else:
-        environment_value = load_json_column(
-            row.get("environment_json"),
-            row.get("environment_overrides") or {},
-        )
-    environment = deserialize_setup_environment(environment_value)
     return {
         "uid": row.get("script_uid") or row.get("uid"),
         "name": row.get("script_name") or row.get("name") or "",
         "description": row.get("description") or "",
         "script_content": row.get("script_content") or "",
         "working_directory": row.get("working_directory") or "",
-        **environment,
+        "environment_overrides": load_setup_environment_overrides(
+            row,
+            load_json_column,
+        ),
         "timeout_seconds": int(
             row.get("timeout_seconds")
             or DEFAULT_SETUP_SCRIPT_TIMEOUT_SECONDS
@@ -323,11 +119,9 @@ def serialize_setup_run(row, load_json_column):
         ),
         "output_summary": row.get("output_summary") or "",
         "error": row.get("error") or "",
-        "script_snapshot": sanitize_setup_snapshot(
-            load_json_column(
-                row.get("script_snapshot_json"),
-                {},
-            )
+        "script_snapshot": load_json_column(
+            row.get("script_snapshot_json"),
+            {},
         ),
     }
 
@@ -421,10 +215,14 @@ def build_setup_targets(
 
 def setup_secret_values(script):
     values = set()
-    for value in script.get("_resolved_environment_values") or ():
-        text = "" if value is None else str(value)
-        if text:
-            values.add(text)
+    for mapping_name in ("environment_overrides",):
+        mapping = script.get(mapping_name) or {}
+        if not isinstance(mapping, dict):
+            continue
+        for value in mapping.values():
+            text = "" if value is None else str(value)
+            if text:
+                values.add(text)
     return values
 
 
@@ -463,18 +261,10 @@ def redact_setup_text(
 
 def redact_setup_snapshot(value, parent_key="", *, redact_text):
     if isinstance(value, dict):
+        if parent_key == "environment_overrides":
+            return {key: "******" for key in value}
         result = {}
         for key, item in value.items():
-            if key == "environment_overrides":
-                legacy_keys = legacy_setup_environment_keys(item)
-                result["environment_refs"] = {}
-                result["credentials_migration_required"] = bool(
-                    legacy_keys
-                )
-                result["legacy_environment_keys"] = legacy_keys
-                continue
-            if key == "_resolved_environment_values":
-                continue
             if re.search(
                 (
                     r"(?i)(password|passwd|pwd|secret|token|authorization|"

@@ -6,53 +6,9 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from test_plan_viewer.setup.validation import (
-    SETUP_BASE_ENVIRONMENT_ALLOWLIST,
-    validate_setup_environment_reference,
-)
-
-
 SETUP_SCRIPT_OUTPUT_CAPTURE_BYTES = 12000
 SETUP_CONCURRENCY_LOCKS = {}
 SETUP_CONCURRENCY_LOCKS_GUARD = threading.Lock()
-SETUP_ENVIRONMENT_ALLOWLIST = SETUP_BASE_ENVIRONMENT_ALLOWLIST
-
-
-def build_setup_environment(source=None):
-    source = os.environ if source is None else source
-    return {
-        str(key): str(value)
-        for key, value in source.items()
-        if key in SETUP_ENVIRONMENT_ALLOWLIST
-        or key.startswith("LC_")
-    }
-
-
-def resolve_setup_environment_refs(environment_refs, source=None):
-    if environment_refs in (None, ""):
-        return {}
-    if not isinstance(environment_refs, dict):
-        raise ValueError("environment_refs must be an object.")
-    source = os.environ if source is None else source
-    resolved = {}
-    missing = []
-    for child_name, platform_name in environment_refs.items():
-        child_name = str(child_name).strip()
-        platform_name = str(platform_name).strip()
-        validate_setup_environment_reference(
-            child_name,
-            platform_name,
-        )
-        if platform_name not in source:
-            missing.append(platform_name)
-            continue
-        resolved[child_name] = str(source[platform_name])
-    if missing:
-        raise ValueError(
-            "准备脚本引用的运行平台环境变量缺失："
-            + "、".join(sorted(set(missing)))
-        )
-    return resolved
 
 
 @dataclass(frozen=True)
@@ -67,7 +23,7 @@ class SetupRunnerDependencies:
     popen: callable
     clock: callable = time.time
     thread_factory: callable = threading.Thread
-    environment_factory: callable = build_setup_environment
+    environment_factory: callable = lambda: os.environ.copy()
     os_name: str = os.name
 
 
@@ -154,28 +110,18 @@ def execute_setup_script_once_unlocked(
     dependencies,
 ):
     started = dependencies.clock()
-    if (
-        script.get("credentials_migration_required")
-        or "environment_overrides" in script
-    ):
-        raise ValueError(
-            "准备脚本包含旧版明文环境配置；请先重新绑定 "
-            "environment_refs。"
-        )
-    resolved_environment = resolve_setup_environment_refs(
-        script.get("environment_refs")
-    )
-    execution_script = {
-        **script,
-        "_resolved_environment_values": tuple(
-            resolved_environment.values()
-        ),
-    }
     cwd = dependencies.resolve_working_directory(
         script.get("working_directory")
     )
     env = dependencies.environment_factory()
-    env.update(resolved_environment)
+    env.update(
+        {
+            str(key): str(value)
+            for key, value in (
+                script.get("environment_overrides") or {}
+            ).items()
+        }
+    )
     script_content = script.get("script_content") or ""
     if "\x00" in script_content:
         raise ValueError(
@@ -205,17 +151,10 @@ def execute_setup_script_once_unlocked(
     except subprocess.TimeoutExpired as exc:
         dependencies.kill_process(process)
         dependencies.close_process_output(process, reader)
-        output = dependencies.redact_setup_text(
-            dependencies.normalize_process_output(
-                output_buffer.getvalue()
-            ).strip(),
-            execution_script,
-            limit=4000,
-        )
         raise subprocess.TimeoutExpired(
             getattr(process, "args", exc.cmd),
             timeout_seconds,
-            output=output,
+            output=output_buffer.getvalue(),
         ) from exc
     dependencies.close_process_output(process, reader)
     output = dependencies.normalize_process_output(
@@ -227,7 +166,7 @@ def execute_setup_script_once_unlocked(
         "exit_code": returncode,
         "output": dependencies.redact_setup_text(
             output,
-            execution_script,
+            script,
             limit=4000,
         ),
         "error": (

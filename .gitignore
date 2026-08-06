@@ -1,5 +1,8 @@
 .DS_Store
 Thumbs.db
+.agents/
+.codex/
+.codex-audits/
 
 __pycache__/
 *.py[cod]
@@ -34,3 +37,6 @@ playwright-report/
 *.cer
 *.dump
 *.sql
+*.db
+*.sqlite
+*.sqlite3

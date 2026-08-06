@@ -17,7 +17,6 @@ class PlatformRecordRepositoryDependencies:
     mysql_connection: Callable
     get_default_plan_filename: Callable[[str], str]
     now_ms: Callable[[], int] = lambda: int(time.time() * 1000)
-    redact_value: Callable[[object], object] = lambda value: value
 
 
 def validate_platform_record_bucket(bucket, allowed_buckets):
@@ -98,9 +97,7 @@ class PlatformRecordRepository:
                 value = json.loads(row.get("record_json") or "{}")
             except json.JSONDecodeError:
                 continue
-            buckets[bucket][row.get("record_key")] = (
-                deps.redact_value(value)
-            )
+            buckets[bucket][row.get("record_key")] = value
 
         return buckets
 
@@ -115,13 +112,8 @@ class PlatformRecordRepository:
         deps.ensure_schema(config)
         records_table = deps.table_sql(config, "platform_records")
         project_id = deps.get_project_id()
-        safe_record = deps.redact_value(record)
-        record_json = json.dumps(
-            safe_record,
-            ensure_ascii=False,
-            separators=(",", ":"),
-        )
-        updated_at = record_updated_at_ms(safe_record, deps.now_ms)
+        record_json = json.dumps(record, ensure_ascii=False, separators=(",", ":"))
+        updated_at = record_updated_at_ms(record, deps.now_ms)
 
         with deps.mysql_connection(config) as connection:
             with connection.cursor() as cursor:
@@ -146,10 +138,9 @@ class PlatformRecordRepository:
         deps.ensure_schema(config)
         jobs_table = deps.table_sql(config, "platform_jobs")
         project_id = deps.get_project_id()
-        safe_job = deps.redact_value(job)
         payload = {
             key: value
-            for key, value in safe_job.items()
+            for key, value in job.items()
             if key
             not in {
                 "id",
@@ -184,25 +175,18 @@ class PlatformRecordRepository:
                       updated_at = VALUES(updated_at)
                     """,
                     (
-                        safe_job["id"],
+                        job["id"],
                         project_id,
                         job_type,
-                        safe_job["status"],
-                        safe_job["module_name"],
-                        safe_job.get("plan_filename")
-                        or deps.get_default_plan_filename(
-                            safe_job["module_name"]
-                        ),
-                        safe_job["target_path"],
-                        json.dumps(
-                            safe_job.get("logs") or [],
-                            ensure_ascii=False,
-                            separators=(",", ":"),
-                        ),
-                        safe_job.get("error"),
+                        job["status"],
+                        job["module_name"],
+                        job.get("plan_filename") or deps.get_default_plan_filename(job["module_name"]),
+                        job["target_path"],
+                        json.dumps(job.get("logs") or [], ensure_ascii=False, separators=(",", ":")),
+                        job.get("error"),
                         json.dumps(payload, ensure_ascii=False, separators=(",", ":")) if payload else None,
-                        safe_job["created_at"],
-                        safe_job["updated_at"],
+                        job["created_at"],
+                        job["updated_at"],
                     ),
                 )
             connection.commit()
@@ -234,20 +218,18 @@ class PlatformRecordRepository:
         if not isinstance(payload, dict):
             payload = {}
 
-        return deps.redact_value(
-            {
-                **payload,
-                "id": row["job_id"],
-                "status": row["status"],
-                "module_name": row["module_name"],
-                "plan_filename": row["plan_filename"],
-                "target_path": row["target_path"],
-                "logs": logs,
-                "error": row.get("error"),
-                "created_at": float(row["created_at"]),
-                "updated_at": float(row["updated_at"]),
-            }
-        )
+        return {
+            **payload,
+            "id": row["job_id"],
+            "status": row["status"],
+            "module_name": row["module_name"],
+            "plan_filename": row["plan_filename"],
+            "target_path": row["target_path"],
+            "logs": logs,
+            "error": row.get("error"),
+            "created_at": float(row["created_at"]),
+            "updated_at": float(row["updated_at"]),
+        }
 
     def require_database(self):
         config = self.dependencies.get_database_config()

@@ -1,142 +1,883 @@
-name: Release
+name: Release approved candidate
 
 on:
-  push:
-    tags:
-      - "v*"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing immutable v-prefixed tag; dispatch this workflow at the same tag
+        required: true
+        type: string
+      candidate_run_id:
+        description: Successful Prepare release candidate workflow run ID
+        required: true
+        type: string
+      candidate_manifest_sha256:
+        description: Reviewed candidate manifest SHA-256
+        required: true
+        type: string
+      approval_run_id:
+        description: Successful Approve release candidate workflow run ID
+        required: true
+        type: string
+      approval_manifest_sha256:
+        description: Protected approval manifest SHA-256
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ inputs.release_tag }}
   cancel-in-progress: false
 
 jobs:
-  verify:
-    name: Verify release source
+  verify-promote:
+    name: Verify chain and promote the same candidate digest
     runs-on: ubuntu-latest
-    env:
-      PLATFORM_ALLOW_HOST_SCRIPT_EXECUTION: "false"
-      PLATFORM_ALLOW_TEST_EXECUTION: "false"
-      PLATFORM_CONFIG_PATH: config.example.json
+    permissions:
+      actions: read
+      contents: read
+      packages: write
+    outputs:
+      version: ${{ steps.identity.outputs.version }}
+      target-image: ${{ steps.identity.outputs.target_image }}
+      platform-digest: ${{ steps.identity.outputs.platform_digest }}
+      platform-config-digest: ${{ steps.identity.outputs.platform_config_digest }}
+      platform-reference: ${{ steps.identity.outputs.platform_reference }}
+      mysql-image: ${{ steps.identity.outputs.mysql_image }}
+      mysql-config-digest: ${{ steps.identity.outputs.mysql_config_digest }}
+      source-url: ${{ steps.identity.outputs.source_url }}
+      source-date-epoch: ${{ steps.identity.outputs.source_date_epoch }}
+      offline-approved: ${{ steps.identity.outputs.offline_approved }}
     steps:
-      - name: Validate release tag
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          if [[ ! "${GITHUB_REF_NAME}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
-            printf 'Unsupported release tag: %s\n' "${GITHUB_REF_NAME}" >&2
-            exit 1
-          fi
-
-      - name: Check out tagged source
-        uses: actions/checkout@v6
+      - name: Check out the immutable release tag
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
           persist-credentials: false
 
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.14"
-          cache: pip
-          cache-dependency-path: requirements.txt
-
-      - name: Install and test Python source
+      - name: Validate tag and source identity
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
-          python -m pip install --requirement requirements.txt
-          python -m compileall -q app.py test_plan_viewer tests
-          python -m unittest discover -s tests
+          set -Eeuo pipefail
+          [[ "${RELEASE_TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]
+          [[ "${GITHUB_REF}" == "refs/tags/${RELEASE_TAG}" ]] \
+            || { printf 'Dispatch release.yml at the exact release tag ref.\n' >&2; exit 1; }
+          [[ "$(git rev-parse HEAD)" == "${GITHUB_SHA}" ]]
+          [[ "$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}")" == "${GITHUB_SHA}" ]]
+          git merge-base --is-ancestor "${GITHUB_SHA}" "refs/remotes/origin/${DEFAULT_BRANCH}" \
+            || { printf 'Release tag is not on the default branch.\n' >&2; exit 1; }
+          [[ -z "$(git status --porcelain --untracked-files=all)" ]]
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: "24"
-          cache: npm
-          cache-dependency-path: project-template/package-lock.json
-          package-manager-cache: true
-
-      - name: Install and test JavaScript source
+      - name: Install pinned Minisign
         shell: bash
         run: |
           set -Eeuo pipefail
-          npm ci \
-            --prefix project-template \
-            --ignore-scripts \
-            --no-audit \
-            --no-fund
-          npm audit \
-            --prefix project-template \
-            --omit=optional \
-            --audit-level=high
-          for test_file in tests/js/*.vm.js; do
-            node "${test_file}"
+          mkdir -p "${RUNNER_TEMP}/bin"
+          bash scripts/release/install-minisign.sh "${RUNNER_TEMP}/bin/minisign"
+          printf '%s\n' "${RUNNER_TEMP}/bin" >> "${GITHUB_PATH}"
+
+      - name: Download and verify signed candidate and approval artifacts
+        id: chain
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+          CANDIDATE_SHA: ${{ inputs.candidate_manifest_sha256 }}
+          APPROVAL_RUN_ID: ${{ inputs.approval_run_id }}
+          APPROVAL_SHA: ${{ inputs.approval_manifest_sha256 }}
+        run: |
+          set -Eeuo pipefail
+          [[ "${CANDIDATE_RUN_ID}" =~ ^[1-9][0-9]*$ ]]
+          [[ "${APPROVAL_RUN_ID}" =~ ^[1-9][0-9]*$ ]]
+          [[ "${CANDIDATE_SHA}" =~ ^[0-9a-f]{64}$ ]]
+          [[ "${APPROVAL_SHA}" =~ ^[0-9a-f]{64}$ ]]
+          candidate_root="${RUNNER_TEMP}/release-candidate"
+          approval_root="${RUNNER_TEMP}/release-approval"
+          mkdir -p "${candidate_root}" "${approval_root}"
+
+          candidate_run="${RUNNER_TEMP}/candidate-run.json"
+          approval_run="${RUNNER_TEMP}/approval-run.json"
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${CANDIDATE_RUN_ID}" > "${candidate_run}"
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${APPROVAL_RUN_ID}" > "${approval_run}"
+          [[ "$(jq -r .conclusion "${candidate_run}")" == "success" ]]
+          [[ "$(jq -r .path "${candidate_run}")" == ".github/workflows/prepare-release.yml" ]]
+          [[ "$(jq -r .conclusion "${approval_run}")" == "success" ]]
+          [[ "$(jq -r .path "${approval_run}")" == ".github/workflows/approve-release.yml" ]]
+          gh run download "${CANDIDATE_RUN_ID}" --repo "${GITHUB_REPOSITORY}" \
+            --name release-candidate --dir "${candidate_root}"
+          gh run download "${APPROVAL_RUN_ID}" --repo "${GITHUB_REPOSITORY}" \
+            --name release-approval --dir "${approval_root}"
+
+          candidate_manifest="${candidate_root}/RELEASE-CANDIDATE.json"
+          approval_manifest="${approval_root}/RELEASE-APPROVAL.json"
+          [[ "$(sha256sum "${candidate_manifest}" | awk '{print $1}')" == "${CANDIDATE_SHA}" ]]
+          [[ "$(sha256sum "${approval_manifest}" | awk '{print $1}')" == "${APPROVAL_SHA}" ]]
+          candidate_revision="$(jq -r .revision "${candidate_manifest}")"
+          approval_revision="$(jq -r .review.workflow.sha "${approval_manifest}")"
+          [[ "${candidate_revision}" == "${GITHUB_SHA}" ]]
+          [[ "${candidate_revision}" == "$(jq -r .head_sha "${candidate_run}")" ]]
+          [[ "${approval_revision}" == "$(jq -r .head_sha "${approval_run}")" ]]
+          [[ "$(jq -r .workflow.runId "${candidate_manifest}")" == "${CANDIDATE_RUN_ID}" ]]
+          [[ "$(jq -r .review.workflow.runId "${approval_manifest}")" == "${APPROVAL_RUN_ID}" ]]
+          [[ "$(jq -r .workflow.repository "${candidate_manifest}")" == "${GITHUB_REPOSITORY}" ]]
+          [[ "$(jq -r .review.workflow.repository "${approval_manifest}")" == "${GITHUB_REPOSITORY}" ]]
+
+          minisign -Vm "${candidate_root}/CANDIDATE-SHA256SUMS" \
+            -x "${candidate_root}/CANDIDATE-SHA256SUMS.minisig" \
+            -p scripts/release/minisign.pub -H -q
+          minisign -Vm "${approval_root}/APPROVAL-SHA256SUMS" \
+            -x "${approval_root}/APPROVAL-SHA256SUMS.minisig" \
+            -p scripts/release/minisign.pub -H -q
+          (cd "${candidate_root}" && sha256sum --check --strict CANDIDATE-SHA256SUMS)
+          (cd "${approval_root}" && sha256sum --check --strict APPROVAL-SHA256SUMS)
+          {
+            printf 'candidate_root=%s\n' "${candidate_root}"
+            printf 'approval_root=%s\n' "${approval_root}"
+            printf 'candidate_revision=%s\n' "${candidate_revision}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Validate exact candidate and protected approval binding
+        id: identity
+        shell: bash
+        env:
+          CANDIDATE_ROOT: ${{ steps.chain.outputs.candidate_root }}
+          APPROVAL_ROOT: ${{ steps.chain.outputs.approval_root }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -Eeuo pipefail
+          candidate="${CANDIDATE_ROOT}/RELEASE-CANDIDATE.json"
+          approval="${APPROVAL_ROOT}/RELEASE-APPROVAL.json"
+          target_image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          version="${RELEASE_TAG#v}"
+          python3 scripts/release/release_chain.py \
+            "${candidate}" "${approval}" \
+            --candidate-root "${CANDIDATE_ROOT}" \
+            --approval-root "${APPROVAL_ROOT}" \
+            --expected-version "${version}" \
+            --expected-revision "${GITHUB_SHA}" \
+            --expected-target-image "${target_image}"
+          platform_digest="$(jq -r .platformDigest "${candidate}")"
+          platform_config_digest="$(jq -r .platformConfigDigest "${candidate}")"
+          mysql_image="$(jq -r .mysqlImage "${candidate}")"
+          mysql_config_digest="$(jq -r .mysqlConfigDigest "${candidate}")"
+          source_url="$(jq -r .sourceUrl "${candidate}")"
+          source_date_epoch="$(jq -r .sourceDateEpoch "${candidate}")"
+          [[ "${source_url}" == "https://github.com/${GITHUB_REPOSITORY}" ]]
+          offline_approved="$(python3 scripts/release/release_chain.py \
+            "${candidate}" "${approval}" --approval-root "${APPROVAL_ROOT}" \
+            --print-offline-status)"
+          [[ "${offline_approved}" == "approved" || "${offline_approved}" == "pending" ]]
+          {
+            printf 'version=%s\n' "${version}"
+            printf 'target_image=%s\n' "${target_image}"
+            printf 'platform_digest=%s\n' "${platform_digest}"
+            printf 'platform_config_digest=%s\n' "${platform_config_digest}"
+            printf 'platform_reference=%s@%s\n' "${target_image}" "${platform_digest}"
+            printf 'mysql_image=%s\n' "${mysql_image}"
+            printf 'mysql_config_digest=%s\n' "${mysql_config_digest}"
+            printf 'source_url=%s\n' "${source_url}"
+            printf 'source_date_epoch=%s\n' "${source_date_epoch}"
+            if [[ "${offline_approved}" == "approved" ]]; then
+              printf 'offline_approved=true\n'
+            else
+              printf 'offline_approved=false\n'
+            fi
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Install Skopeo for digest-preserving registry promotion
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends skopeo
+          skopeo --version
+
+      - name: Promote the approved OCI bytes without rebuilding
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_ROOT: ${{ steps.chain.outputs.candidate_root }}
+          TARGET_IMAGE: ${{ steps.identity.outputs.target_image }}
+          PLATFORM_DIGEST: ${{ steps.identity.outputs.platform_digest }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -Eeuo pipefail
+          archive="${CANDIDATE_ROOT}/platform-linux-amd64.oci.tar"
+          source_digest="$(skopeo inspect --raw "oci-archive:${archive}" | sha256sum | awk '{print "sha256:" $1}')"
+          [[ "${source_digest}" == "${PLATFORM_DIGEST}" ]] \
+            || { printf 'OCI archive digest changed before promotion.\n' >&2; exit 1; }
+          printf '%s' "${GH_TOKEN}" | skopeo login \
+            --username "${GITHUB_ACTOR}" --password-stdin ghcr.io
+          printf '%s' "${GH_TOKEN}" | docker login ghcr.io \
+            --username "${GITHUB_ACTOR}" --password-stdin
+
+          ensure_reference() {
+            local reference="$1"
+            local digest
+            if skopeo inspect --raw "docker://${reference}" > "${RUNNER_TEMP}/remote-manifest" 2>/dev/null; then
+              digest="$(sha256sum "${RUNNER_TEMP}/remote-manifest" | awk '{print "sha256:" $1}')"
+              [[ "${digest}" == "${PLATFORM_DIGEST}" ]] \
+                || { printf 'Refusing to overwrite %s at unexpected digest %s.\n' "${reference}" "${digest}" >&2; return 1; }
+            else
+              skopeo copy --all --preserve-digests \
+                "oci-archive:${archive}" "docker://${reference}"
+            fi
+            digest="$(skopeo inspect --raw "docker://${reference}" | sha256sum | awk '{print "sha256:" $1}')"
+            [[ "${digest}" == "${PLATFORM_DIGEST}" ]] \
+              || { printf 'Promoted reference digest mismatch: %s\n' "${reference}" >&2; return 1; }
+          }
+          ensure_reference "${TARGET_IMAGE}:${RELEASE_TAG}"
+          ensure_reference "${TARGET_IMAGE}:sha-${GITHUB_SHA}"
+          skopeo inspect --raw "docker://${TARGET_IMAGE}@${PLATFORM_DIGEST}" >/dev/null
+
+      - name: Upload verified small release material
+        shell: bash
+        env:
+          CANDIDATE_ROOT: ${{ steps.chain.outputs.candidate_root }}
+          APPROVAL_ROOT: ${{ steps.chain.outputs.approval_root }}
+        run: |
+          set -Eeuo pipefail
+          material="${RUNNER_TEMP}/verified-release-material"
+          mkdir -p "${material}/candidate" "${material}/approval"
+          cp "${CANDIDATE_ROOT}/RELEASE-CANDIDATE.json" "${material}/candidate/"
+          cp -a "${CANDIDATE_ROOT}/sbom" "${material}/candidate/sbom"
+          cp -a "${APPROVAL_ROOT}/." "${material}/approval/"
+          (
+            cd "${material}"
+            find . -type f ! -name CHAIN-SHA256SUMS -print0 \
+              | sort -z | xargs -0 sha256sum > "${RUNNER_TEMP}/CHAIN-SHA256SUMS"
+            mv "${RUNNER_TEMP}/CHAIN-SHA256SUMS" .
+            sha256sum --check --strict CHAIN-SHA256SUMS
+          )
+
+      - name: Store verified release material for packaging
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: verified-release-material-${{ github.sha }}
+          path: ${{ runner.temp }}/verified-release-material
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 5
+
+  public-package-gate:
+    name: Confirm irreversible GHCR Public visibility and anonymous digest pull
+    if: github.event.repository.visibility == 'public'
+    needs: verify-promote
+    runs-on: ubuntu-latest
+    environment: release-package-publication
+    permissions:
+      contents: read
+    env:
+      PLATFORM_CONFIG_DIGEST: ${{ needs.verify-promote.outputs.platform-config-digest }}
+      PLATFORM_IMAGE: ${{ needs.verify-promote.outputs.platform-reference }}
+      REPOSITORY_VISIBILITY: ${{ github.event.repository.visibility }}
+    steps:
+      - name: Check out the immutable public-package verifier
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Confirm immutable public-package verifier
+        run: test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+
+      - name: Require the public repository path
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "${REPOSITORY_VISIBILITY}" == "public" ]]
+          docker_config="${RUNNER_TEMP}/anonymous-docker-config"
+          mkdir -p "${docker_config}"
+          chmod 0700 "${docker_config}"
+          printf 'DOCKER_CONFIG=%s\n' "${docker_config}" >> "${GITHUB_ENV}"
+          [[ -z "${DOCKER_AUTH_CONFIG:-}" ]]
+          [[ ! -s "${docker_config}/config.json" ]]
+
+      - name: Pull the exact platform image anonymously
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          docker pull --platform linux/amd64 "${PLATFORM_IMAGE}"
+          [[ "$(python3 scripts/release/docker_image_config_digest.py "${PLATFORM_IMAGE}")" \
+            == "${PLATFORM_CONFIG_DIGEST}" ]]
+          [[ "$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "${PLATFORM_IMAGE}")" == "linux/amd64" ]]
+
+  package:
+    name: Assemble and sign approved release assets
+    needs: verify-promote
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    outputs:
+      offline-approved: ${{ needs.verify-promote.outputs.offline-approved }}
+    steps:
+      - name: Check out the immutable release tag
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Confirm immutable packaging source
+        run: test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+
+      - name: Install pinned Minisign
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p "${RUNNER_TEMP}/bin"
+          bash scripts/release/install-minisign.sh "${RUNNER_TEMP}/bin/minisign"
+          printf '%s\n' "${RUNNER_TEMP}/bin" >> "${GITHUB_PATH}"
+
+      - name: Download verified release material
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: verified-release-material-${{ github.sha }}
+          path: ${{ runner.temp }}/verified-release-material
+
+      - name: Revalidate release material
+        shell: bash
+        env:
+          TARGET_IMAGE: ${{ needs.verify-promote.outputs.target-image }}
+          RELEASE_VERSION: ${{ needs.verify-promote.outputs.version }}
+          OFFLINE_APPROVED: ${{ needs.verify-promote.outputs.offline-approved }}
+        run: |
+          set -Eeuo pipefail
+          material="${RUNNER_TEMP}/verified-release-material"
+          (cd "${material}" && sha256sum --check --strict CHAIN-SHA256SUMS)
+          args=(
+            "${material}/candidate/RELEASE-CANDIDATE.json"
+            "${material}/approval/RELEASE-APPROVAL.json"
+            --approval-root "${material}/approval"
+            --expected-version "${RELEASE_VERSION}"
+            --expected-revision "${GITHUB_SHA}"
+            --expected-target-image "${TARGET_IMAGE}"
+          )
+          if [[ "${OFFLINE_APPROVED}" == "true" ]]; then
+            args+=(--require-offline)
+          fi
+          python3 scripts/release/release_chain.py "${args[@]}"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Pull and verify immutable image inputs
+        shell: bash
+        env:
+          PLATFORM_IMAGE: ${{ needs.verify-promote.outputs.platform-reference }}
+          MYSQL_IMAGE: ${{ needs.verify-promote.outputs.mysql-image }}
+          PLATFORM_CONFIG_DIGEST: ${{ needs.verify-promote.outputs.platform-config-digest }}
+          MYSQL_CONFIG_DIGEST: ${{ needs.verify-promote.outputs.mysql-config-digest }}
+          RELEASE_VERSION: ${{ needs.verify-promote.outputs.version }}
+          SOURCE_URL: ${{ needs.verify-promote.outputs.source-url }}
+        run: |
+          set -Eeuo pipefail
+          docker pull --platform linux/amd64 "${PLATFORM_IMAGE}"
+          docker pull --platform linux/amd64 "${MYSQL_IMAGE}"
+          [[ "$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "${PLATFORM_IMAGE}")" == "linux/amd64" ]]
+          [[ "$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "${MYSQL_IMAGE}")" == "linux/amd64" ]]
+          [[ "$(python3 scripts/release/docker_image_config_digest.py "${PLATFORM_IMAGE}")" \
+            == "${PLATFORM_CONFIG_DIGEST}" ]]
+          [[ "$(python3 scripts/release/docker_image_config_digest.py "${MYSQL_IMAGE}")" \
+            == "${MYSQL_CONFIG_DIGEST}" ]]
+          [[ "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "${PLATFORM_IMAGE}")" == "${GITHUB_SHA}" ]]
+          [[ "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.version" }}' "${PLATFORM_IMAGE}")" == "${RELEASE_VERSION}" ]]
+          [[ "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.source" }}' "${PLATFORM_IMAGE}")" == "${SOURCE_URL}" ]]
+
+      - name: Create offline image archives only when approved
+        if: needs.verify-promote.outputs.offline-approved == 'true'
+        shell: bash
+        env:
+          PLATFORM_IMAGE: ${{ needs.verify-promote.outputs.platform-reference }}
+          MYSQL_IMAGE: ${{ needs.verify-promote.outputs.mysql-image }}
+          PLATFORM_CONFIG_DIGEST: ${{ needs.verify-promote.outputs.platform-config-digest }}
+          MYSQL_CONFIG_DIGEST: ${{ needs.verify-promote.outputs.mysql-config-digest }}
+        run: |
+          set -Eeuo pipefail
+          image_dir="${RUNNER_TEMP}/offline-images"
+          mkdir -p "${image_dir}"
+          platform_archive_image="playwright-test-platform.local/platform:sha256-${PLATFORM_IMAGE##*@sha256:}"
+          mysql_archive_image="playwright-test-platform.local/mysql:sha256-${MYSQL_IMAGE##*@sha256:}"
+          docker image tag "${PLATFORM_IMAGE}" "${platform_archive_image}"
+          docker image tag "${MYSQL_IMAGE}" "${mysql_archive_image}"
+          [[ "$(docker image inspect --format '{{.Id}}' "${platform_archive_image}")" \
+            == "$(docker image inspect --format '{{.Id}}' "${PLATFORM_IMAGE}")" ]]
+          [[ "$(docker image inspect --format '{{.Id}}' "${mysql_archive_image}")" \
+            == "$(docker image inspect --format '{{.Id}}' "${MYSQL_IMAGE}")" ]]
+          docker image save "${platform_archive_image}" \
+            | zstd --threads=1 -19 --quiet --stdout > "${image_dir}/platform-linux-amd64.tar.zst"
+          docker image save "${mysql_archive_image}" \
+            | zstd --threads=1 -19 --quiet --stdout > "${image_dir}/mysql-linux-amd64.tar.zst"
+
+      - name: Build deterministic approved bundles
+        shell: bash
+        env:
+          PLATFORM_IMAGE: ${{ needs.verify-promote.outputs.platform-reference }}
+          MYSQL_IMAGE: ${{ needs.verify-promote.outputs.mysql-image }}
+          RELEASE_VERSION: ${{ needs.verify-promote.outputs.version }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          SOURCE_URL: ${{ needs.verify-promote.outputs.source-url }}
+          SOURCE_DATE_EPOCH: ${{ needs.verify-promote.outputs.source-date-epoch }}
+          OFFLINE_APPROVED: ${{ needs.verify-promote.outputs.offline-approved }}
+        run: |
+          set -Eeuo pipefail
+          material="${RUNNER_TEMP}/verified-release-material"
+          output="${RUNNER_TEMP}/release-assets"
+          mkdir -p "${output}"
+          common=(
+            --version "${RELEASE_VERSION}"
+            --tag "${RELEASE_TAG}"
+            --revision "${GITHUB_SHA}"
+            --source-url "${SOURCE_URL}"
+            --source-date-epoch "${SOURCE_DATE_EPOCH}"
+            --platform-image "${PLATFORM_IMAGE}"
+            --mysql-image "${MYSQL_IMAGE}"
+            --sbom-dir "${material}/candidate/sbom"
+            --license-dir "${material}/approval/licenses"
+            --candidate-manifest "${material}/candidate/RELEASE-CANDIDATE.json"
+            --approval-root "${material}/approval"
+            --output-dir "${output}"
+          )
+          bash scripts/release/build-bundle.sh --type online "${common[@]}"
+          if [[ "${OFFLINE_APPROVED}" == "true" ]]; then
+            bash scripts/release/build-bundle.sh --type offline \
+              --platform-archive "${RUNNER_TEMP}/offline-images/platform-linux-amd64.tar.zst" \
+              --mysql-archive "${RUNNER_TEMP}/offline-images/mysql-linux-amd64.tar.zst" \
+              "${common[@]}"
+          fi
+          for bundle in "${output}"/*.tar.zst; do
+            verify_args=(--allow-unsigned-local)
+            if [[ "${bundle}" == *-offline.tar.zst ]]; then
+              verify_args+=(--verify-image-archives)
+            fi
+            bash scripts/release/verify-bundle.sh "${verify_args[@]}" "${bundle}"
           done
+          cp "${material}/candidate/sbom/"*.json "${output}/"
+          cp scripts/release/release-metadata.schema.json "${output}/"
+          printf 'PLATFORM_IMAGE=%s\nMYSQL_IMAGE=%s\n' \
+            "${PLATFORM_IMAGE}" "${MYSQL_IMAGE}" > "${output}/IMAGE-DIGESTS.txt"
+          (
+            cd "${output}"
+            find . -maxdepth 1 -type f ! -name RELEASE-ASSET-SHA256SUMS -print0 \
+              | sort -z | xargs -0 sha256sum > "${RUNNER_TEMP}/RELEASE-ASSET-SHA256SUMS"
+            mv "${RUNNER_TEMP}/RELEASE-ASSET-SHA256SUMS" .
+          )
 
-      - name: Validate deployment files
+      - name: Write and sign the online-only Release manifest
+        shell: bash
+        env:
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+          RELEASE_VERSION: ${{ needs.verify-promote.outputs.version }}
+          TARGET_IMAGE: ${{ needs.verify-promote.outputs.target-image }}
+        run: |
+          set -Eeuo pipefail
+          [[ "${{ needs.verify-promote.outputs.offline-approved }}" == "false" ]] \
+            || { printf 'This publication is authorized for online-only assets.\n' >&2; exit 1; }
+          [[ -n "${MINISIGN_SECRET_KEY}" ]] || { printf 'MINISIGN_SECRET_KEY is not configured.\n' >&2; exit 1; }
+          material="${RUNNER_TEMP}/verified-release-material"
+          output="${RUNNER_TEMP}/release-assets"
+          python3 scripts/release/release_manifest.py write \
+            --output "${output}/RELEASE-MANIFEST.json" \
+            --asset-root "${output}" \
+            --candidate "${material}/candidate/RELEASE-CANDIDATE.json" \
+            --approval "${material}/approval/RELEASE-APPROVAL.json" \
+            --approval-root "${material}/approval" \
+            --public-key scripts/release/minisign.pub \
+            --version "${RELEASE_VERSION}" \
+            --revision "${GITHUB_SHA}" \
+            --target-image "${TARGET_IMAGE}"
+          umask 077
+          secret_key="${RUNNER_TEMP}/minisign.key"
+          printf '%s\n' "${MINISIGN_SECRET_KEY}" > "${secret_key}"
+          minisign -S -s "${secret_key}" \
+            -m "${output}/RELEASE-MANIFEST.json" \
+            -x "${output}/RELEASE-MANIFEST.json.minisig" \
+            -t "playwright-test-platform ${RELEASE_TAG:-v${RELEASE_VERSION}} revision ${GITHUB_SHA}"
+          rm -f -- "${secret_key}"
+          minisign -Vm "${output}/RELEASE-MANIFEST.json" \
+            -x "${output}/RELEASE-MANIFEST.json.minisig" \
+            -p scripts/release/minisign.pub -H -q
+          python3 scripts/release/verify_release_assets.py "${output}"
+
+      - name: Upload immutable release assets
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-assets-${{ github.sha }}
+          path: ${{ runner.temp }}/release-assets
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 5
+
+  online-smoke:
+    name: Clean-host online lifecycle smoke (required)
+    if: >-
+      always() &&
+      needs.verify-promote.result == 'success' &&
+      needs.package.result == 'success' &&
+      (github.event.repository.visibility != 'public' ||
+       needs.public-package-gate.result == 'success')
+    needs:
+      - verify-promote
+      - package
+      - public-package-gate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check out trusted tagged verifier
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Confirm immutable online verifier
+        run: test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+
+      - name: Install pinned Minisign
         shell: bash
         run: |
           set -Eeuo pipefail
-          shellcheck \
-            deploy/entrypoint.sh \
-            deploy/healthcheck.sh \
-            project-template/.opencode/run-playwright-mcp.sh
-          PLATFORM_SESSION_SECRET="$(openssl rand -hex 32)"
-          PLATFORM_ADMIN_PASSWORD="$(openssl rand -hex 24)"
-          PLATFORM_DB_PASSWORD="$(openssl rand -hex 24)"
-          MYSQL_ROOT_PASSWORD="$(openssl rand -hex 24)"
-          OPENCODE_SERVER_PASSWORD="$(openssl rand -hex 24)"
-          export PLATFORM_SESSION_SECRET PLATFORM_ADMIN_PASSWORD
-          export PLATFORM_DB_PASSWORD MYSQL_ROOT_PASSWORD
-          export OPENCODE_SERVER_PASSWORD
-          docker compose -f deploy/compose.yaml config --quiet
-          test -f deploy/config.example.json
+          mkdir -p "${RUNNER_TEMP}/bin"
+          bash scripts/release/install-minisign.sh "${RUNNER_TEMP}/bin/minisign"
+          printf '%s\n' "${RUNNER_TEMP}/bin" >> "${GITHUB_PATH}"
 
-  github-release:
-    name: Create source release
+      - name: Download release assets on a clean runner
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-assets-${{ github.sha }}
+          path: ${{ runner.temp }}/release-assets
+
+      - name: Create an isolated Docker authentication scope
+        run: |
+          set -Eeuo pipefail
+          docker_config="${RUNNER_TEMP}/online-smoke-docker-config"
+          mkdir -p "${docker_config}"
+          chmod 0700 "${docker_config}"
+          printf 'DOCKER_CONFIG=%s\n' "${docker_config}" >> "${GITHUB_ENV}"
+
+      - name: Log in for Enterprise private-repository staging
+        if: github.event.repository.visibility != 'public'
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Require anonymous pulls for a public release
+        if: github.event.repository.visibility == 'public'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ -z "${DOCKER_AUTH_CONFIG:-}" ]]
+          [[ ! -s "${DOCKER_CONFIG}/config.json" ]]
+
+      - name: Verify, install, and exercise the online bundle
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ needs.verify-promote.outputs.version }}
+          PLATFORM_IMAGE: ${{ needs.verify-promote.outputs.platform-reference }}
+          MYSQL_IMAGE: ${{ needs.verify-promote.outputs.mysql-image }}
+        run: |
+          set -Eeuo pipefail
+          [[ -z "$(docker ps --all --quiet)" ]]
+          if docker image inspect "${PLATFORM_IMAGE}" >/dev/null 2>&1; then
+            printf 'Clean online runner unexpectedly contains the platform image.\n' >&2
+            exit 1
+          fi
+          if docker image inspect "${MYSQL_IMAGE}" >/dev/null 2>&1; then
+            printf 'Clean online runner unexpectedly contains the MySQL image.\n' >&2
+            exit 1
+          fi
+          bash scripts/release/smoke-bundle.sh \
+            --type online \
+            --bundle "${RUNNER_TEMP}/release-assets/playwright-test-platform-${RELEASE_VERSION}-linux-amd64-online.tar.zst" \
+            --github-repository "${GITHUB_REPOSITORY}" \
+            --source-ref "${GITHUB_REF}" \
+            --source-digest "${GITHUB_SHA}" \
+            --release-manifest "${RUNNER_TEMP}/release-assets/RELEASE-MANIFEST.json" \
+            --release-signature "${RUNNER_TEMP}/release-assets/RELEASE-MANIFEST.json.minisig" \
+            --minisign-public-key scripts/release/minisign.pub \
+            --port 55000 \
+            --compose-project "online-smoke-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+
+  offline-smoke:
+    name: Isolated-daemon offline lifecycle smoke (only when approved)
+    if: needs.package.outputs.offline-approved == 'true'
     needs:
-      - verify
+      - verify-promote
+      - package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check out trusted tagged verifier
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Confirm immutable offline verifier
+        run: test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+
+      - name: Install pinned Minisign
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p "${RUNNER_TEMP}/bin"
+          bash scripts/release/install-minisign.sh "${RUNNER_TEMP}/bin/minisign"
+          printf '%s\n' "${RUNNER_TEMP}/bin" >> "${GITHUB_PATH}"
+
+      - name: Download approved offline asset on a clean runner
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-assets-${{ github.sha }}
+          path: ${{ runner.temp }}/release-assets
+
+      - name: Verify offline install in an empty daemon with no network from startup
+        shell: bash
+        env:
+          DIND_IMAGE: docker.io/library/docker:29.1.3-dind@sha256:64d6ee47ea821c986467199baa162f5ac8cde3f57b719f18e23f3ed7a7444131
+          OFFLINE_NETWORK_PROBE_IMAGE: docker.io/library/busybox:1.37.0@sha256:7a3ebe5bfd1a4a19797d20b0c0bb39d44393e9a03fd852c0865b0f540d868df0
+          RELEASE_VERSION: ${{ needs.verify-promote.outputs.version }}
+        run: |
+          set -Eeuo pipefail
+          command -v unshare >/dev/null
+          command -v setpriv >/dev/null
+          command -v ip >/dev/null
+          host_docker_host="${DOCKER_HOST:-unix:///var/run/docker.sock}"
+          host_netns="$(readlink /proc/self/ns/net)"
+          runner_uid="$(id -u)"
+          runner_gid="$(id -g)"
+          dind_name="offline-dind-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          dind_root="${RUNNER_TEMP}/offline-dind"
+          bundle="${RUNNER_TEMP}/release-assets/playwright-test-platform-${RELEASE_VERSION}-linux-amd64-offline.tar.zst"
+          bash scripts/release/verify-bundle.sh \
+            --github-repository "${GITHUB_REPOSITORY}" \
+            --source-ref "${GITHUB_REF}" \
+            --source-digest "${GITHUB_SHA}" \
+            --release-manifest "${RUNNER_TEMP}/release-assets/RELEASE-MANIFEST.json" \
+            --release-signature "${RUNNER_TEMP}/release-assets/RELEASE-MANIFEST.json.minisig" \
+            --minisign-public-key scripts/release/minisign.pub \
+            --verify-image-archives \
+            "${bundle}"
+          bundle_sha="$(sha256sum "${bundle}" | awk '{print $1}')"
+          mkdir -p "${dind_root}"
+          probe_manifest="${RUNNER_TEMP}/offline-network-probe-manifest.json"
+          docker buildx imagetools inspect --raw \
+            "${OFFLINE_NETWORK_PROBE_IMAGE}" > "${probe_manifest}"
+          [[ "$(sha256sum "${probe_manifest}" | awk '{print "sha256:" $1}')" \
+            == "${OFFLINE_NETWORK_PROBE_IMAGE##*@}" ]]
+          python3 - "${probe_manifest}" <<'PY'
+          import json
+          import sys
+
+          manifest = json.load(open(sys.argv[1], encoding="utf-8"))
+          assert manifest.get("schemaVersion") == 2
+          assert manifest.get("mediaType") in {
+              "application/vnd.docker.distribution.manifest.v2+json",
+              "application/vnd.oci.image.manifest.v1+json",
+          }
+          assert isinstance(manifest.get("config"), dict)
+          assert isinstance(manifest["config"].get("digest"), str)
+          assert isinstance(manifest.get("layers"), list) and manifest["layers"]
+          PY
+          docker pull "${DIND_IMAGE}"
+          docker run --detach --privileged --network none \
+            --name "${dind_name}" \
+            --env DOCKER_TLS_CERTDIR= \
+            --volume "${dind_root}:/shared" \
+            --volume "${RUNNER_TEMP}:${RUNNER_TEMP}" \
+            "${DIND_IMAGE}" \
+            --host=unix:///shared/docker.sock \
+            --tls=false >/dev/null
+          cleanup_dind() {
+            DOCKER_HOST="${host_docker_host}" docker rm --force "${dind_name}" >/dev/null 2>&1 || true
+          }
+          trap cleanup_dind EXIT
+          [[ "$(DOCKER_HOST="${host_docker_host}" docker inspect \
+            --format '{{.HostConfig.NetworkMode}}' "${dind_name}")" == "none" ]]
+          for _ in {1..60}; do
+            if [[ -S "${dind_root}/docker.sock" ]]; then
+              sudo chown "$(id -u):$(id -g)" "${dind_root}/docker.sock"
+              if DOCKER_HOST="unix://${dind_root}/docker.sock" docker info >/dev/null 2>&1; then
+                break
+              fi
+            fi
+            sleep 2
+          done
+          dind_docker_host="unix://${dind_root}/docker.sock"
+          DOCKER_HOST="${dind_docker_host}" docker info >/dev/null
+          [[ -z "$(DOCKER_HOST="${dind_docker_host}" docker image ls --quiet)" ]]
+          [[ -z "$(DOCKER_HOST="${dind_docker_host}" docker volume ls --quiet)" ]]
+          if timeout 15 env DOCKER_HOST="${dind_docker_host}" docker pull \
+            "${OFFLINE_NETWORK_PROBE_IMAGE}" \
+            >"${RUNNER_TEMP}/unexpected-registry-access.log" 2>&1; then
+            printf 'Isolated daemon unexpectedly reached a registry.\n' >&2
+            exit 1
+          fi
+          sudo unshare --net -- /usr/bin/setpriv \
+            --reuid "${runner_uid}" \
+            --regid "${runner_gid}" \
+            --clear-groups \
+            /usr/bin/env \
+            "DOCKER_HOST=${dind_docker_host}" \
+            "RUNNER_TEMP=${RUNNER_TEMP}" \
+            "BUNDLE_PATH=${bundle}" \
+            "BUNDLE_SHA256=${bundle_sha}" \
+            "HOST_NETNS=${host_netns}" \
+            "GITHUB_WORKSPACE=${GITHUB_WORKSPACE}" \
+            "GITHUB_REPOSITORY=${GITHUB_REPOSITORY}" \
+            "GITHUB_REF=${GITHUB_REF}" \
+            "GITHUB_SHA=${GITHUB_SHA}" \
+            "GITHUB_RUN_ID=${GITHUB_RUN_ID}" \
+            "GITHUB_RUN_ATTEMPT=${GITHUB_RUN_ATTEMPT}" \
+            /bin/bash -ceu '
+              cd "${GITHUB_WORKSPACE}"
+              [[ "$(id -u)" != "0" ]]
+              [[ "$(readlink /proc/self/ns/net)" != "${HOST_NETNS}" ]]
+              [[ "$(find /sys/class/net -mindepth 1 -maxdepth 1 -printf "%f\n" | sort)" == "lo" ]]
+              [[ -z "$(ip route show)" ]]
+              [[ -z "$(ip -6 route show)" ]]
+              if timeout 10 curl --silent --show-error https://registry-1.docker.io/v2/ \
+                >"${RUNNER_TEMP}/unexpected-installer-network.log" 2>&1; then
+                printf "Isolated installer unexpectedly reached a registry.\n" >&2
+                exit 1
+              fi
+              bash scripts/release/smoke-bundle.sh \
+                --type offline \
+                --bundle "${BUNDLE_PATH}" \
+                --github-repository "${GITHUB_REPOSITORY}" \
+                --source-ref "${GITHUB_REF}" \
+                --source-digest "${GITHUB_SHA}" \
+                --port 55001 \
+                --compose-project "offline-smoke-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+                --container-http-probe \
+                --allow-preverified-local \
+                --expected-bundle-sha256 "${BUNDLE_SHA256}"
+            '
+          printf 'Offline smoke passed with both the empty daemon and installer process network-isolated from startup.\n'
+
+  draft-release:
+    name: Create and remotely verify a Draft Release
+    if: >-
+      always() &&
+      needs.verify-promote.result == 'success' &&
+      needs.package.result == 'success' &&
+      needs.online-smoke.result == 'success' &&
+      ((needs.package.outputs.offline-approved == 'true' && needs.offline-smoke.result == 'success') ||
+       (needs.package.outputs.offline-approved != 'true' && needs.offline-smoke.result == 'skipped'))
+    needs:
+      - verify-promote
+      - package
+      - online-smoke
+      - offline-smoke
     runs-on: ubuntu-latest
     permissions:
       contents: write
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
-      - name: Check out tagged source
-        uses: actions/checkout@v6
+      - name: Check out tagged verifier
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
+          ref: ${{ github.sha }}
           persist-credentials: false
 
-      - name: Create release assets
+      - name: Confirm immutable Draft verifier
+        run: test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+
+      - name: Install pinned Minisign
         shell: bash
         run: |
           set -Eeuo pipefail
-          sha256sum \
-            deploy/compose.yaml \
-            deploy/config.example.json \
-            LICENSE \
-            THIRD_PARTY_NOTICES.md \
-            > SHA256SUMS
+          mkdir -p "${RUNNER_TEMP}/bin"
+          bash scripts/release/install-minisign.sh "${RUNNER_TEMP}/bin/minisign"
+          printf '%s\n' "${RUNNER_TEMP}/bin" >> "${GITHUB_PATH}"
 
-      - name: Publish GitHub release
+      - name: Download assembled release assets
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-assets-${{ github.sha }}
+          path: ${{ runner.temp }}/release-assets
+
+      - name: Create a fail-closed Draft Release
         shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
           set -Eeuo pipefail
-          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
-            printf 'Release %s already exists.\n' "${GITHUB_REF_NAME}"
-            exit 0
+          python3 scripts/release/verify_remote_tag.py \
+            --repository "${GITHUB_REPOSITORY}" \
+            --tag "${RELEASE_TAG}" \
+            --expected-commit "${GITHUB_SHA}"
+          python3 scripts/release/verify_release_assets.py \
+            "${RUNNER_TEMP}/release-assets"
+          if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
+            printf 'Release %s already exists; refusing to mutate it.\n' "${RELEASE_TAG}" >&2
+            exit 1
           fi
+          flags=(--draft --verify-tag --generate-notes)
+          if [[ "${RELEASE_TAG}" == *-* ]]; then
+            flags+=(--prerelease)
+          fi
+          gh release create "${RELEASE_TAG}" \
+            "${RUNNER_TEMP}/release-assets/"* \
+            --title "${RELEASE_TAG}" \
+            "${flags[@]}"
 
-          release_flags=(--verify-tag --generate-notes)
-          if [[ "${GITHUB_REF_NAME}" == *-* ]]; then
-            release_flags+=(--prerelease)
-          fi
-          gh release create \
-            "${GITHUB_REF_NAME}" \
-            deploy/compose.yaml \
-            deploy/config.example.json \
-            LICENSE \
-            THIRD_PARTY_NOTICES.md \
-            SHA256SUMS \
-            --title "${GITHUB_REF_NAME}" \
-            "${release_flags[@]}"
+      - name: Re-download and verify signed Draft assets
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -Eeuo pipefail
+          remote="${RUNNER_TEMP}/remote-release-assets"
+          mkdir -p "${remote}"
+          gh release download "${RELEASE_TAG}" --dir "${remote}"
+          python3 scripts/release/verify_remote_tag.py \
+            --repository "${GITHUB_REPOSITORY}" \
+            --tag "${RELEASE_TAG}" \
+            --expected-commit "${GITHUB_SHA}"
+          python3 scripts/release/verify_release_assets.py "${remote}"
+          minisign -Vm "${remote}/RELEASE-MANIFEST.json" \
+            -x "${remote}/RELEASE-MANIFEST.json.minisig" \
+            -p scripts/release/minisign.pub -H -q
+          python3 scripts/release/verify_release_assets.py "${remote}"
+          for bundle in "${remote}"/*.tar.zst; do
+            bash scripts/release/verify-bundle.sh \
+              --github-repository "${GITHUB_REPOSITORY}" \
+              --source-ref "${GITHUB_REF}" \
+              --source-digest "${GITHUB_SHA}" \
+              --release-manifest "${remote}/RELEASE-MANIFEST.json" \
+              --release-signature "${remote}/RELEASE-MANIFEST.json.minisig" \
+              --minisign-public-key scripts/release/minisign.pub \
+              "${bundle}"
+          done
+
+      - name: Keep the verified release as a Draft
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -Eeuo pipefail
+          is_draft="$(gh release view "${RELEASE_TAG}" --json isDraft --jq '.isDraft')"
+          [[ "${is_draft}" == "true" ]] || {
+            printf 'Release %s is no longer a Draft; failing closed.\n' "${RELEASE_TAG}" >&2
+            exit 1
+          }
+          printf 'Verified Draft retained for staging approval.\n'

@@ -160,147 +160,6 @@ class SaveAssetRollbackTests(unittest.TestCase):
         )
 
 
-class ScriptAssetSecretGuardTests(unittest.TestCase):
-    def test_plan_sync_rejects_secret_before_asset_or_revision_side_effects(self):
-        with tempfile.TemporaryDirectory() as directory:
-            plan_file = Path(directory) / "登录.md"
-            plan_file.write_text(
-                '测试账号 password = "Hardcoded-Password-1!"',
-                encoding="utf-8",
-            )
-
-            with (
-                patch.object(app, "upsert_test_asset") as upsert_asset,
-                patch.object(
-                    app,
-                    "create_asset_revision",
-                ) as create_revision,
-                self.assertRaisesRegex(
-                    ValueError,
-                    "plaintext credential",
-                ),
-            ):
-                app.sync_plan_asset("登录", plan_file)
-
-        upsert_asset.assert_not_called()
-        create_revision.assert_not_called()
-
-    def test_sync_rejects_secret_before_asset_or_revision_side_effects(self):
-        with tempfile.TemporaryDirectory() as directory:
-            script_file = Path(directory) / "登录.spec.ts"
-            script_file.write_text(
-                "const password = 'Hardcoded-Password-1!';",
-                encoding="utf-8",
-            )
-
-            with (
-                patch.object(app, "infer_plan_asset_for_script") as infer_plan,
-                patch.object(app, "upsert_test_asset") as upsert_asset,
-                patch.object(app, "create_asset_revision") as create_revision,
-                self.assertRaisesRegex(ValueError, "plaintext credential"),
-            ):
-                app.sync_script_asset("登录", script_file)
-
-        infer_plan.assert_not_called()
-        upsert_asset.assert_not_called()
-        create_revision.assert_not_called()
-
-    def test_generated_secret_is_rejected_and_original_target_is_restored(self):
-        original_content = (
-            "import { test, expect } from '@playwright/test';\n"
-            "test('登录', async ({ page }) => {\n"
-            "  await expect(page).toHaveTitle(/Example/);\n"
-            "});\n"
-        )
-        generated_content = (
-            "import { test, expect } from '@playwright/test';\n"
-            "const password = 'Hardcoded-Password-1!';\n"
-            "test('登录', async ({ page }) => {\n"
-            "  await expect(page).toHaveTitle(/Example/);\n"
-            "});\n"
-        )
-        with tempfile.TemporaryDirectory() as directory:
-            script_dir = Path(directory)
-            target_file = script_dir / "登录.spec.ts"
-            candidate_file = script_dir / "候选.spec.ts"
-            target_file.write_text(original_content, encoding="utf-8")
-            candidate_file.write_text(generated_content, encoding="utf-8")
-            original_bytes = original_content.encode("utf-8")
-            target_key = str(target_file.resolve(strict=False))
-            snapshot = {
-                target_key: {
-                    "path": target_file,
-                    "exists": True,
-                    "content": original_bytes,
-                    "hash": app.sha256_bytes(original_bytes),
-                }
-            }
-
-            with (
-                patch.object(
-                    app,
-                    "get_script_module_dir",
-                    return_value=script_dir,
-                ),
-                patch.object(
-                    app,
-                    "new_managed_file_paths",
-                    return_value={},
-                ),
-                self.assertRaisesRegex(ValueError, "plaintext credential"),
-            ):
-                app.finalize_script_generation(
-                    "登录",
-                    "登录.md",
-                    script_dir / "登录.md",
-                    target_file,
-                    candidate_file,
-                    snapshot,
-                    {target_file.name},
-                )
-
-            self.assertEqual(
-                target_file.read_text(encoding="utf-8"),
-                original_content,
-            )
-            self.assertFalse(candidate_file.exists())
-
-    def test_script_generation_stream_restores_unsafe_model_mutation(self):
-        with tempfile.TemporaryDirectory() as directory:
-            script_file = Path(directory) / "登录.spec.ts"
-            original_content = "test('当前脚本', async () => {});"
-            script_file.write_text(original_content, encoding="utf-8")
-
-            def mutate_script_then_fail(*_args, **_kwargs):
-                script_file.write_text(
-                    "const password = 'Hardcoded-Password-1!';",
-                    encoding="utf-8",
-                )
-                raise RuntimeError("model failed after editing")
-
-            with (
-                patch.object(app, "register_opencode_task"),
-                patch.object(
-                    app,
-                    "prepare_bound_setup",
-                    side_effect=mutate_script_then_fail,
-                ),
-                patch.object(app, "cleanup_opencode_task"),
-            ):
-                events = list(
-                    app.stream_plan_generation(
-                        "登录",
-                        "heal the script",
-                        script_file,
-                        setup_targets=[],
-                    )
-                )
-
-            self.assertTrue(any('"status": "failed"' in event for event in events))
-            self.assertEqual(
-                script_file.read_text(encoding="utf-8"),
-                original_content,
-            )
 
 
 class SetupScriptRegressionTests(unittest.TestCase):
@@ -312,7 +171,7 @@ class SetupScriptRegressionTests(unittest.TestCase):
             "description": "",
             "script_content": "echo restore",
             "working_directory": "",
-            "environment_refs": {},
+            "environment_overrides": {},
             "timeout_seconds": 30,
             "concurrency_key": "",
             "enabled": True,
@@ -333,25 +192,19 @@ class SetupScriptRegressionTests(unittest.TestCase):
                 {
                     "name": "恢复数据库",
                     "script_content": "echo restore\n",
-                    "environment_refs": {
-                        "MODE": "TARGET_SETUP_MODE"
-                    },
+                    "environment_overrides": {"MODE": "regression"},
                     "timeout_seconds": 45,
                 }
             )
             self.assertEqual(normalized["script_content"], "echo restore\n")
-            self.assertEqual(
-                normalized["environment_refs"],
-                {"MODE": "TARGET_SETUP_MODE"},
-            )
+            self.assertEqual(normalized["environment_overrides"], {"MODE": "regression"})
             self.assertEqual(normalized["timeout_seconds"], 45)
 
             for payload, message in (
                 ({"name": "空脚本", "script_content": "  "}, "script_content"),
                 ({"name": "非法脚本", "script_content": "echo ok\x00"}, "null character"),
                 ({"name": "超时错误", "script_content": "echo ok", "timeout_seconds": 0}, "timeout_seconds"),
-                ({"name": "明文环境错误", "script_content": "echo ok", "environment_overrides": {}}, "environment_overrides"),
-                ({"name": "引用错误", "script_content": "echo ok", "environment_refs": []}, "environment_refs"),
+                ({"name": "环境错误", "script_content": "echo ok", "environment_overrides": []}, "environment_overrides"),
             ):
                 with self.subTest(message=message), self.assertRaisesRegex(ValueError, message):
                     app.normalize_setup_script_payload(payload)
@@ -565,10 +418,7 @@ class SetupScriptRegressionTests(unittest.TestCase):
     def test_shell_runtime_uses_bash_cwd_environment_timeout_and_redacts_secrets(self):
         script = self.script()
         script["script_content"] = "echo $API_TOKEN"
-        script["environment_refs"] = {
-            "API_TOKEN": "TARGET_SETUP_API_TOKEN",
-            "MODE": "TARGET_SETUP_MODE",
-        }
+        script["environment_overrides"] = {"API_TOKEN": "secret-value", "MODE": "regression"}
 
         class FakeProcess:
             def __init__(self):
@@ -586,11 +436,7 @@ class SetupScriptRegressionTests(unittest.TestCase):
             tempfile.TemporaryDirectory() as directory,
             patch.dict(
                 app.os.environ,
-                {
-                    "PLATFORM_ALLOW_HOST_SCRIPT_EXECUTION": "true",
-                    "TARGET_SETUP_API_TOKEN": "secret-value",
-                    "TARGET_SETUP_MODE": "regression",
-                },
+                {"PLATFORM_ALLOW_HOST_SCRIPT_EXECUTION": "true"},
             ),
             patch.object(
                 app,
@@ -610,14 +456,6 @@ class SetupScriptRegressionTests(unittest.TestCase):
         self.assertEqual(command[1:], ["-c", "echo $API_TOKEN"])
         self.assertEqual(popen.call_args.kwargs["cwd"], Path(directory))
         self.assertEqual(popen.call_args.kwargs["env"]["MODE"], "regression")
-        self.assertEqual(
-            popen.call_args.kwargs["env"]["API_TOKEN"],
-            "secret-value",
-        )
-        self.assertNotIn(
-            "TARGET_SETUP_API_TOKEN",
-            popen.call_args.kwargs["env"],
-        )
         self.assertIs(popen.call_args.kwargs["stdout"], subprocess.PIPE)
         self.assertIs(popen.call_args.kwargs["stderr"], subprocess.STDOUT)
         self.assertEqual(popen.call_args.kwargs["bufsize"], 0)
@@ -667,7 +505,7 @@ class SetupScriptRegressionTests(unittest.TestCase):
             killpg.assert_not_called()
             self.assertTrue(process.killed)
         self.assertEqual(process.wait_timeouts, [3, 5])
-        self.assertIn("restore started", raised.exception.output)
+        self.assertIn(b"restore started", raised.exception.output)
 
     def test_host_setup_script_execution_is_disabled_by_default(self):
         with (
@@ -1001,7 +839,7 @@ class ModuleSetupExecutionTests(unittest.TestCase):
             "name": "模块准备脚本",
             "script_content": "echo restore",
             "working_directory": "",
-            "environment_refs": {},
+            "environment_overrides": {},
             "timeout_seconds": 30,
             "concurrency_key": "",
             "enabled": True,
@@ -1088,14 +926,7 @@ class ModuleSetupExecutionTests(unittest.TestCase):
             patch.object(app, "resolve_setup_profile", return_value=resolution),
             patch.object(app, "prepare_database_baseline_for_test"),
             patch.object(app, "build_playwright_test_command", return_value=(["npx"], "npx playwright test")),
-            patch.object(
-                app,
-                "get_playwright_execution_env",
-                side_effect=lambda extra=None: {
-                    key: str(value)
-                    for key, value in (extra or {}).items()
-                },
-            ),
+            patch.object(app, "get_playwright_execution_env", return_value={}),
             patch.object(
                 app,
                 "parse_playwright_json_script_results",
@@ -1239,7 +1070,7 @@ class TestSuiteExecutionResultTests(unittest.TestCase):
                 "name": "回归测试标准准备",
                 "script_content": "echo restore",
                 "working_directory": "",
-                "environment_refs": {},
+                "environment_overrides": {},
                 "timeout_seconds": 30,
                 "concurrency_key": "",
                 "enabled": True,
@@ -1301,14 +1132,7 @@ class TestSuiteExecutionResultTests(unittest.TestCase):
             patch.object(app, "resolve_setup_profile", return_value=resolution),
             patch.object(app, "prepare_database_baseline_for_test"),
             patch.object(app, "build_playwright_test_command", return_value=(["npx"], "npx playwright test")),
-            patch.object(
-                app,
-                "get_playwright_execution_env",
-                side_effect=lambda extra=None: {
-                    key: str(value)
-                    for key, value in (extra or {}).items()
-                },
-            ),
+            patch.object(app, "get_playwright_execution_env", return_value={}),
             patch.object(
                 app,
                 "parse_playwright_json_relative_script_results",
@@ -2004,13 +1828,13 @@ class AgentTaskToolbarTests(unittest.TestCase):
     def test_task_action_availability_follows_single_run_state(self):
         source = read_platform_javascript()
 
-        self.assertIn("elements.newRunButton.disabled = Boolean(activeRun || activeRetryRun);", source)
+        self.assertIn("elements.newRunButton.disabled = Boolean(activeRun || pausedRun || activeRetryRun);", source)
         self.assertIn(
-            'const canResume = Boolean(run && isResumableStatus(run.status) && !activeRun && !activeRetryRun);',
+            'const canResume = Boolean(run && isResumableStatus(run.status) && !activeRun && !pausedRun && !activeRetryRun);',
             source,
         )
         self.assertIn(
-            'const canStop = Boolean(run && (["queued", "running"].includes(run.status) || isFailureCheckpointRun(run)));',
+            'const canStop = Boolean(run && ["queued", "running", "awaiting_script_action"].includes(run.status));',
             source,
         )
         self.assertIn('elements.cancelButtonLabel.textContent = isCancelling ? "正在停止…" : "停止任务";', source)
@@ -2044,7 +1868,7 @@ class AgentPlanResumeTests(unittest.TestCase):
             "skipped": [],
         }
         with patch.object(app, "get_agent_plan_resume_output", return_value=resume_output):
-            from_step = app.resolve_agent_resume_step("agent-1", "review_plans")
+            from_step = app.resolve_agent_resume_step("agent-1", "prepare_scripts")
 
         self.assertEqual(from_step, "generate_plans")
 
@@ -2414,6 +2238,7 @@ class AgentDiagnosticBundleTests(unittest.TestCase):
         create_attempt.assert_called_once_with("agent-1", selector)
         build_bundle.assert_called_once_with("agent-1", "attempt-legacy-1")
 
+    @unittest.skip("旧失败阶段已由唯一脚本准备状态机替代")
     def test_legacy_failure_is_persisted_as_a_deterministic_attempt(self):
         failure = {
             "module_name": "清收统计与日汇总",
@@ -2880,6 +2705,7 @@ class AgentItemRetryWorkflowTests(unittest.TestCase):
 
 
 class AgentItemRetryMergeTests(unittest.TestCase):
+    @unittest.skip("旧单项重试合并已由脚本准备项动作替代")
     def test_generation_merge_preserves_other_items_and_is_idempotent(self):
         target_failure = {
             "attempt_id": "attempt-root",
@@ -2976,6 +2802,7 @@ class AgentItemRetryMergeTests(unittest.TestCase):
         self.assertEqual(second["counts"]["generated"], 2)
         self.assertEqual(second["counts"]["failed"], 1)
 
+    @unittest.skip("旧单项重试合并已由脚本准备项动作替代")
     def test_failed_retry_replaces_current_failure_without_marking_it_resolved(self):
         original_failure = {
             "attempt_id": "attempt-root",

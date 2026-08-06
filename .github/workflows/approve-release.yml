@@ -1,0 +1,241 @@
+name: Approve release candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_run_id:
+        description: Successful Prepare release candidate workflow run ID
+        required: true
+        type: string
+      candidate_manifest_sha256:
+        description: SHA-256 shown by the reviewed candidate run
+        required: true
+        type: string
+      platform_distribution_approved:
+        description: Approve distribution of the exact platform candidate bytes
+        required: true
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+      platform_distribution_evidence:
+        description: HTTPS or URN reference to reviewed platform distribution evidence
+        required: false
+        type: string
+      platform_license_complete:
+        description: Confirm platform SPDX plus collected license/NOTICE payload is complete and reviewed
+        required: true
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+      platform_license_evidence:
+        description: HTTPS or URN reference to platform final-image license review
+        required: false
+        type: string
+      mysql_offline_approved:
+        description: Approve carrying exact MySQL bytes in an offline bundle
+        required: true
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+      mysql_offline_evidence:
+        description: HTTPS or URN reference to MySQL offline redistribution evidence
+        required: false
+        type: string
+      mysql_license_complete:
+        description: Confirm MySQL SPDX plus collected license/NOTICE payload is complete and reviewed
+        required: true
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+      mysql_license_evidence:
+        description: HTTPS or URN reference to MySQL final-image license review
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: approve-release-${{ inputs.candidate_run_id }}
+  cancel-in-progress: false
+
+jobs:
+  approve:
+    name: Create protected candidate-bound approval
+    runs-on: ubuntu-latest
+    environment: release-legal
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Check out trusted approval tooling
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Confirm immutable approval tooling
+        run: test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+
+      - name: Install pinned Minisign
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p "${RUNNER_TEMP}/bin"
+          bash scripts/release/install-minisign.sh "${RUNNER_TEMP}/bin/minisign"
+          printf '%s\n' "${RUNNER_TEMP}/bin" >> "${GITHUB_PATH}"
+
+      - name: Download and verify the signed exact private candidate
+        id: candidate
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+          EXPECTED_MANIFEST_SHA: ${{ inputs.candidate_manifest_sha256 }}
+        run: |
+          set -Eeuo pipefail
+          [[ "${CANDIDATE_RUN_ID}" =~ ^[1-9][0-9]*$ ]]
+          [[ "${EXPECTED_MANIFEST_SHA}" =~ ^[0-9a-f]{64}$ ]]
+          run_json="${RUNNER_TEMP}/candidate-run.json"
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${CANDIDATE_RUN_ID}" > "${run_json}"
+          [[ "$(jq -r .conclusion "${run_json}")" == "success" ]]
+          [[ "$(jq -r .path "${run_json}")" == ".github/workflows/prepare-release.yml" ]]
+          candidate_root="${RUNNER_TEMP}/release-candidate"
+          mkdir -p "${candidate_root}"
+          gh run download "${CANDIDATE_RUN_ID}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --name release-candidate \
+            --dir "${candidate_root}"
+          manifest="${candidate_root}/RELEASE-CANDIDATE.json"
+          [[ -f "${manifest}" && ! -L "${manifest}" ]]
+          [[ "$(sha256sum "${manifest}" | awk '{print $1}')" == "${EXPECTED_MANIFEST_SHA}" ]]
+          revision="$(jq -r .revision "${manifest}")"
+          [[ "${revision}" == "$(jq -r .head_sha "${run_json}")" ]]
+          [[ "${GITHUB_SHA}" == "${revision}" ]] \
+            || { printf 'Dispatch approval tooling at the exact candidate revision.\n' >&2; exit 1; }
+          [[ "$(jq -r .workflow.runId "${manifest}")" == "${CANDIDATE_RUN_ID}" ]]
+          minisign -Vm "${candidate_root}/CANDIDATE-SHA256SUMS" \
+            -x "${candidate_root}/CANDIDATE-SHA256SUMS.minisig" \
+            -p scripts/release/minisign.pub -H -q
+          (
+            cd "${candidate_root}"
+            sha256sum --check --strict CANDIDATE-SHA256SUMS
+          )
+          python3 scripts/release/release_chain.py \
+            "${manifest}" --candidate-root "${candidate_root}"
+          {
+            printf 'root=%s\n' "${candidate_root}"
+            printf 'manifest=%s\n' "${manifest}"
+            printf 'revision=%s\n' "${revision}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Prove a release-legal reviewer approved this run
+        id: review
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+          approvals="${RUNNER_TEMP}/environment-approvals.json"
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/approvals" > "${approvals}"
+          approval="$(jq -c \
+            '[.[] | select(.state == "approved") | select(any(.environments[]?; .name == "release-legal"))] | last // empty' \
+            "${approvals}")"
+          [[ -n "${approval}" ]]
+          reviewed_by="$(jq -r '.user.login // empty' <<< "${approval}")"
+          reviewed_at="$(jq -r '.created_at // empty' <<< "${approval}")"
+          [[ "${reviewed_by}" =~ ^[A-Za-z0-9_.-]+$ ]] \
+            || { printf 'Could not prove approval by a release-legal environment reviewer.\n' >&2; exit 1; }
+          [[ "${reviewed_at}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] \
+            || { printf 'Could not prove the release-legal approval timestamp.\n' >&2; exit 1; }
+          printf 'reviewed_by=%s\n' "${reviewed_by}" >> "${GITHUB_OUTPUT}"
+          printf 'reviewed_at=%s\n' "${reviewed_at}" >> "${GITHUB_OUTPUT}"
+
+      - name: Generate and validate exact approval material
+        shell: bash
+        env:
+          CANDIDATE_ROOT: ${{ steps.candidate.outputs.root }}
+          CANDIDATE_MANIFEST: ${{ steps.candidate.outputs.manifest }}
+          REVIEWED_BY: ${{ steps.review.outputs.reviewed_by }}
+          REVIEWED_AT: ${{ steps.review.outputs.reviewed_at }}
+          PLATFORM_DISTRIBUTION_APPROVED: ${{ inputs.platform_distribution_approved }}
+          PLATFORM_DISTRIBUTION_EVIDENCE: ${{ inputs.platform_distribution_evidence }}
+          PLATFORM_LICENSE_COMPLETE: ${{ inputs.platform_license_complete }}
+          PLATFORM_LICENSE_EVIDENCE: ${{ inputs.platform_license_evidence }}
+          MYSQL_OFFLINE_APPROVED: ${{ inputs.mysql_offline_approved }}
+          MYSQL_OFFLINE_EVIDENCE: ${{ inputs.mysql_offline_evidence }}
+          MYSQL_LICENSE_COMPLETE: ${{ inputs.mysql_license_complete }}
+          MYSQL_LICENSE_EVIDENCE: ${{ inputs.mysql_license_evidence }}
+          CANDIDATE_REVISION: ${{ steps.candidate.outputs.revision }}
+        run: |
+          set -Eeuo pipefail
+          approval_root="${RUNNER_TEMP}/release-approval"
+          python3 scripts/release/write-release-approval.py \
+            --candidate "${CANDIDATE_MANIFEST}" \
+            --candidate-root "${CANDIDATE_ROOT}" \
+            --output-dir "${approval_root}" \
+            --platform-distribution-approved "${PLATFORM_DISTRIBUTION_APPROVED}" \
+            --platform-distribution-evidence "${PLATFORM_DISTRIBUTION_EVIDENCE}" \
+            --platform-license-complete "${PLATFORM_LICENSE_COMPLETE}" \
+            --platform-license-evidence "${PLATFORM_LICENSE_EVIDENCE}" \
+            --mysql-offline-approved "${MYSQL_OFFLINE_APPROVED}" \
+            --mysql-offline-evidence "${MYSQL_OFFLINE_EVIDENCE}" \
+            --mysql-license-complete "${MYSQL_LICENSE_COMPLETE}" \
+            --mysql-license-evidence "${MYSQL_LICENSE_EVIDENCE}" \
+            --reviewed-by "${REVIEWED_BY}" \
+            --reviewed-at "${REVIEWED_AT}" \
+            --workflow-repository "${GITHUB_REPOSITORY}" \
+            --workflow-run-id "${GITHUB_RUN_ID}" \
+            --workflow-run-attempt "${GITHUB_RUN_ATTEMPT}" \
+            --workflow-ref "${GITHUB_REF}" \
+            --workflow-sha "${GITHUB_SHA}"
+          python3 scripts/release/release_chain.py \
+            "${CANDIDATE_MANIFEST}" \
+            "${approval_root}/RELEASE-APPROVAL.json" \
+            --candidate-root "${CANDIDATE_ROOT}" \
+            --approval-root "${approval_root}"
+          (
+            cd "${approval_root}"
+            find . -type f ! -name APPROVAL-SHA256SUMS -print0 \
+              | sort -z | xargs -0 sha256sum > "${RUNNER_TEMP}/APPROVAL-SHA256SUMS"
+            mv "${RUNNER_TEMP}/APPROVAL-SHA256SUMS" .
+            sha256sum --check --strict APPROVAL-SHA256SUMS
+          )
+          # The awk program must receive $1 literally.
+          # shellcheck disable=SC2016
+          approval_sha="$(sha256sum "${approval_root}/RELEASE-APPROVAL.json" | awk '{print $1}')"
+          {
+            printf "### Protected release approval\n\n"
+            printf -- "- Approval manifest SHA-256: \`%s\`\n" "${approval_sha}"
+            printf -- "- Reviewed candidate revision: \`%s\`\n" "${CANDIDATE_REVISION}"
+            printf -- "- This run did not push an image or create a release.\n"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Sign the approval checksum root with Minisign
+        shell: bash
+        env:
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+          CANDIDATE_REVISION: ${{ steps.candidate.outputs.revision }}
+        run: |
+          set -Eeuo pipefail
+          [[ -n "${MINISIGN_SECRET_KEY}" ]] || { printf 'MINISIGN_SECRET_KEY is not configured.\n' >&2; exit 1; }
+          umask 077
+          secret_key="${RUNNER_TEMP}/minisign.key"
+          printf '%s\n' "${MINISIGN_SECRET_KEY}" > "${secret_key}"
+          minisign -S -s "${secret_key}" \
+            -m "${RUNNER_TEMP}/release-approval/APPROVAL-SHA256SUMS" \
+            -x "${RUNNER_TEMP}/release-approval/APPROVAL-SHA256SUMS.minisig" \
+            -t "release approval revision ${CANDIDATE_REVISION}"
+          rm -f -- "${secret_key}"
+          minisign -Vm "${RUNNER_TEMP}/release-approval/APPROVAL-SHA256SUMS" \
+            -x "${RUNNER_TEMP}/release-approval/APPROVAL-SHA256SUMS.minisig" \
+            -p scripts/release/minisign.pub -H -q
+
+      - name: Upload protected immutable approval
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-approval
+          path: ${{ runner.temp }}/release-approval
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30

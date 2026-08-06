@@ -3,7 +3,7 @@
   "project_template_dependency_source_root": "",
   "opencode_server_url": "http://127.0.0.1:4096",
   "opencode_username": "opencode",
-  "opencode_password_env": "OPENCODE_SERVER_PASSWORD",
+  "opencode_password": "",
   "opencode_task_timeout_seconds": 7200,
   "script_execution_timeout_seconds": 7200,
   "auth": {
@@ -16,6 +16,7 @@
     "host": "127.0.0.1",
     "port": 3306,
     "user": "",
+    "password": "",
     "database": "",
     "charset": "utf8mb4",
     "table_prefix": "",
@@ -36,8 +37,8 @@
       "target_system": {
         "base_url": "http://127.0.0.1:3000",
         "login_url": "/login",
-        "username_env": "TARGET_SYSTEM_USERNAME",
-        "password_env": "TARGET_SYSTEM_PASSWORD"
+        "username": "",
+        "password": ""
       },
       "database_baseline": {
         "enabled": false

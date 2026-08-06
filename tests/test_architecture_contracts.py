@@ -1,6 +1,7 @@
 import unittest
 from collections import Counter
 from html.parser import HTMLParser
+from urllib.parse import urlsplit
 from unittest.mock import patch
 
 import app
@@ -113,37 +114,20 @@ REQUIRED_ROUTE_CONTRACTS = {
     ("GET", "/api/agent/runs/<run_id>"),
     (
         "GET",
-        "/api/agent/runs/<run_id>/failure-items/<item_id>",
-    ),
-    (
-        "POST",
-        "/api/agent/runs/<run_id>/failure-items/<item_id>/analyze",
-    ),
-    (
-        "POST",
-        "/api/agent/runs/<run_id>/failure-items/<item_id>/retry",
-    ),
-    (
-        "POST",
-        "/api/agent/runs/<run_id>/failure-items/<item_id>/execute",
+        "/api/agent/runs/<run_id>/script-preparation",
     ),
     (
         "GET",
-        "/api/agent/runs/<run_id>/failure-items/<item_id>/script",
-    ),
-    (
-        "PATCH",
-        "/api/agent/runs/<run_id>/failure-items/<item_id>/script",
-    ),
-    (
-        "DELETE",
-        "/api/agent/runs/<run_id>/failure-items/<item_id>",
+        "/api/agent/runs/<run_id>/script-items/<item_id>",
     ),
     (
         "POST",
-        "/api/agent/runs/<run_id>/failure-items/<item_id>/ignore",
+        "/api/agent/runs/<run_id>/script-items/<item_id>/actions",
     ),
-    ("POST", "/api/agent/runs/<run_id>/continue"),
+    (
+        "POST",
+        "/api/agent/runs/<run_id>/script-items/batch-actions",
+    ),
     ("GET", "/api/agent/runs/<run_id>/attempts"),
     (
         "GET",
@@ -216,22 +200,11 @@ REQUIRED_AGENT_IDS = {
     "retryStatusBar",
     "runTitle",
     "runStatus",
-    "failureWorkspace",
-    "failureSummary",
-    "generationFailureList",
-    "repairFailureList",
     "artifactList",
     "eventLog",
     "executionResultPanel",
     "artifactModal",
     "artifactRetryButton",
-    "failureActionModal",
-    "failureEvidenceList",
-    "failureAnalysisContent",
-    "failureRetryView",
-    "failureEditView",
-    "continueTaskModal",
-    "continueTaskConfirm",
     "newTaskModal",
     "launchForm",
     "requirementFile",
@@ -239,7 +212,38 @@ REQUIRED_AGENT_IDS = {
     "notice",
 }
 
+REQUIRED_SCRIPT_PREPARATION_IDS = {
+    "root",
+    "stageMeta",
+    "stageTitle",
+    "stageSummary",
+    "stageStatus",
+    "bulkToggle",
+    "filterBar",
+    "searchInput",
+    "batchBar",
+    "batchMenu",
+    "selectAll",
+    "tableBody",
+    "detailModal",
+    "detailTitle",
+    "historyList",
+    "detailContent",
+    "actionPanel",
+    "editorModal",
+    "editSection",
+    "promptSection",
+    "scriptEditor",
+    "originalPrompt",
+    "supplementalPrompt",
+    "editorSave",
+    "editorSaveExecute",
+    "editorConfirm",
+    "localNotice",
+}
+
 REQUIRED_STATIC_URLS = {
+    "/static/css/features/agent-script-preparation.css",
     "/static/css/features/agent.css",
     "/static/styles.css",
     "/static/js/core/api-client.js",
@@ -256,7 +260,7 @@ REQUIRED_STATIC_URLS = {
     "/static/js/features/projects.js",
     "/static/js/features/project-settings.js",
     "/static/js/features/setup-preparation.js",
-    "/static/js/features/agent-failure-workspace.js",
+    "/static/js/features/agent-script-preparation.js",
     "/static/js/features/agent.js",
     "/static/app.js",
 }
@@ -317,6 +321,20 @@ class ArchitectureContractTests(unittest.TestCase):
             + ", ".join(f"{method} {url}" for method, url in missing_contracts),
         )
 
+    def test_agent_pipeline_exposes_exactly_seven_product_stages(self):
+        self.assertEqual(
+            app.AGENT_STEP_ORDER,
+            [
+                ("upload_requirement", "需求"),
+                ("analyze_requirement", "需求解析"),
+                ("review_modules", "模块审查"),
+                ("generate_plans", "计划生成"),
+                ("prepare_scripts", "脚本准备"),
+                ("create_suite", "测试集"),
+                ("run_suite", "执行"),
+            ],
+        )
+
     def test_index_renders_with_unique_required_dom_hooks(self):
         response = self.render_index_without_external_services()
 
@@ -327,6 +345,9 @@ class ArchitectureContractTests(unittest.TestCase):
 
         html_ids = parser.attribute_values("id")
         agent_ids = parser.attribute_values("data-agent-id")
+        script_preparation_ids = parser.attribute_values(
+            "data-script-preparation-id"
+        )
         duplicate_html_ids = {
             value: count
             for value, count in Counter(html_ids).items()
@@ -337,12 +358,22 @@ class ArchitectureContractTests(unittest.TestCase):
             for value, count in Counter(agent_ids).items()
             if count > 1
         }
+        duplicate_script_preparation_ids = {
+            value: count
+            for value, count in Counter(script_preparation_ids).items()
+            if count > 1
+        }
 
         self.assertEqual(duplicate_html_ids, {}, "HTML id values must be unique")
         self.assertEqual(
             duplicate_agent_ids,
             {},
             "data-agent-id values must be unique within the rendered page",
+        )
+        self.assertEqual(
+            duplicate_script_preparation_ids,
+            {},
+            "data-script-preparation-id values must be unique",
         )
         self.assertEqual(
             sorted(REQUIRED_HTML_IDS - set(html_ids)),
@@ -354,6 +385,14 @@ class ArchitectureContractTests(unittest.TestCase):
             [],
             "Required Agent DOM hooks are missing",
         )
+        self.assertEqual(
+            sorted(
+                REQUIRED_SCRIPT_PREPARATION_IDS
+                - set(script_preparation_ids)
+            ),
+            [],
+            "Required script-preparation DOM hooks are missing",
+        )
 
     def test_index_references_static_assets_that_flask_can_serve(self):
         response = self.render_index_without_external_services()
@@ -362,12 +401,12 @@ class ArchitectureContractTests(unittest.TestCase):
         parser = HtmlContractParser()
         parser.feed(response.get_data(as_text=True))
         referenced_urls = {
-            attrs["href"]
+            urlsplit(attrs["href"]).path
             for tag, attrs in parser.elements
             if tag == "link" and attrs.get("href")
         }
         referenced_urls.update(
-            attrs["src"]
+            urlsplit(attrs["src"]).path
             for tag, attrs in parser.elements
             if tag == "script" and attrs.get("src")
         )
@@ -376,14 +415,19 @@ class ArchitectureContractTests(unittest.TestCase):
             [],
             "The index page must reference its required static assets",
         )
+        self.assertNotIn(
+            "/static/js/features/agent-failure-workspace.js",
+            referenced_urls,
+            "The removed failure workspace must not be loaded",
+        )
 
         script_urls = [
-            attrs["src"]
+            urlsplit(attrs["src"]).path
             for tag, attrs in parser.elements
             if tag == "script" and attrs.get("src")
         ]
         stylesheet_urls = [
-            attrs["href"]
+            urlsplit(attrs["href"]).path
             for tag, attrs in parser.elements
             if tag == "link"
             and attrs.get("href")
@@ -483,16 +527,16 @@ class ArchitectureContractTests(unittest.TestCase):
         self.assertLess(
             script_urls.index("/static/js/core/api-client.js"),
             script_urls.index(
-                "/static/js/features/agent-failure-workspace.js"
+                "/static/js/features/agent-script-preparation.js"
             ),
-            "Core factories must load before the Agent failure workspace",
+            "Core factories must load before Agent script preparation",
         )
         self.assertLess(
             script_urls.index(
-                "/static/js/features/agent-failure-workspace.js"
+                "/static/js/features/agent-script-preparation.js"
             ),
             script_urls.index("/static/js/features/agent.js"),
-            "Agent failure workspace must load before Agent assembly",
+            "Agent script preparation must load before Agent assembly",
         )
         self.assertLess(
             script_urls.index("/static/js/core/api-client.js"),
@@ -519,6 +563,35 @@ class ArchitectureContractTests(unittest.TestCase):
                         self.assertTrue(static_response.data)
                     finally:
                         static_response.close()
+
+    def test_agent_script_preparation_ui_is_owned_by_its_feature_factory(self):
+        static_dir = app.APP_DIR / "static"
+        feature_source = (
+            static_dir
+            / "js"
+            / "features"
+            / "agent-script-preparation.js"
+        ).read_text(encoding="utf-8")
+        agent_source = (
+            static_dir / "js" / "features" / "agent.js"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn(
+            "function createAgentScriptPreparationFeature(",
+            feature_source,
+        )
+        self.assertIn(
+            "window.createAgentScriptPreparationFeature = ",
+            feature_source,
+        )
+        self.assertIn(
+            "createAgentScriptPreparationFeature(",
+            agent_source,
+        )
+        self.assertNotIn(
+            "createAgentFailureWorkspace(",
+            agent_source,
+        )
 
     def test_platform_record_persistence_is_owned_by_its_feature_factory(self):
         static_dir = app.APP_DIR / "static"
