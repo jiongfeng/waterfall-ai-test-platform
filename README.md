@@ -1,37 +1,40 @@
-# Waterfall AI
+<p align="right"><a href="./README.zh-CN.md">简体中文</a></p>
 
-[简体中文](./README.zh-CN.md)
+<h1 align="center">Waterfall AI</h1>
+<p align="center"><strong>Agent-driven test automation platform</strong></p>
 
-**Agent-driven test automation platform**
+<p align="center">
+Turn test requirements into reviewable plans, runnable Playwright tests,<br>
+and evidence-rich results in one self-hosted workspace.<br>
+Plan, generate, review, execute, and repair with an AI agent.
+</p>
 
-Waterfall AI is a self-hosted workspace for turning test requirements into
-Markdown test plans, Playwright scripts, execution records, and agent-assisted
-review and repair. It keeps test assets in project workspaces with local Git
-history and stores platform metadata in MySQL.
+<p align="center">
+  <a href="https://github.com/jiongfeng/waterfall-ai-test-platform/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/jiongfeng/waterfall-ai-test-platform/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="https://github.com/jiongfeng/waterfall-ai-test-platform/releases"><img alt="Release" src="https://img.shields.io/github/v/release/jiongfeng/waterfall-ai-test-platform?include_prereleases"></a>
+  <a href="./LICENSE"><img alt="Apache License 2.0" src="https://img.shields.io/badge/license-Apache--2.0-blue.svg"></a>
+  <a href="./docs/support-matrix.md"><img alt="Linux amd64" src="https://img.shields.io/badge/platform-Linux%2Famd64-informational"></a>
+</p>
+
+<p align="center">
+  <a href="#agent-driven-workflow"><strong>Explore the workflow</strong></a> ·
+  <a href="./docs/deployment.md"><strong>Install the signed Beta</strong></a> ·
+  <a href="./docs/security-model.md"><strong>Understand the security boundary</strong></a>
+</p>
+
+## Agent-driven workflow
+
+| Plan | Generate | Run and repair |
+| --- | --- | --- |
+| Turn requirements into reviewable Markdown plans | Generate Playwright tests with Agent assistance and local Git history | Execute tests, collect evidence, repair failures, and verify the result |
+
+> **Public Beta:** The current signed prerelease supports trusted,
+> single-tenant Linux/amd64 Docker deployments only. Fresh installation only;
+> not a hostile-code sandbox.
 
 Waterfall AI is an independent open-source project built with Playwright. It is
 not affiliated with, sponsored by, or endorsed by Microsoft or the Playwright
 project.
-
-> **Public Beta**
->
-> The signed prerelease
-> [`v0.1.0-beta.3`](https://github.com/jiongfeng/waterfall-ai-test-platform/releases/tag/v0.1.0-beta.3)
-> is available for trusted, single-tenant teams on one Linux/amd64 Docker
-> deployment. It is not a hardened public SaaS, a hostile multi-tenant system,
-> or a security sandbox. Keep the UI behind a TLS reverse proxy and an
-> organization access boundary.
-
-### Brand and release compatibility
-
-The project was renamed from `playwright-test-platform` to
-`waterfall-ai-test-platform`. GitHub redirects the old repository URL. The
-immutable `v0.1.0-beta.3` release intentionally keeps its original
-`playwright-test-platform-*` asset names and
-`ghcr.io/jiongfeng/playwright-test-platform` image reference; releases created
-after the rename use the Waterfall AI names. Runtime compatibility identifiers
-such as the `playwright_platform` database, Python package paths, container
-paths, and existing session-cookie names remain unchanged.
 
 ## What it includes
 
@@ -362,6 +365,17 @@ automatic sanitizer for every text field or binary artifact.
 - review every diagnostic bundle before sharing it;
 - never attach raw reports, trace, video, configuration, or database dumps to a
   public Issue.
+
+## Brand and release compatibility
+
+The project was renamed from `playwright-test-platform` to
+`waterfall-ai-test-platform`. GitHub redirects the old repository URL. The
+immutable `v0.1.0-beta.3` release intentionally keeps its original
+`playwright-test-platform-*` asset names and
+`ghcr.io/jiongfeng/playwright-test-platform` image reference; releases created
+after the rename use the Waterfall AI names. Runtime compatibility identifiers
+such as the `playwright_platform` database, Python package paths, container
+paths, and existing session-cookie names remain unchanged.
 
 ## Fresh-install-only upgrade boundary
 
