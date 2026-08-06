@@ -67,6 +67,13 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertIn('"Origin": base', smoke)
         self.assertGreaterEqual(smoke.count('--header "Origin:'), 2)
 
+    def test_release_smoke_waits_after_each_container_recreation(self) -> None:
+        smoke = (
+            REPOSITORY_ROOT / "scripts" / "release" / "smoke-bundle.sh"
+        ).read_text(encoding="utf-8")
+        self.assertIn("wait_for_stack_health()", smoke)
+        self.assertEqual(smoke.count("wait_for_stack_health\n"), 3)
+
 
 if __name__ == "__main__":
     unittest.main()
