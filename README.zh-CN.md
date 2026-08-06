@@ -1,32 +1,37 @@
-# Waterfall AI
+<p align="right"><a href="./README.md">English</a></p>
 
-[English](./README.md)
+<h1 align="center">Waterfall AI</h1>
+<p align="center"><strong>Agent 驱动的自动化测试平台</strong></p>
 
-**Agent 驱动的自动化测试平台**
+<p align="center">
+把测试需求变成可审查的测试计划、可运行的 Playwright 测试和完整执行证据。<br>
+在一个自托管工作区中，由 AI Agent 完成规划、生成、审查、执行与修复。
+</p>
 
-Waterfall AI 是一个自托管工作台，可将测试需求转化为 Markdown 测试计划、
-Playwright 脚本和执行记录，并通过 Agent 辅助审查与修复。测试资产保存在带本地
-Git 历史的项目工作区中，平台元数据保存在 MySQL。
+<p align="center">
+  <a href="https://github.com/jiongfeng/waterfall-ai-test-platform/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/jiongfeng/waterfall-ai-test-platform/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="https://github.com/jiongfeng/waterfall-ai-test-platform/releases"><img alt="Release" src="https://img.shields.io/github/v/release/jiongfeng/waterfall-ai-test-platform?include_prereleases"></a>
+  <a href="./LICENSE"><img alt="Apache License 2.0" src="https://img.shields.io/badge/license-Apache--2.0-blue.svg"></a>
+  <a href="./docs/support-matrix.md"><img alt="Linux amd64" src="https://img.shields.io/badge/platform-Linux%2Famd64-informational"></a>
+</p>
+
+<p align="center">
+  <a href="#agent-驱动的工作流"><strong>了解工作流</strong></a> ·
+  <a href="./docs/deployment.md"><strong>安装已签名 Beta</strong></a> ·
+  <a href="./docs/security-model.md"><strong>了解安全边界</strong></a>
+</p>
+
+## Agent 驱动的工作流
+
+| 规划 | 生成 | 执行与修复 |
+| --- | --- | --- |
+| 把需求转换为可审查的 Markdown 计划 | 由 Agent 生成 Playwright 测试，并保留本地 Git 历史 | 真实执行测试、收集证据、修复失败并复验结果 |
+
+> **公开 Beta：**当前已签名预发布版本仅支持可信团队在 Linux/amd64 Docker
+> 上进行单租户部署；只支持全新安装，不是敌对代码安全沙箱。
 
 Waterfall AI 是基于 Playwright 构建的独立开源项目，与 Microsoft 或 Playwright
 项目不存在隶属、赞助或官方背书关系。
-
-> **公开 Beta**
->
-> 已发布带 Minisign 签名的预发行版
-> [`v0.1.0-beta.3`](https://github.com/jiongfeng/waterfall-ai-test-platform/releases/tag/v0.1.0-beta.3)，
-> 适合同一信任域内的团队在 Linux/amd64 Docker 上以单租户、单实例方式使用；
-> 它不是经过强化的公网 SaaS、多租户隔离系统或安全沙箱。平台入口应位于 TLS
-> 反向代理和组织访问控制之后。
-
-### 品牌与发布兼容性
-
-项目已由 `playwright-test-platform` 更名为 `waterfall-ai-test-platform`，GitHub 会将
-旧仓库地址重定向到新地址。不可变的 `v0.1.0-beta.3` Release 会保留原有
-`playwright-test-platform-*` 制品名和
-`ghcr.io/jiongfeng/playwright-test-platform` 镜像地址；改名后的新 Release 使用
-Waterfall AI 命名。为保障现有部署兼容，`playwright_platform` 数据库、Python 包路径、
-容器内部路径和既有 Session Cookie 名称保持不变。
 
 ## 主要能力
 
@@ -311,6 +316,15 @@ Playwright 报告、截图、视频、trace、浏览器下载、工作区 Git �
   `config.json`/`.env`/Release 元数据视为同一恢复点；
 - 分享前人工复核每个诊断包；
 - 不要把原始报告、trace、视频、配置或数据库转储附到公开 Issue。
+
+## 品牌与发布兼容性
+
+项目已由 `playwright-test-platform` 更名为 `waterfall-ai-test-platform`，GitHub 会将
+旧仓库地址重定向到新地址。不可变的 `v0.1.0-beta.3` Release 会保留原有
+`playwright-test-platform-*` 制品名和
+`ghcr.io/jiongfeng/playwright-test-platform` 镜像地址；改名后的新 Release 使用
+Waterfall AI 命名。为保障现有部署兼容，`playwright_platform` 数据库、Python 包路径、
+容器内部路径和既有 Session Cookie 名称保持不变。
 
 ## 仅支持全新安装的升级边界
 

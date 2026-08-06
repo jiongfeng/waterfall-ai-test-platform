@@ -13,7 +13,7 @@ class BrandIdentityTests(unittest.TestCase):
         login = (ROOT / "templates/login.html").read_text(encoding="utf-8")
         project = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
 
-        self.assertIn("# Waterfall AI", readme)
+        self.assertIn('<h1 align="center">Waterfall AI</h1>', readme)
         self.assertIn("Agent-driven test automation platform", readme)
         self.assertIn("not affiliated with, sponsored by, or endorsed", readme)
         self.assertIn("Waterfall AI", index)
