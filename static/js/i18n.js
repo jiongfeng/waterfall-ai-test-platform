@@ -33,6 +33,12 @@
     [/^共\s*(\d+)\s*个角色$/, (count) => `${count} roles total`],
     [/^共\s*(\d+)\s*条相关脚本$/, (count) => `${count} related scripts total`],
     [/^已选择\s*(\d+)\s*[个条]$/, (count) => `${count} selected`],
+    [/^拆分完成：新增\s*(\d+)\s*个单用例计划。$/, (count) => `Split complete: ${count} single-case plans created.`],
+    [/^跳过\s*(\d+)\s*个已存在或无效计划。$/, (count) => `Skipped ${count} existing or invalid plans.`],
+    [/^任务失败：?\s*(.*)$/, (error) => error ? `Task failed: ${error}` : "Task failed"],
+    [/^已删除\s*(\d+)\s*条测试脚本。$/, (count) => `${count} test scripts deleted.`],
+    [/^已删除\s*(\d+)\s*条测试脚本，失败\s*(\d+)\s*条：(.+)$/, (deleted, failed, details) => `${deleted} test scripts deleted; ${failed} failed: ${details}`],
+    [/^确认删除选中的\s*(\d+)\s*条测试脚本？$/, (count) => `Delete the selected ${count} test scripts?`],
   ];
 
   function locale() {
