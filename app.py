@@ -2089,6 +2089,11 @@ def localize_first_party_api_errors(response):
         not request.path.startswith("/api/")
         or response.is_streamed
         or not response.is_json
+        # Project-scoped API calls from the application always carry this
+        # header.  Keeping the response hook off legacy/headerless calls
+        # preserves their compatibility and avoids resolving a project merely
+        # to format an error response.
+        or not request.headers.get("X-Project-Key")
     ):
         return response
     payload = response.get_json(silent=True)
