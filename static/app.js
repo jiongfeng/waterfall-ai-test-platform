@@ -4039,6 +4039,10 @@ async function bootstrap() {
   renderSideList();
   renderContent();
   await loadActiveSection();
+  // Some modal and panel markup exists before the locale observer starts.
+  // Run one final pass after initial hydration so hidden controls cannot keep
+  // their source-language copy until they are opened or re-rendered.
+  window.WaterfallI18n?.localizeDom();
 }
 
 bootstrap();
