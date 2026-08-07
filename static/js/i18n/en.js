@@ -18,7 +18,7 @@ window.WaterfallTranslations.en = {
     "简体中文": "Simplified Chinese", "未登录": "Not signed in", "退出": "Sign out", "快捷导航": "Quick navigation",
     "需求": "Requirements", "计划": "Plans", "脚本": "Scripts", "测试集": "Test suites", "配置": "Settings",
     "用户": "Users", "角色": "Roles", "刷新列表": "Refresh list", "搜索模块": "Search modules",
-    "搜索模块或用例": "Search modules or cases", "等待中": "Pending", "未执行": "Not run", "未修复": "Not repaired",
+    "搜索模块或用例": "Search modules or cases", "等待中": "Pending", "未执行": "Not run", "未修复": "Not repaired", "修复": "Repair",
     "新增计划": "New plan", "上传需求": "Upload requirement", "资源列表": "Asset list", "未选择文件": "No file selected",
     "请选择模块": "Select a module", "导入 inventory": "Import inventory", "解析需求": "Analyze requirement",
     "取消": "Cancel", "生成脚本": "Generate scripts", "录制脚本": "Record script", "执行脚本": "Run script",

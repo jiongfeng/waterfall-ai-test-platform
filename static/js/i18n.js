@@ -25,6 +25,13 @@
     ".execution-log",
     ".event-log",
   ].join(",");
+  const LEGACY_COUNT_PATTERNS = [
+    [/^共\s*(\d+)\s*条脚本$/, (count) => `${count} scripts total`],
+    [/^共\s*(\d+)\s*条计划$/, (count) => `${count} plans total`],
+    [/^共\s*(\d+)\s*个测试集$/, (count) => `${count} test suites total`],
+    [/^共\s*(\d+)\s*条相关脚本$/, (count) => `${count} related scripts total`],
+    [/^已选择\s*(\d+)\s*[个条]$/, (count) => `${count} selected`],
+  ];
 
   function locale() {
     return document.documentElement.dataset.locale === CHINESE ? CHINESE : ENGLISH;
@@ -60,7 +67,12 @@
       return value;
     }
     const catalog = dictionary(ENGLISH).source || {};
-    return catalog[value] || value;
+    if (catalog[value]) return catalog[value];
+    for (const [pattern, format] of LEGACY_COUNT_PATTERNS) {
+      const match = value.match(pattern);
+      if (match) return format(match[1]);
+    }
+    return value;
   }
 
   function localizeTextNode(node) {
