@@ -46,6 +46,8 @@ assert.strictEqual(sourceCatalog["搜索模块或用例"], "Search modules or ca
 assert.strictEqual(sourceCatalog["修复"], "Repair");
 assert.strictEqual(sourceCatalog["未上传需求"], "No requirements uploaded");
 assert.strictEqual(sourceCatalog["角色列表"], "Role list");
+assert.strictEqual(sourceCatalog["搜索模块或计划"], "Search modules or plans");
+assert.strictEqual(sourceCatalog["暂无角色。"], "No roles yet.");
 assert.match(
   fs.readFileSync(path.join(appDir, "static/js/i18n.js"), "utf8"),
   /scripts total/,
