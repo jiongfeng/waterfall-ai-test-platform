@@ -119,7 +119,7 @@ class ProjectModelTests(unittest.TestCase):
                 "description": "details",
                 "specs_dir": "plans",
                 "tests_dir": "tests",
-                "language": "zh-CN",
+                "language": "en",
             },
         )
 

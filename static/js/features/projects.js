@@ -51,7 +51,7 @@ function normalizeProject(project) {
     target_system: isPlainObject(project.target_system) ? project.target_system : null,
     database_baseline: isPlainObject(project.database_baseline) ? project.database_baseline : null,
     plan_generation: isPlainObject(project.plan_generation) ? project.plan_generation : null,
-    language: project.language === "en" ? "en" : "zh-CN",
+    language: project.language === "zh-CN" ? "zh-CN" : "en",
     status: typeof project.status === "string" ? project.status : "active",
     is_default: Boolean(project.is_default),
   };
@@ -434,12 +434,12 @@ async function switchProject(projectKey) {
     return;
   }
 
-  const previousLanguage = state.project.current?.language || "zh-CN";
+  const previousLanguage = state.project.current?.language || "en";
   const nextProject = state.project.projects.find((project) => project.project_key === projectKey) || null;
   state.project.currentKey = projectKey;
   state.project.current = nextProject;
   writeStorageItem(CURRENT_PROJECT_STORAGE_KEY, projectKey);
-  if (nextProject && (nextProject.language || "zh-CN") !== previousLanguage) {
+  if (nextProject && (nextProject.language || "en") !== previousLanguage) {
     window.location.reload();
     return;
   }

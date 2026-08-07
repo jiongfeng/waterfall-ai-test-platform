@@ -1148,29 +1148,13 @@ const elements = {
   suiteScriptSelectionCount: document.getElementById("suiteScriptSelectionCount"),
 };
 
-const UI_COPY = {
-  en: {
-    "#appTitle": "Test assets",
-    "#logoutButton": "Sign out",
-    "#createProjectButton": "New project",
-    "#createModuleButton": "New plan",
-    "#uploadRequirementButton": "Upload requirement",
-    "#refreshButton": "Refresh list",
-  },
-  "zh-CN": {},
-};
-
 function projectLanguage() {
-  return state.project.current?.language === "en" ? "en" : "zh-CN";
+  return state.project.current?.language === "zh-CN" ? "zh-CN" : "en";
 }
 
 function applyProjectLanguage() {
   const language = projectLanguage();
   window.WaterfallI18n?.setLocale(language);
-  Object.entries(UI_COPY[language] || {}).forEach(([selector, text]) => {
-    const element = document.querySelector(selector);
-    if (element) element.textContent = text;
-  });
   const isAdmin = Boolean(state.auth.isAdmin);
   if (language === "en") {
     SCRIPT_PROMPT_FIXED_TEMPLATE = `@playwright-test-generator
@@ -1181,7 +1165,7 @@ Write output only to the candidate path supplied by the platform; do not directl
     SCRIPT_RUN_PROMPT_FIXED_TEMPLATE = "@playwright-test-healer\nUse specs/<module>/<module>.md to run and repair tests/<module>/<test-script>.spec.ts";
     SCRIPT_RUN_PROMPT_NOTE_DEFAULT = "Requirements:\n1. Do not delete or comment out any STEP.\n2. Preserve the execution video.";
   }
-  const languageLabel = language === "en" ? "English" : "简体中文";
+  const languageLabel = window.WaterfallI18n?.t("language") || (language === "en" ? "English" : "简体中文");
   elements.languageMenuButton.textContent = isAdmin ? `${languageLabel} ▾` : languageLabel;
   elements.languageMenuButton.disabled = !isAdmin;
   elements.languageMenuButton.classList.toggle("readonly", !isAdmin);
@@ -1610,7 +1594,7 @@ function formatTimestampMs(timestamp) {
   if (!value) {
     return "-";
   }
-  return new Intl.DateTimeFormat("zh-CN", {
+  return new Intl.DateTimeFormat(window.WaterfallI18n?.getLocale?.() || "en", {
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
