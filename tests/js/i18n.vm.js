@@ -43,4 +43,10 @@ assert.strictEqual(sourceCatalog["暂无测试计划"], "No test plans yet");
 assert.strictEqual(sourceCatalog["未执行"], "Not run");
 assert.strictEqual(sourceCatalog["未修复"], "Not repaired");
 assert.strictEqual(sourceCatalog["搜索模块或用例"], "Search modules or cases");
+assert.strictEqual(sourceCatalog["修复"], "Repair");
+assert.match(
+  fs.readFileSync(path.join(appDir, "static/js/i18n.js"), "utf8"),
+  /scripts total/,
+  "Dynamic count formats must have an English localization path.",
+);
 process.stdout.write("i18n catalog and template coverage: ok\n");
