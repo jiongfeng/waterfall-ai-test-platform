@@ -12,6 +12,7 @@ const SECTION = {
 // Feature modules receive this semantic translator explicitly.  Do not use
 // source() for new UI: source() only exists as a safe bridge for old literals.
 const t = (key, params = {}) => window.WaterfallI18n?.t(key, params) || key;
+const sourceText = (value) => window.WaterfallI18n?.source(value) || value;
 
 const MENU_ITEMS = [
   { section: SECTION.REQUIREMENTS, permission: "menu.requirements", label: "需求", title: "需求" },
@@ -1301,8 +1302,18 @@ function getChinesePlanFilenameFromName(planName, moduleName, fallbackStem = "")
   return `${sanitizeChineseArtifactStem(candidate, fallback, uniqueKey)}.md`;
 }
 
+function getPlanFilenameForProjectLanguage(planName, moduleName, fallbackStem = "") {
+  if (projectLanguage() === "en") {
+    return getPlanFilenameFromName(planName || fallbackStem || moduleName, moduleName);
+  }
+  return getChinesePlanFilenameFromName(planName, moduleName, fallbackStem);
+}
+
 function getGeneratedScriptFilenameFromPlan(planFilename) {
   const stem = stripMarkdownSuffix(planFilename || "");
+  if (projectLanguage() === "en") {
+    return stem ? `${stem}.spec.ts` : "";
+  }
   if (isChineseArtifactStem(stem)) {
     return `${stem}.spec.ts`;
   }
@@ -1359,11 +1370,19 @@ function getPlanGenerationPlanFilename(moduleName) {
   const mode = getPlanGenerationMode();
   const planName = elements.newPlanName.value.trim();
   if (mode === PLAN_GENERATION_MODE.MULTIPLE) {
-    const indexName = planName || (moduleName ? `${moduleName}-用例索引` : "<测试计划名>");
-    const fallbackStem = moduleName ? `${moduleName}-用例索引` : "用例索引";
-    return getChinesePlanFilenameFromName(indexName, moduleName, fallbackStem);
+    const indexName = planName || (moduleName
+      ? `${moduleName}${projectLanguage() === "en" ? "-case-index" : "-用例索引"}`
+      : (projectLanguage() === "en" ? "<test-plan-name>" : "<测试计划名>"));
+    const fallbackStem = moduleName
+      ? `${moduleName}${projectLanguage() === "en" ? "-case-index" : "-用例索引"}`
+      : (projectLanguage() === "en" ? "case-index" : "用例索引");
+    return getPlanFilenameForProjectLanguage(indexName, moduleName, fallbackStem);
   }
-  return getChinesePlanFilenameFromName(planName || moduleName, moduleName, moduleName || "测试计划");
+  return getPlanFilenameForProjectLanguage(
+    planName || moduleName,
+    moduleName,
+    moduleName || (projectLanguage() === "en" ? "test-plan" : "测试计划"),
+  );
 }
 
 function getSelectedPlan() {
@@ -1397,7 +1416,7 @@ function renderPlanGenerationModuleOptions(selectedModuleName = "") {
 
   const placeholder = document.createElement("option");
   placeholder.value = "";
-  placeholder.textContent = moduleNames.length ? "请选择模块" : "暂无已有模块";
+  placeholder.textContent = sourceText(moduleNames.length ? "请选择模块" : "暂无已有模块");
   elements.newModuleNameSelect.appendChild(placeholder);
 
   moduleNames.forEach((moduleName) => {
@@ -1419,7 +1438,7 @@ function setPlanGenerationModuleMode(mode, { focus = false } = {}) {
   elements.newModuleNameSelect.classList.toggle("hidden", isInputMode);
   elements.newModuleName.classList.toggle("hidden", !isInputMode);
   elements.addModuleNameLink.classList.toggle("hidden", !hasModuleOptions);
-  elements.addModuleNameLink.textContent = isInputMode ? "选择已有模块" : "新增模块名";
+  elements.addModuleNameLink.textContent = sourceText(isInputMode ? "选择已有模块" : "新增模块名");
 
   if (focus) {
     window.requestAnimationFrame(() => {

@@ -56,6 +56,43 @@ COVERAGE_PROFILES = {
     },
 }
 
+# The coverage profile is platform-authored prompt content, rather than user
+# content.  Keep the two language variants next to one another so API clients
+# always receive a prompt in the current project's language.
+ENGLISH_COVERAGE_PROFILES = {
+    "core": {
+        "key": "core",
+        "label": "Core regression",
+        "description": "Prioritize the most frequently used, highest-value positive paths.",
+        "suggested_max_cases": 10,
+        "template_prompt": (
+            "Prioritize the most frequently used, highest-value positive paths. Generate 3–5 test cases by default and no more than 10. "
+            "Do not omit critical exception or boundary rules explicitly required by the requirement. Do not proactively add compatibility, security, "
+            "or low-frequency paths that the requirement does not mention, and do not create duplicate cases merely to reach a count."
+        ),
+    },
+    "standard": {
+        "key": "standard",
+        "label": "Standard functionality",
+        "description": "Cover the positive, exception, boundary, role, and permission rules stated in the requirement.",
+        "suggested_max_cases": 15,
+        "template_prompt": (
+            "Cover the stated positive paths, error handling, boundary conditions, role differences, and permission rules. Generate no more than 15 test cases. "
+            "Do not proactively add compatibility, security-attack, or low-frequency paths outside the requirement, and do not create duplicate cases merely to reach a count."
+        ),
+    },
+    "comprehensive": {
+        "key": "comprehensive",
+        "label": "Comprehensive regression",
+        "description": "Actively explore functional, boundary, error, permission, compatibility, security, and low-frequency scenarios.",
+        "suggested_max_cases": 25,
+        "template_prompt": (
+            "Cover the main business paths and explicitly stated rules, then actively explore error handling, boundary conditions, state combinations, role differences, "
+            "permission bypasses, compatibility, security, and low-frequency paths. Generate no more than 25 test cases. Keep scenarios independent and avoid duplicates."
+        ),
+    },
+}
+
 DEFAULT_OPENCODE_TASK_TIMEOUT_SECONDS = 7200
 DEFAULT_SCRIPT_EXECUTION_TIMEOUT_SECONDS = 7200
 DEFAULT_DATABASE_BASELINE_TIMEOUT_SECONDS = 1800
@@ -76,6 +113,13 @@ def normalize_project_language(value, default=DEFAULT_PROJECT_LANGUAGE):
     if normalized not in SUPPORTED_PROJECT_LANGUAGES:
         raise ValueError("Unsupported project language.")
     return normalized
+
+
+def coverage_profiles_for_language(language):
+    """Return the platform-owned coverage copy for a project language."""
+
+    normalized = normalize_project_language(language)
+    return ENGLISH_COVERAGE_PROFILES if normalized == "en" else COVERAGE_PROFILES
 
 
 def parse_boolean(value, default=False):

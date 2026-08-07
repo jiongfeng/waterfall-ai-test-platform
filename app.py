@@ -31,6 +31,7 @@ from test_plan_viewer.configuration import (
     APP_DIR,
     CONFIG_PATH,
     COVERAGE_PROFILES,
+    coverage_profiles_for_language,
     DEFAULT_COVERAGE_PROFILE,
     DEFAULT_DATABASE_BASELINE_TIMEOUT_SECONDS,
     DEFAULT_OPENCODE_TASK_TIMEOUT_SECONDS,
@@ -483,12 +484,13 @@ PLATFORM_RECORD_REPOSITORY = PlatformRecordRepository(
 
 
 def serialize_coverage_profiles():
-    return [dict(COVERAGE_PROFILES[key]) for key in ("core", "standard", "comprehensive")]
+    profiles = coverage_profiles_for_language(get_current_project_language())
+    return [dict(profiles[key]) for key in ("core", "standard", "comprehensive")]
 
 
 def get_coverage_profile(value=None):
     profile = validate_coverage_profile(value or get_plan_generation_config().get("default_coverage_profile"))
-    return dict(COVERAGE_PROFILES[profile])
+    return dict(coverage_profiles_for_language(get_current_project_language())[profile])
 
 
 def build_coverage_policy_block(coverage_prompt):
@@ -507,7 +509,7 @@ def normalize_plan_generation_request(value=None):
     value = value if isinstance(value, dict) else {}
     default_profile = get_plan_generation_config().get("default_coverage_profile", DEFAULT_COVERAGE_PROFILE)
     profile = validate_coverage_profile(value.get("coverage_profile"), default_profile)
-    template_prompt = COVERAGE_PROFILES[profile]["template_prompt"]
+    template_prompt = get_coverage_profile(profile)["template_prompt"]
     if "coverage_prompt" in value:
         coverage_prompt = str(value.get("coverage_prompt") or "").strip()
     else:
@@ -7558,12 +7560,12 @@ def agent_generate_plan_for_module(run_id, step_key, requirement, module_item):
     if not base_prompt:
         raise RuntimeError(f"模块缺少 planner prompt：{module_name}")
     user_prompt = compose_editable_plan_prompt(base_prompt, coverage_prompt)
-    plan_filename = get_chinese_plan_filename_from_name(plan_name, module_name, fallback_stem=module_name)
+    plan_filename = get_plan_filename_from_name(plan_name, module_name) if get_current_project_language() == "en" else get_chinese_plan_filename_from_name(plan_name, module_name, fallback_stem=module_name)
     target_file = get_plan_target_path(module_name, plan_filename)
     if target_file.exists():
-        profile_label = COVERAGE_PROFILES[profile]["label"]
+        profile_label = get_coverage_profile(profile)["label"]
         plan_name = f"{plan_name}-{profile_label}"
-        plan_filename = get_chinese_plan_filename_from_name(plan_name, module_name, fallback_stem=plan_name)
+        plan_filename = get_plan_filename_from_name(plan_name, module_name) if get_current_project_language() == "en" else get_chinese_plan_filename_from_name(plan_name, module_name, fallback_stem=plan_name)
         target_file = get_plan_target_path(module_name, plan_filename)
         if target_file.exists():
             append_agent_event(run_id, step_key, "log", f"计划已存在，跳过生成：{module_name}/{plan_filename}")
@@ -13979,7 +13981,7 @@ def generate_requirement_module_plan_stream(requirement_uid, module_uid):
         if not prompt:
             return jsonify({"error": "候选模块缺少 planner prompt。"}), 400
         validate_module_name(module_name)
-        plan_filename = get_chinese_plan_filename_from_name(plan_name, module_name, fallback_stem=module_name)
+        plan_filename = get_plan_filename_from_name(plan_name, module_name) if get_current_project_language() == "en" else get_chinese_plan_filename_from_name(plan_name, module_name, fallback_stem=module_name)
         target_file = get_plan_target_path(module_name, plan_filename)
         if target_file.exists():
             return jsonify({"error": f"测试计划已存在：{target_file}"}), 409
@@ -14406,6 +14408,9 @@ def get_plan_generation_defaults():
     except (RuntimeError, ValueError) as exc:
         return jsonify({"error": str(exc)}), 400
 
+    if get_current_project_language() == "en":
+        target_path_template = target_path_template.replace("<模块名>", "<module>").replace("<测试计划名>", "<test-plan-name>")
+
     return jsonify(
         {
             "prompt_template": build_default_plan_prompt_template(),
@@ -14449,10 +14454,10 @@ def create_plan_generation_stream():
     try:
         validate_module_name(module_name)
         if plan_filename:
-            plan_filename = validate_chinese_plan_filename(plan_filename)
+            plan_filename = validate_plan_filename(plan_filename) if get_current_project_language() == "en" else validate_chinese_plan_filename(plan_filename)
         else:
-            fallback_stem = f"{module_name}-用例索引" if generation_mode == "multiple" else module_name
-            plan_filename = get_chinese_plan_filename_from_name(plan_name, module_name, fallback_stem=fallback_stem)
+            fallback_stem = f"{module_name}-{'case-index' if get_current_project_language() == 'en' else '用例索引'}" if generation_mode == "multiple" else module_name
+            plan_filename = get_plan_filename_from_name(plan_name or fallback_stem, module_name) if get_current_project_language() == "en" else get_chinese_plan_filename_from_name(plan_name, module_name, fallback_stem=fallback_stem)
         target_file = get_plan_target_path(module_name, plan_filename)
     except (RuntimeError, ValueError) as exc:
         return jsonify({"error": str(exc)}), 400
@@ -16142,9 +16147,9 @@ def create_plan_generation_job():
     try:
         validate_module_name(module_name)
         if plan_filename:
-            plan_filename = validate_chinese_plan_filename(plan_filename)
+            plan_filename = validate_plan_filename(plan_filename) if get_current_project_language() == "en" else validate_chinese_plan_filename(plan_filename)
         else:
-            plan_filename = get_chinese_plan_filename_from_name(plan_name, module_name, fallback_stem=module_name)
+            plan_filename = get_plan_filename_from_name(plan_name or module_name, module_name) if get_current_project_language() == "en" else get_chinese_plan_filename_from_name(plan_name, module_name, fallback_stem=module_name)
         target_file = get_plan_target_path(module_name, plan_filename)
     except (RuntimeError, ValueError) as exc:
         return jsonify({"error": str(exc)}), 400
