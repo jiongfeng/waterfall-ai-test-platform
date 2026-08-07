@@ -29,6 +29,8 @@
     [/^共\s*(\d+)\s*条脚本$/, (count) => `${count} scripts total`],
     [/^共\s*(\d+)\s*条计划$/, (count) => `${count} plans total`],
     [/^共\s*(\d+)\s*个测试集$/, (count) => `${count} test suites total`],
+    [/^共\s*(\d+)\s*个用户$/, (count) => `${count} users total`],
+    [/^共\s*(\d+)\s*个角色$/, (count) => `${count} roles total`],
     [/^共\s*(\d+)\s*条相关脚本$/, (count) => `${count} related scripts total`],
     [/^已选择\s*(\d+)\s*[个条]$/, (count) => `${count} selected`],
   ];
