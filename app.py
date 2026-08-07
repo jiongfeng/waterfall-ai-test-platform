@@ -69,6 +69,7 @@ from test_plan_viewer.execution import environment as execution_environment
 from test_plan_viewer.execution import playwright as execution_playwright
 from test_plan_viewer.execution import results as execution_results
 from test_plan_viewer.generation import cases as generation_cases
+from test_plan_viewer.i18n import localize_platform_error
 from test_plan_viewer.generation import prompts as generation_prompts
 from test_plan_viewer.generation.opencode import (
     build_opencode_prompt_parts,
@@ -2078,6 +2079,32 @@ def get_current_project_language():
         except RuntimeError:
             return "en"
     return normalize_project_language(project.get("language"))
+
+
+@app.after_request
+def localize_first_party_api_errors(response):
+    """Localize recognized platform API errors without touching third-party logs."""
+
+    if (
+        not request.path.startswith("/api/")
+        or response.is_streamed
+        or not response.is_json
+    ):
+        return response
+    payload = response.get_json(silent=True)
+    if not isinstance(payload, dict) or not isinstance(payload.get("error"), str):
+        return response
+    try:
+        language = get_current_project_language()
+    except Exception:
+        language = "en"
+    translated = localize_platform_error(payload["error"], language)
+    if translated == payload["error"]:
+        return response
+    payload["error"] = translated
+    response.set_data(json.dumps(payload, ensure_ascii=False))
+    response.headers["Content-Length"] = str(len(response.get_data()))
+    return response
 
 
 def update_current_project_settings_in_mysql(target_system, database_baseline, plan_generation):

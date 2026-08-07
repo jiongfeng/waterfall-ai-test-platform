@@ -38,6 +38,25 @@ for (const filename of ["templates/index.html", "templates/partials/agent_panel.
   );
 }
 
+// Feature modules still contain legacy literals while they are migrated to
+// semantic t() calls.  Every simple first-party literal must have an exact
+// English source catalog entry, so the DOM bridge cannot silently expose it in
+// an English project.  Prompt/asset content is safe: those controls are
+// excluded by i18n.js and must remain in its original language.
+const featureDirectory = path.join(appDir, "static/js/features");
+for (const filename of fs.readdirSync(featureDirectory).filter((name) => name.endsWith(".js"))) {
+  const source = fs.readFileSync(path.join(featureDirectory, filename), "utf8");
+  const literals = [...source.matchAll(/"([^"\n]*[\u3400-\u9fff][^"\n]*)"/g)]
+    .map((match) => match[1])
+    .filter((value) => !value.includes("${") && !/[<>]/.test(value));
+  const missing = [...new Set(literals.filter((value) => !sourceCatalog[value]))];
+  assert.deepStrictEqual(
+    missing,
+    [],
+    `${filename} contains a legacy Chinese literal without an English source catalog entry.`,
+  );
+}
+
 assert.strictEqual(sourceCatalog["当前项目"], "Current project");
 assert.strictEqual(sourceCatalog["暂无测试计划"], "No test plans yet");
 assert.strictEqual(sourceCatalog["未执行"], "Not run");
