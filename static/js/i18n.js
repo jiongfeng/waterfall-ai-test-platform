@@ -39,6 +39,14 @@
     [/^已删除\s*(\d+)\s*条测试脚本。$/, (count) => `${count} test scripts deleted.`],
     [/^已删除\s*(\d+)\s*条测试脚本，失败\s*(\d+)\s*条：(.+)$/, (deleted, failed, details) => `${deleted} test scripts deleted; ${failed} failed: ${details}`],
     [/^确认删除选中的\s*(\d+)\s*条测试脚本？$/, (count) => `Delete the selected ${count} test scripts?`],
+    [/^全部\s*(\d+)$/, (count) => `All ${count}`],
+    [/^处理中\s*(\d+)$/, (count) => `Processing ${count}`],
+    [/^已通过\s*(\d+)$/, (count) => `Passed ${count}`],
+    [/^待人工\s*(\d+)$/, (count) => `Manual action ${count}`],
+    [/^已放弃\s*(\d+)$/, (count) => `Abandoned ${count}`],
+    [/^已选择\s*(\d+)\s*条脚本$/, (count) => `${count} scripts selected`],
+    [/^共\s*(\d+)\s*条脚本\s*·\s*当前显示\s*(\d+)\s*条$/, (total, shown) => `${total} scripts total · ${shown} shown`],
+    [/^批量修复记录：成功\s*(\d+)，失败\s*(\d+)，已取消\s*(\d+)$/, (succeeded, failed, cancelled) => `Bulk repair record: ${succeeded} succeeded, ${failed} failed, ${cancelled} cancelled`],
   ];
 
   function locale() {
