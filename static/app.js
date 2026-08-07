@@ -1177,7 +1177,10 @@ Write output only to the candidate path supplied by the platform; do not directl
   elements.languageMenuButton.setAttribute("aria-expanded", "false");
   elements.languageMenu.querySelectorAll("[data-language]").forEach((item) => {
     item.setAttribute("aria-checked", String(item.dataset.language === language));
-    item.textContent = `${item.dataset.language === language ? "✓ " : ""}${item.dataset.language === "en" ? "English" : "简体中文"}`;
+    const optionLabel = item.dataset.language === "en"
+      ? "English"
+      : (language === "en" ? "Simplified Chinese" : "简体中文");
+    item.textContent = `${item.dataset.language === language ? "✓ " : ""}${optionLabel}`;
   });
   elements.appShell.classList.remove("i18n-pending");
 }

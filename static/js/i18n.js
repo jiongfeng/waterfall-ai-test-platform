@@ -84,10 +84,14 @@
       return value;
     }
     const catalog = dictionary(ENGLISH).source || {};
-    if (catalog[value]) return catalog[value];
+    const whitespace = value.match(/^(\s*)([\s\S]*?)(\s*)$/);
+    const prefix = whitespace?.[1] || "";
+    const source = whitespace?.[2] || value;
+    const suffix = whitespace?.[3] || "";
+    if (catalog[source]) return `${prefix}${catalog[source]}${suffix}`;
     for (const [pattern, format] of LEGACY_COUNT_PATTERNS) {
-      const match = value.match(pattern);
-      if (match) return format(match[1]);
+      const match = source.match(pattern);
+      if (match) return `${prefix}${format(...match.slice(1))}${suffix}`;
     }
     return value;
   }
