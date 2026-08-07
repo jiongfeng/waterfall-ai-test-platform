@@ -22,7 +22,14 @@ assert.deepStrictEqual(
 );
 
 const sourceCatalog = english.source;
-for (const filename of ["templates/index.html", "templates/partials/agent_panel.html"]) {
+const templateDirectory = path.join(appDir, "templates");
+const templateFiles = [
+  "templates/index.html",
+  ...fs.readdirSync(path.join(templateDirectory, "partials"))
+    .filter((name) => name.endsWith(".html"))
+    .map((name) => `templates/partials/${name}`),
+];
+for (const filename of templateFiles) {
   const template = fs.readFileSync(path.join(appDir, filename), "utf8");
   const values = [
     ...template.matchAll(/>([^<>]*[\u3400-\u9fff][^<>]*)</g),
