@@ -749,7 +749,8 @@ function renderRunList() {
 
 function renderRequirements() {
   const current = elements.requirementSelect.value;
-  elements.requirementSelect.innerHTML = '<option value="">或选择已有需求</option>';
+  const placeholder = window.WaterfallI18n?.source("或选择已有需求") || "或选择已有需求";
+  elements.requirementSelect.innerHTML = `<option value="">${escapeHtml(placeholder)}</option>`;
   state.requirements.forEach((item) => {
     const option = document.createElement("option");
     option.value = item.requirement_uid;
@@ -2181,6 +2182,7 @@ function openNewTaskModal() {
   }
   populateAgentCoveragePrompt(state.defaultCoverageProfile);
   elements.newTaskModal.classList.remove("hidden");
+  window.WaterfallI18n?.localizeDom(elements.newTaskModal);
   document.body.classList.add("agent-modal-open");
   window.requestAnimationFrame(() => {
     if (elements.requirementSelect.value) {
@@ -2786,7 +2788,9 @@ elements.coveragePrompt.addEventListener("input", renderAgentCoverageState);
 elements.coverageReset.addEventListener("click", resetAgentCoveragePrompt);
 const handleRequirementFileChange = () => {
   const file = elements.requirementFile.files?.[0];
-  elements.fileLabel.textContent = file ? file.name : "选择需求 Markdown";
+  elements.fileLabel.textContent = file
+    ? file.name
+    : (window.WaterfallI18n?.source("选择需求 Markdown") || "选择需求 Markdown");
   if (file) {
     elements.requirementSelect.value = "";
   }
@@ -2795,7 +2799,7 @@ elements.requirementFile.addEventListener("change", handleRequirementFileChange)
 const handleRequirementSelectChange = () => {
   if (elements.requirementSelect.value) {
     elements.requirementFile.value = "";
-    elements.fileLabel.textContent = "选择需求 Markdown";
+    elements.fileLabel.textContent = window.WaterfallI18n?.source("选择需求 Markdown") || "选择需求 Markdown";
   }
 };
 elements.requirementSelect.addEventListener("change", handleRequirementSelectChange);

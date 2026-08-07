@@ -25,6 +25,7 @@
     ".execution-log",
     ".event-log",
   ].join(",");
+  const DIALOG_SELECTOR = "[role='dialog'], .modal-backdrop, .task-modal";
   const LEGACY_COUNT_PATTERNS = [
     [/^共\s*(\d+)\s*条脚本$/, (count) => `${count} scripts total`],
     [/^共\s*(\d+)\s*条计划$/, (count) => `${count} plans total`],
@@ -128,6 +129,12 @@
           return;
         }
         if (mutation.type === "attributes") {
+          // Dialog bodies are server-rendered while hidden.  A class change
+          // does not add text nodes, so translate the complete dialog when it
+          // is opened instead of leaving its source-language copy visible.
+          if (mutation.attributeName === "class" && mutation.target.matches?.(DIALOG_SELECTOR)) {
+            localizeDom(mutation.target);
+          }
           localizeElement(mutation.target);
           return;
         }
@@ -139,7 +146,7 @@
     });
     observer.observe(document.body, {
       attributes: true,
-      attributeFilter: LOCALIZABLE_ATTRIBUTES,
+      attributeFilter: [...LOCALIZABLE_ATTRIBUTES, "class"],
       childList: true,
       subtree: true,
       characterData: true,
