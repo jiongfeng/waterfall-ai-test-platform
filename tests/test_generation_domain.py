@@ -121,6 +121,9 @@ def make_prompt_dependencies(
         get_script_test_relative_path=(
             lambda module_name, filename: f"tests/{module_name}/{filename}"
         ),
+        # These parity tests verify the retained Chinese prompt behavior. The
+        # application default is tested separately and is now English.
+        get_project_language=lambda: "zh-CN",
     )
 
 

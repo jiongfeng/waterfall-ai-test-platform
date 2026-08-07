@@ -29,12 +29,12 @@ class ProjectLanguageTests(unittest.TestCase):
         ):
             self.assertEqual(
                 legacy_app.get_current_project_language(),
-                "zh-CN",
+                "en",
             )
 
-    def test_legacy_project_serializes_to_chinese_default(self):
+    def test_legacy_project_serializes_to_english_default(self):
         project = project_model.serialize_project({"project_key": "legacy"})
-        self.assertEqual(project["language"], "zh-CN")
+        self.assertEqual(project["language"], "en")
 
     def test_invalid_project_language_is_rejected(self):
         with self.assertRaises(ValueError):

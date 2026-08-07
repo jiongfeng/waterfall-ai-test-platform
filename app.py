@@ -2076,7 +2076,7 @@ def get_current_project_language():
         try:
             project = get_current_project()
         except RuntimeError:
-            return "zh-CN"
+            return "en"
     return normalize_project_language(project.get("language"))
 
 
