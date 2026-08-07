@@ -12,6 +12,7 @@ function createAdminFeature(deps) {
     escapeHtml,
   } = deps;
   const { renderProjectSelect } = projects;
+  const t = (value) => window.WaterfallI18n?.source(value) || value;
 
 function getMenuItem(section) {
   return MENU_ITEMS.find((item) => item.section === section) || null;
@@ -92,22 +93,22 @@ function renderNavigation() {
   elements.planCreateWrap.classList.toggle("hidden", state.activeSection !== SECTION.PLANS);
   elements.requirementUploadWrap.classList.toggle("hidden", state.activeSection !== SECTION.REQUIREMENTS);
   elements.requirementHeaderActions.classList.toggle("hidden", state.activeSection !== SECTION.REQUIREMENTS);
-  elements.appTitle.textContent = activeMenu?.title || "测试资源";
+  elements.appTitle.textContent = t(activeMenu?.title || "测试资源");
   elements.currentUserName.textContent = state.auth.user?.display_name || state.auth.user?.username || "未登录";
   elements.moduleSearch.placeholder =
     state.activeSection === SECTION.REQUIREMENTS
-      ? "搜索需求"
+      ? t("搜索需求")
       : state.activeSection === SECTION.PLANS
-      ? "搜索模块或计划"
+      ? t("搜索模块或计划")
       : state.activeSection === SECTION.SCRIPTS
-        ? "搜索模块或用例"
+        ? t("搜索模块或用例")
         : state.activeSection === SECTION.TEST_SUITES
-          ? "搜索测试集"
+          ? t("搜索测试集")
           : state.activeSection === SECTION.AGENT
             ? "Agent"
             : state.activeSection === SECTION.PROJECT_SETTINGS
-              ? "项目配置"
-              : "搜索";
+              ? t("项目配置")
+              : t("搜索");
   renderProjectSelect();
 }
 function formatAuthDate(timestamp) {
@@ -115,7 +116,7 @@ function formatAuthDate(timestamp) {
   if (!value) {
     return "-";
   }
-  return new Intl.DateTimeFormat("zh-CN", {
+  return new Intl.DateTimeFormat(window.WaterfallI18n?.getLocale?.() || "en", {
     year: "numeric",
     month: "2-digit",
     day: "2-digit",

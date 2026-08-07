@@ -134,6 +134,12 @@
 
   window.WaterfallI18n = {
     t: translate,
+    // Use this only while migrating legacy feature modules. New UI must use a
+    // semantic t(key) entry; source() preserves Chinese-mode copy and safely
+    // localizes known first-party legacy literals in English mode.
+    source(value) {
+      return locale() === ENGLISH ? localizeSourceText(value) : value;
+    },
     formatDate(value, options) {
       return new Intl.DateTimeFormat(locale(), options).format(new Date(value));
     },
