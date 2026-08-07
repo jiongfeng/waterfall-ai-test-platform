@@ -4,7 +4,7 @@
   const ENGLISH = "en";
   const CHINESE = "zh-CN";
   const LOCALIZABLE_ATTRIBUTES = ["title", "placeholder", "aria-label", "aria-description"];
-  const SKIPPED_SELECTOR = [
+  const TEXT_SKIPPED_SELECTOR = [
     "pre",
     "code",
     "textarea",
@@ -12,6 +12,14 @@
     "select",
     "option",
     "[contenteditable='true']",
+    "[data-i18n-skip]",
+    ".markdown-preview",
+    ".execution-log",
+    ".event-log",
+  ].join(",");
+  const ATTRIBUTE_SKIPPED_SELECTOR = [
+    "pre",
+    "code",
     "[data-i18n-skip]",
     ".markdown-preview",
     ".execution-log",
@@ -38,9 +46,13 @@
     return interpolate(value, params);
   }
 
-  function isExcluded(node) {
+  function isTextExcluded(node) {
     const parent = node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement;
-    return !parent || Boolean(parent.closest(SKIPPED_SELECTOR));
+    return !parent || Boolean(parent.closest(TEXT_SKIPPED_SELECTOR));
+  }
+
+  function isAttributeExcluded(element) {
+    return !element || Boolean(element.closest(ATTRIBUTE_SKIPPED_SELECTOR));
   }
 
   function localizeSourceText(value) {
@@ -52,13 +64,13 @@
   }
 
   function localizeTextNode(node) {
-    if (!node?.nodeValue || isExcluded(node)) return;
+    if (!node?.nodeValue || isTextExcluded(node)) return;
     const translated = localizeSourceText(node.nodeValue);
     if (translated !== node.nodeValue) node.nodeValue = translated;
   }
 
   function localizeElement(element) {
-    if (!element || isExcluded(element)) return;
+    if (isAttributeExcluded(element)) return;
     LOCALIZABLE_ATTRIBUTES.forEach((attribute) => {
       if (!element.hasAttribute(attribute)) return;
       const value = element.getAttribute(attribute);
@@ -87,13 +99,23 @@
           localizeTextNode(mutation.target);
           return;
         }
+        if (mutation.type === "attributes") {
+          localizeElement(mutation.target);
+          return;
+        }
         mutation.addedNodes.forEach((node) => {
           if (node.nodeType === Node.TEXT_NODE) localizeTextNode(node);
           if (node.nodeType === Node.ELEMENT_NODE) localizeDom(node);
         });
       });
     });
-    observer.observe(document.body, { childList: true, subtree: true, characterData: true });
+    observer.observe(document.body, {
+      attributes: true,
+      attributeFilter: LOCALIZABLE_ATTRIBUTES,
+      childList: true,
+      subtree: true,
+      characterData: true,
+    });
   }
 
   window.WaterfallI18n = {

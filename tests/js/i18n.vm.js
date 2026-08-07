@@ -40,4 +40,7 @@ for (const filename of ["templates/index.html", "templates/partials/agent_panel.
 
 assert.strictEqual(sourceCatalog["当前项目"], "Current project");
 assert.strictEqual(sourceCatalog["暂无测试计划"], "No test plans yet");
+assert.strictEqual(sourceCatalog["未执行"], "Not run");
+assert.strictEqual(sourceCatalog["未修复"], "Not repaired");
+assert.strictEqual(sourceCatalog["搜索模块或用例"], "Search modules or cases");
 process.stdout.write("i18n catalog and template coverage: ok\n");
