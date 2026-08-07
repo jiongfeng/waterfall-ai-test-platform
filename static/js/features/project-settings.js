@@ -17,6 +17,7 @@ function createProjectSettingsFeature(deps) {
     getProjectRequestHeaders,
     isPlainObject,
     escapeHtml,
+    t = (key) => key,
   } = deps;
   const { normalizeProject, loadProjects } = projects;
   const { isAnyScriptJobRunning } = jobs;
@@ -137,7 +138,7 @@ async function saveProjectSettings(event) {
     state.generation.defaultsLoaded = false;
     state.project.current = normalizeProject(data.project) || state.project.current;
     await loadProjects();
-    setNotice("项目配置已保存。", "success");
+    setNotice(t("projectSettings.saved"), "success");
     renderContent();
   } catch (error) {
     setNotice(error.message, "error");
@@ -197,10 +198,10 @@ function handleProjectSettingsStreamEvent({ event, data }, previousResult) {
   }
   if (event === "done") {
     if (data.ok === false) {
-      appendProjectSettingsOutput(data.error || "Seed 生成失败。");
+      appendProjectSettingsOutput(data.error || t("projectSettings.seedGenerationFailed"));
       return { ...previousResult, ok: false, status: data.status || "failed", error: data.error || "" };
     }
-    appendProjectSettingsOutput("Seed 生成完成。");
+    appendProjectSettingsOutput(t("projectSettings.seedGenerationComplete"));
     return { ...previousResult, ok: true, status: "succeeded" };
   }
   return previousResult;
@@ -211,7 +212,7 @@ async function generateProjectSeed() {
     return;
   }
   setProjectSettingsBusy("isGeneratingSeed", true);
-  setProjectSettingsOutput("正在生成 Seed...\n");
+  setProjectSettingsOutput(`${t("projectSettings.generatingSeed")}\n`);
   try {
     const response = await fetch("/api/project-settings/seed/generate", {
       method: "POST",
@@ -223,15 +224,15 @@ async function generateProjectSeed() {
     });
     if (!response.ok) {
       const data = await response.json().catch(() => ({}));
-      throw new Error(data.error || `请求失败: ${response.status}`);
+      throw new Error(data.error || t("error.requestFailed", { status: response.status }));
     }
     const result = await readProjectSettingsStream(response);
     if (result.ok) {
-      setNotice("Seed 脚本已生成。", "success");
+      setNotice(t("projectSettings.seedGenerated"), "success");
       await loadProjects();
       return;
     }
-    setNotice(result.error || "Seed 生成失败。", "error");
+    setNotice(result.error || t("projectSettings.seedGenerationFailed"), "error");
   } catch (error) {
     appendProjectSettingsOutput(error.message);
     setNotice(error.message, "error");
@@ -246,19 +247,19 @@ async function testProjectSeed() {
     return;
   }
   setProjectSettingsBusy("isTestingSeed", true);
-  setProjectSettingsOutput("正在执行 Seed 测试...\n");
+  setProjectSettingsOutput(`${t("projectSettings.testingSeed")}\n`);
   try {
     const data = await requestJson("/api/project-settings/seed/test", { method: "POST", body: JSON.stringify({}) });
     const lines = [
-      `状态：${data.status || ""}`,
-      `命令：${data.command || ""}`,
+      t("projectSettings.outputStatus", { value: data.status || "" }),
+      t("projectSettings.outputCommand", { value: data.command || "" }),
       data.output || "",
       data.error || "",
-      data.report?.url ? `报告：${data.report.url}` : data.report_error || "",
-      data.video?.url ? `视频：${data.video.url}` : data.video_error || "",
+      data.report?.url ? t("projectSettings.outputReport", { value: data.report.url }) : data.report_error || "",
+      data.video?.url ? t("projectSettings.outputVideo", { value: data.video.url }) : data.video_error || "",
     ].filter(Boolean);
     setProjectSettingsOutput(lines.join("\n"));
-    setNotice(data.status === "succeeded" ? "Seed 测试通过。" : data.error || "Seed 测试失败。", data.status === "succeeded" ? "success" : "error");
+    setNotice(data.status === "succeeded" ? t("projectSettings.seedTestPassed") : data.error || t("projectSettings.seedTestFailed"), data.status === "succeeded" ? "success" : "error");
   } catch (error) {
     setProjectSettingsOutput(error.message);
     setNotice(error.message, "error");
@@ -292,7 +293,7 @@ function renderProjectSettingsPanel() {
   if (!settings.loaded) {
     elements.projectSettingsPanel.innerHTML = `
       <div class="project-settings-empty">
-        <h3>正在读取项目配置</h3>
+        <h3>${t("projectSettings.loading")}</h3>
       </div>
     `;
     return;
@@ -311,9 +312,9 @@ function renderProjectSettingsPanel() {
     settings.isTestingSeed ||
     isAnyScriptJobRunning();
   const settingsTabs = `
-    <div class="project-settings-top-tabs" role="tablist" aria-label="项目配置内容">
-      <button class="content-tab ${settings.activeTab === PROJECT_SETTINGS_VIEW_TAB.BASIC ? "active" : ""}" id="projectSettingsBasicTab" type="button" role="tab" aria-selected="${settings.activeTab === PROJECT_SETTINGS_VIEW_TAB.BASIC}">基础配置</button>
-      <button class="content-tab ${settings.activeTab === PROJECT_SETTINGS_VIEW_TAB.SETUP ? "active" : ""}" id="projectSettingsSetupTab" type="button" role="tab" aria-selected="${settings.activeTab === PROJECT_SETTINGS_VIEW_TAB.SETUP}">测试准备</button>
+    <div class="project-settings-top-tabs" role="tablist" aria-label="${t("projectSettings.tabsLabel")}">
+      <button class="content-tab ${settings.activeTab === PROJECT_SETTINGS_VIEW_TAB.BASIC ? "active" : ""}" id="projectSettingsBasicTab" type="button" role="tab" aria-selected="${settings.activeTab === PROJECT_SETTINGS_VIEW_TAB.BASIC}">${t("projectSettings.basic")}</button>
+      <button class="content-tab ${settings.activeTab === PROJECT_SETTINGS_VIEW_TAB.SETUP ? "active" : ""}" id="projectSettingsSetupTab" type="button" role="tab" aria-selected="${settings.activeTab === PROJECT_SETTINGS_VIEW_TAB.SETUP}">${t("projectSettings.setup")}</button>
     </div>
   `;
 
@@ -331,49 +332,49 @@ function renderProjectSettingsPanel() {
       <div class="project-settings-section">
         <div class="project-settings-header">
           <div>
-            <h3>被测系统</h3>
+            <h3>${t("projectSettings.targetSystem")}</h3>
             <p>${escapeHtml(state.project.current?.name || "")}</p>
           </div>
-          <button class="primary-button" id="projectSettingsSave" type="submit" ${busy ? "disabled" : ""}>保存配置</button>
+          <button class="primary-button" id="projectSettingsSave" type="submit" ${busy ? "disabled" : ""}>${t("projectSettings.save")}</button>
         </div>
         <div class="admin-form-grid project-settings-grid">
           <label class="form-field">
-            <span>被测系统地址</span>
+            <span>${t("projectSettings.targetBaseUrl")}</span>
             <input id="projectTargetBaseUrl" type="url" value="${escapeHtml(target.base_url)}" placeholder="http://127.0.0.1:8080" />
           </label>
           <label class="form-field">
-            <span>登录页地址</span>
+            <span>${t("projectSettings.loginUrl")}</span>
             <input id="projectTargetLoginUrl" type="text" value="${escapeHtml(target.login_url)}" placeholder="/login" />
           </label>
           <label class="form-field">
-            <span>登录用户名</span>
+            <span>${t("projectSettings.loginUsername")}</span>
             <input id="projectTargetUsername" type="text" value="${escapeHtml(target.username)}" autocomplete="username" />
           </label>
           <label class="form-field">
-            <span>登录密码</span>
+            <span>${t("projectSettings.loginPassword")}</span>
             <input id="projectTargetPassword" type="password" value="${escapeHtml(target.password)}" autocomplete="current-password" />
           </label>
           <label class="form-field">
-            <span>Seed 脚本</span>
+            <span>${t("projectSettings.seedScript")}</span>
             <input type="text" value="${escapeHtml(settings.seedScriptPath)}" readonly />
           </label>
         </div>
         <div class="project-settings-actions">
-          <button class="secondary-button" id="projectSeedGenerate" type="button" ${busy ? "disabled" : ""}>生成 Seed</button>
-          <button class="secondary-button" id="projectSeedTest" type="button" ${busy ? "disabled" : ""}>测试 Seed</button>
+          <button class="secondary-button" id="projectSeedGenerate" type="button" ${busy ? "disabled" : ""}>${t("projectSettings.generateSeed")}</button>
+          <button class="secondary-button" id="projectSeedTest" type="button" ${busy ? "disabled" : ""}>${t("projectSettings.testSeed")}</button>
         </div>
       </div>
 
       <div class="project-settings-section">
         <div class="project-settings-header">
           <div>
-            <h3>计划生成</h3>
-            <p>默认档位只决定生成弹窗最初加载的 Prompt 模板，用户仍可修改。</p>
+            <h3>${t("projectSettings.planGeneration")}</h3>
+            <p>${t("projectSettings.coverageHint")}</p>
           </div>
         </div>
         <div class="admin-form-grid project-settings-grid">
           <label class="form-field">
-            <span>默认档位模板</span>
+            <span>${t("projectSettings.defaultCoverage")}</span>
             <select id="projectDefaultCoverageProfile">
               ${coverageProfiles
                 .map(
@@ -388,7 +389,7 @@ function renderProjectSettingsPanel() {
 
     </form>
     <div class="job-output project-settings-output-wrap">
-      <div class="job-status">执行输出</div>
+      <div class="job-status">${t("projectSettings.executionOutput")}</div>
       <pre id="projectSettingsOutput">${escapeHtml(settings.output || "")}</pre>
     </div>
     </div>

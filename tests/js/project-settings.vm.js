@@ -114,6 +114,9 @@ const feature = context.window.createProjectSettingsFeature({
   isPlainObject: (value) =>
     Boolean(value && typeof value === "object" && !Array.isArray(value)),
   escapeHtml: String,
+  t: (key) => ({
+    "projectSettings.seedGenerationComplete": "Seed 生成完成。",
+  }[key] || key),
 });
 
 const normalized = feature.normalizeTargetSystem({

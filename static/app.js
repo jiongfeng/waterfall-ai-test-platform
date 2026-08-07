@@ -9,6 +9,10 @@ const SECTION = {
   ROLES: "roles",
 };
 
+// Feature modules receive this semantic translator explicitly.  Do not use
+// source() for new UI: source() only exists as a safe bridge for old literals.
+const t = (key, params = {}) => window.WaterfallI18n?.t(key, params) || key;
+
 const MENU_ITEMS = [
   { section: SECTION.REQUIREMENTS, permission: "menu.requirements", label: "需求", title: "需求" },
   { section: SECTION.PLANS, permission: "menu.plans", label: "计划", title: "测试计划" },
@@ -2929,6 +2933,7 @@ const projectSettingsFeature = createProjectSettingsFeature({
   getProjectRequestHeaders,
   isPlainObject,
   escapeHtml,
+  t,
 });
 const {
   loadProjectSettings,
