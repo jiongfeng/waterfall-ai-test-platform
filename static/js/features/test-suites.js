@@ -434,7 +434,7 @@ function renderTestSuiteProgressModal(suite) {
 
   elements.testSuiteProgressTitle.textContent = `执行测试集：${record?.suite_name || suite.name}`;
   elements.testSuiteProgressStatus.textContent = getTestSuiteProgressStatusText(record, counts);
-  elements.testSuiteProgressLog.textContent = logs || "等待执行输出...";
+  elements.testSuiteProgressLog.textContent = logs || window.WaterfallI18n?.source("等待执行输出...") || "等待执行输出...";
   elements.testSuiteProgressCompleted.textContent = `${counts.completed} / ${counts.total || 0}`;
   elements.testSuiteProgressPassed.textContent = String(counts.passed);
   elements.testSuiteProgressFailed.textContent = String(counts.failed);

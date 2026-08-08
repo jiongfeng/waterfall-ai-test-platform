@@ -369,7 +369,10 @@ function renderPlanCoverageState() {
   const profile = getCoverageProfile();
   if (elements.planCoverageDescription) {
     elements.planCoverageDescription.textContent = profile
-      ? `${profile.description} 建议最多 ${profile.suggested_max_cases} 条；可继续编辑。`
+      ? window.WaterfallI18n.t("plan.coverageDescription", {
+        description: profile.description,
+        count: profile.suggested_max_cases,
+      })
       : "";
   }
   const customized = elements.planPrompt.value.trim() !== state.generation.defaultComposedPrompt.trim();

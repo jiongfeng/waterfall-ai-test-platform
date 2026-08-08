@@ -9,6 +9,7 @@ window.WaterfallTranslations["zh-CN"] = {
   "action.newPlan": "新增计划",
   "action.uploadRequirement": "上传需求",
   "action.refresh": "刷新列表",
+  "plan.coverageDescription": "{description} 建议最多 {count} 条；可继续编辑。",
   "error.requestFailed": "请求失败: {status}",
   "projectSettings.saved": "项目配置已保存。",
   "projectSettings.seedGenerationFailed": "Seed 生成失败。",

@@ -9,6 +9,7 @@ window.WaterfallTranslations.en = {
   "action.newPlan": "New plan",
   "action.uploadRequirement": "Upload requirement",
   "action.refresh": "Refresh list",
+  "plan.coverageDescription": "{description} Suggested maximum: {count}; you can continue editing.",
   "error.requestFailed": "Request failed: {status}",
   "projectSettings.saved": "Project settings saved.",
   "projectSettings.seedGenerationFailed": "Seed generation failed.",
