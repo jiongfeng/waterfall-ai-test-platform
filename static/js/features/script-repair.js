@@ -4,8 +4,8 @@ function createScriptRepairFeature(deps) {
     elements,
     SECTION,
     SCRIPT_VIEW_TAB,
-    SCRIPT_RUN_PROMPT_FIXED_TEMPLATE,
-    SCRIPT_RUN_PROMPT_NOTE_DEFAULT,
+    getScriptRunPromptFixedTemplate,
+    getScriptRunPromptNoteDefault,
     fetch,
     TextDecoder,
     timers,
@@ -29,7 +29,11 @@ function createScriptRepairFeature(deps) {
 
 function renderScriptRunPromptFromTemplate(moduleName, filename) {
   return replaceAllText(
-    replaceAllText(SCRIPT_RUN_PROMPT_FIXED_TEMPLATE, "<模块名>", moduleName),
+    replaceAllText(
+      replaceAllText(getScriptRunPromptFixedTemplate(), "<模块名>", moduleName),
+      "<module>",
+      moduleName,
+    ),
     "<测试脚本名>",
     stripSpecSuffix(filename),
   );
@@ -87,7 +91,7 @@ function stopScriptRunDurationTimer() {
 
 function getDefaultScriptRepairRecord(moduleName, filename) {
   const promptFixed = renderScriptRunPromptFromTemplate(moduleName, filename);
-  const promptNote = SCRIPT_RUN_PROMPT_NOTE_DEFAULT;
+  const promptNote = getScriptRunPromptNoteDefault();
   return {
     status: "idle",
     prompt_fixed: promptFixed,
