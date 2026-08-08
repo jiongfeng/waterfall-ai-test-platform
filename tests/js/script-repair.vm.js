@@ -97,9 +97,9 @@ const feature = context.window.createScriptRepairFeature({
     EXECUTION: "execution",
     REPAIR: "repair",
   },
-  SCRIPT_RUN_PROMPT_FIXED_TEMPLATE:
-    "@playwright-test-healer\n运行 specs/<模块名>/<模块名>.md 并修复 tests/<模块名>/<测试脚本名>.spec.ts",
-  SCRIPT_RUN_PROMPT_NOTE_DEFAULT: "不得删除 STEP",
+  getScriptRunPromptFixedTemplate: () =>
+    "@playwright-test-healer\nUse specs/<module>/<module>.md to repair tests/<module>/<test-script>.spec.ts",
+  getScriptRunPromptNoteDefault: () => "Do not remove STEP entries",
   fetch: async () => {
     throw new Error("Focused repair VM paths must not issue fetch");
   },
@@ -127,6 +127,11 @@ const key = getScriptRunRecordKey();
 const repairRecord = feature.ensureScriptRepairRecord();
 assert.ok(repairRecord.prompt.includes("登录成功"));
 assert.deepStrictEqual(persistence.repair, [key]);
+assert.ok(
+  feature.renderScriptRunPromptFromTemplate("login", "login-success.spec.ts").includes(
+    "tests/login/login-success.spec.ts",
+  ),
+);
 state.scripts.repairRecords[key].prompt_fixed =
   "@playwright-test-healer\n修复 tests\\登录\\登录成功.spec.ts";
 assert.ok(
