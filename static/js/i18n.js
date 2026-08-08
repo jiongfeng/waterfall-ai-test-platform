@@ -27,6 +27,17 @@
   ].join(",");
   const DIALOG_SELECTOR = "[role='dialog'], .modal-backdrop, .task-modal";
   const LEGACY_COUNT_PATTERNS = [
+    // Agent execution pages compose these snippets with run ids, timestamps
+    // and profile labels, so an exact source-string catalogue cannot see them.
+    // Keep the patterns deliberately structural: requirement titles, event
+    // messages and other user-authored content are never translated here.
+    [/^耗时\s+(\d+)h\s+(\d+)m$/, (hours, minutes) => `Duration ${hours}h ${minutes}m`],
+    [/^耗时\s+(\d+)m\s+(\d+)s$/, (minutes, seconds) => `Duration ${minutes}m ${seconds}s`],
+    [/^耗时\s+(\d+)s$/, (seconds) => `Duration ${seconds}s`],
+    [/^模板来源：(.+?)(\s*·\s*已自定义)?$/, (label, customized) => `Template source: ${label}${customized ? " · Customized" : ""}`],
+    [/^(.+?)\s*·\s*模板来源：(.+?)(\s*·\s*已自定义)?\s*·\s*(.+)$/, (runId, label, customized, timestamp) => `${runId} · Template source: ${label}${customized ? " · Customized" : ""} · ${timestamp}`],
+    [/^(.*?)\s*·\s*(.*?)\s*·\s*(\d+)\s*个生成物$/, (step, status, count) => `${localizeSourceText(step)} · ${localizeSourceText(status)} · ${count} artifacts`],
+    [/^已加载\s*(\d+)\s*条事件$/, (count) => `${count} events loaded`],
     [/^共\s*(\d+)\s*条脚本$/, (count) => `${count} scripts total`],
     [/^共\s*(\d+)\s*条计划$/, (count) => `${count} plans total`],
     [/^共\s*(\d+)\s*个测试集$/, (count) => `${count} test suites total`],
