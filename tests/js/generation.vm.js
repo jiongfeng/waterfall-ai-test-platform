@@ -139,9 +139,9 @@ const feature = context.window.createGenerationFeature({
   COVERAGE_POLICY_START: "<<<COVERAGE_POLICY_START>>>",
   COVERAGE_POLICY_END: "<<<COVERAGE_POLICY_END>>>",
   DEFAULT_COVERAGE_PROFILE: "core",
-  SCRIPT_PROMPT_FIXED_TEMPLATE:
-    "生成 specs/<模块名>/<测试计划文件名> 到候选脚本",
-  SCRIPT_PROMPT_NOTE_DEFAULT: "补充说明",
+  getScriptPromptFixedTemplate: () =>
+    "Generate specs/<module>/<test-plan-file> to a candidate script",
+  getScriptPromptNoteDefault: () => "Additional guidance",
   window: { confirm: () => true },
   fetch: async () => {
     throw new Error("Focused generation VM paths must not issue fetch");
@@ -217,6 +217,11 @@ assert.ok(clearedTimers.includes(planTimerId));
 
 feature.ensurePlanScriptGenerationRecord("登录", "登录.md");
 assert.deepStrictEqual(persistence.script, [planKey]);
+assert.ok(
+  feature.renderScriptPromptFromTemplate("login", "login.md").includes(
+    "specs/login/login.md",
+  ),
+);
 feature.setPlanScriptGenerationRecord("登录", "登录.md", {
   status: "running",
   started_at: Date.now() - 1000,

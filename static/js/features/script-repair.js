@@ -28,14 +28,19 @@ function createScriptRepairFeature(deps) {
   const formatRepairDuration = formatDuration;
 
 function renderScriptRunPromptFromTemplate(moduleName, filename) {
+  const scriptName = stripSpecSuffix(filename);
   return replaceAllText(
     replaceAllText(
-      replaceAllText(getScriptRunPromptFixedTemplate(), "<模块名>", moduleName),
-      "<module>",
-      moduleName,
+      replaceAllText(
+        replaceAllText(getScriptRunPromptFixedTemplate(), "<模块名>", moduleName),
+        "<module>",
+        moduleName,
+      ),
+      "<测试脚本名>",
+      scriptName,
     ),
-    "<测试脚本名>",
-    stripSpecSuffix(filename),
+    "<test-script>",
+    scriptName,
   );
 }
 
