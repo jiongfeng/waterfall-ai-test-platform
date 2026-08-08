@@ -1,6 +1,7 @@
 from collections import deque
 from copy import deepcopy
 from pathlib import Path
+import threading
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -320,6 +321,62 @@ class ScriptPreparationStateMachineTests(unittest.TestCase):
         self.assertEqual(len(self.harness.repair_calls), 1)
         self.assertEqual(len(self.harness.analysis_calls), 0)
         self.assertTrue(result["should_continue"])
+
+    def test_execution_policy_block_skips_ai_repair_and_analysis(self):
+        self.harness.execute_outcomes.append(
+            {
+                "error": (
+                    "Test execution is disabled by default. Set "
+                    "PLATFORM_ALLOW_TEST_EXECUTION=true only for trusted "
+                    "single-tenant projects."
+                )
+            }
+        )
+
+        result = self.service.run("run-1", [make_plan()])
+
+        item = result["snapshot"]["items"][0]
+        self.assertEqual(item["status"], "awaiting_human")
+        self.assertEqual(
+            [stage["stage_type"] for stage in item["history"]],
+            ["generate", "execute", "blocked"],
+        )
+        self.assertEqual(item["history"][-1]["status"], "blocked")
+        self.assertTrue(item["latest_analysis"]["blocked_by_environment"])
+        self.assertEqual(item["latest_analysis"]["analysis_status"], "blocked")
+        self.assertEqual(item["latest_analysis"]["recommended_action"], ACTION_EXECUTE)
+        self.assertEqual(self.harness.repair_calls, [])
+        self.assertEqual(self.harness.analysis_calls, [])
+        self.assertTrue(result["paused"])
+
+    def test_snapshot_remains_readable_during_remote_generation(self):
+        started = threading.Event()
+        release = threading.Event()
+        original_generate = self.harness.generate_script
+
+        def slow_generate(*args, **kwargs):
+            started.set()
+            self.assertTrue(release.wait(timeout=2))
+            return original_generate(*args, **kwargs)
+
+        self.harness.generate_script = slow_generate
+        self.service = ScriptPreparationService(self.harness.dependencies())
+        result_holder = {}
+        worker = threading.Thread(
+            target=lambda: result_holder.setdefault(
+                "result", self.service.run("run-1", [make_plan()])
+            )
+        )
+        worker.start()
+        self.assertTrue(started.wait(timeout=1))
+
+        snapshot = self.service.get_snapshot("run-1")
+        self.assertEqual(snapshot["items"][0]["status"], "generating")
+
+        release.set()
+        worker.join(timeout=2)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(result_holder["result"]["counts"]["ready"], 1)
 
     def test_failed_post_repair_verification_waits_for_human_then_rerepairs(self):
         self.harness.execute_outcomes.extend([False, False])

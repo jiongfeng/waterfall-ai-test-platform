@@ -11,6 +11,7 @@ through :class:`ScriptPreparationDependencies`.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import dataclass
 import threading
@@ -61,6 +62,7 @@ STAGE_LABELS = {
     "regenerate": "重新生成",
     "rerepair": "重新修复",
     "abandon": "放弃脚本",
+    "blocked": "环境阻断",
 }
 
 
@@ -415,13 +417,14 @@ class ScriptPreparationService:
             input_revision_id=None,
         )
         try:
-            script = self.dependencies.generate_script(
-                state["run_id"],
-                SCRIPT_PREPARATION_STEP_KEY,
-                deepcopy(item.get("plan_snapshot") or {}),
-                original_prompt=base_prompt,
-                supplemental_prompt=supplement,
-            )
+            with self._unlocked_external_operation():
+                script = self.dependencies.generate_script(
+                    state["run_id"],
+                    SCRIPT_PREPARATION_STEP_KEY,
+                    deepcopy(item.get("plan_snapshot") or {}),
+                    original_prompt=base_prompt,
+                    supplemental_prompt=supplement,
+                )
             self._assert_atom_succeeded(script, "脚本生成失败。")
             script = dict(script or {})
             item["current_script"] = self._safe(script)
@@ -451,6 +454,9 @@ class ScriptPreparationService:
         if failure is None:
             self._mark_ready(item, execution)
             self._persist(state)
+            return
+        if self._is_environment_block(failure):
+            self._mark_environment_blocked(state, item, failure)
             return
         if not allow_automatic_repair:
             self._await_human(state, item, failure)
@@ -513,14 +519,15 @@ class ScriptPreparationService:
             input_revision_id=input_revision_id,
         )
         try:
-            script = self.dependencies.repair_script(
-                state["run_id"],
-                SCRIPT_PREPARATION_STEP_KEY,
-                deepcopy(item.get("current_script") or {}),
-                failure=deepcopy(failure_context),
-                original_prompt=base_prompt,
-                supplemental_prompt=supplement,
-            )
+            with self._unlocked_external_operation():
+                script = self.dependencies.repair_script(
+                    state["run_id"],
+                    SCRIPT_PREPARATION_STEP_KEY,
+                    deepcopy(item.get("current_script") or {}),
+                    failure=deepcopy(failure_context),
+                    original_prompt=base_prompt,
+                    supplemental_prompt=supplement,
+                )
             self._assert_atom_succeeded(script, "脚本修复失败。")
             script = dict(script or {})
             item["current_script"] = self._safe(script)
@@ -550,6 +557,8 @@ class ScriptPreparationService:
         if failure is None:
             self._mark_ready(item, execution)
             self._persist(state)
+        elif self._is_environment_block(failure):
+            self._mark_environment_blocked(state, item, failure)
         elif analyze_after_failure:
             self._await_human(state, item, failure)
 
@@ -563,11 +572,12 @@ class ScriptPreparationService:
             input_revision_id=input_revision_id,
         )
         try:
-            execution = self.dependencies.execute_script(
-                state["run_id"],
-                SCRIPT_PREPARATION_STEP_KEY,
-                deepcopy(item.get("current_script") or {}),
-            )
+            with self._unlocked_external_operation():
+                execution = self.dependencies.execute_script(
+                    state["run_id"],
+                    SCRIPT_PREPARATION_STEP_KEY,
+                    deepcopy(item.get("current_script") or {}),
+                )
             failure_message = self._execution_failure_message(execution)
             if failure_message:
                 failure = self._safe(
@@ -631,26 +641,27 @@ class ScriptPreparationService:
         self._persist(state)
         analysis_error = ""
         try:
-            raw_analysis = self.dependencies.analyze_failure(
-                state["run_id"],
-                SCRIPT_PREPARATION_STEP_KEY,
-                {
-                    "item": self._public_value(item),
-                    "failure": self._safe(failure),
-                    "response_schema": {
-                        "summary": "string",
-                        "recommended_action": (
-                            "regenerate|repair" if has_script else "regenerate"
+            with self._unlocked_external_operation():
+                raw_analysis = self.dependencies.analyze_failure(
+                    state["run_id"],
+                    SCRIPT_PREPARATION_STEP_KEY,
+                    {
+                        "item": self._public_value(item),
+                        "failure": self._safe(failure),
+                        "response_schema": {
+                            "summary": "string",
+                            "recommended_action": (
+                                "regenerate|repair" if has_script else "regenerate"
+                            ),
+                            "prompt_patch": "string",
+                        },
+                        "available_actions": (
+                            [ACTION_REGENERATE, ACTION_REPAIR]
+                            if has_script
+                            else [ACTION_REGENERATE]
                         ),
-                        "prompt_patch": "string",
                     },
-                    "available_actions": (
-                        [ACTION_REGENERATE, ACTION_REPAIR]
-                        if has_script
-                        else [ACTION_REGENERATE]
-                    ),
-                },
-            )
+                )
             analysis = self._normalize_analysis(
                 raw_analysis,
                 available_actions=(
@@ -708,6 +719,70 @@ class ScriptPreparationService:
             "pending",
             result={"failure": failure, "analysis": analysis},
             error=analysis_error,
+            output_revision_id=item.get("current_revision_id"),
+        )
+
+    @staticmethod
+    def _is_environment_block(failure):
+        """Return true for platform policy failures that AI cannot repair."""
+
+        message = str((failure or {}).get("error") or "").casefold()
+        return (
+            "test execution is disabled" in message
+            or "platform_allow_test_execution" in message
+            or (
+                "database baseline" in message
+                and "not configured" in message
+            )
+            or "databasepath is not configured" in message
+            or "baselinepath is not configured" in message
+            or "markerpath is not configured" in message
+        )
+
+    def _mark_environment_blocked(self, state, item, failure):
+        """Pause an item with an actionable policy result, without AI repair."""
+
+        error = str((failure or {}).get("error") or "").strip()
+        analysis = {
+            "summary": "测试执行被平台环境策略阻止。请由管理员启用执行环境后重新执行。",
+            "recommended_action": ACTION_EXECUTE,
+            "prompt_patch": "",
+            "analysis_status": "blocked",
+            "blocked_by_environment": True,
+            "prompt_options": {
+                ACTION_REGENERATE: {
+                    "original_prompt": str(
+                        item.get("prompt_defaults", {}).get("regenerate") or ""
+                    ),
+                    "supplemental_prompt": "",
+                    "enabled": True,
+                },
+                ACTION_REPAIR: {
+                    "original_prompt": str(
+                        item.get("prompt_defaults", {}).get("repair") or ""
+                    ),
+                    "supplemental_prompt": "",
+                    "enabled": False,
+                },
+            },
+        }
+        stage = self._begin_stage(
+            state,
+            item,
+            "blocked",
+            "environment_policy",
+            input_revision_id=item.get("current_revision_id"),
+        )
+        item["latest_analysis"] = self._safe(analysis)
+        item["status"] = ITEM_STATUS_AWAITING_HUMAN
+        item["included_in_suite"] = False
+        self._finish_stage(
+            state,
+            item,
+            stage,
+            "blocked",
+            result={"failure": self._safe(failure), "analysis": analysis},
+            error=error,
             output_revision_id=item.get("current_revision_id"),
         )
 
@@ -1160,6 +1235,22 @@ class ScriptPreparationService:
     def _touch_item(self, item):
         item["version"] = int(item.get("version") or 0) + 1
         item["updated_at"] = self._now()
+
+    @contextmanager
+    def _unlocked_external_operation(self):
+        """Allow read-only snapshots while a remote operation is in flight.
+
+        Every caller has already persisted the stage transition while holding the
+        service lock.  Mutating actions remain rejected while the item is busy,
+        so temporarily releasing this re-entrant lock exposes only a durable,
+        readable progress snapshot.
+        """
+
+        self._lock.release()
+        try:
+            yield
+        finally:
+            self._lock.acquire()
 
     def _now(self):
         return int(self.dependencies.current_time_ms())
