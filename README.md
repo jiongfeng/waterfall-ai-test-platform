@@ -267,13 +267,15 @@ stopped; a precheck failure does not change its prior state. Investigate or
 restore the four-volume snapshot. The legacy `repair-state` command remains
 state-volume-only.
 
-### 3. Opt in to trusted test execution
+### 3. Review trusted execution defaults
 
-Test execution is disabled by default. After reviewing the target, repository,
-scripts, network, mounts, and artifact policy, set:
+The bundled demo deployment enables setup-script and Playwright execution by
+default. Before deployment, review the target, repository, scripts, network,
+mounts, and artifact policy. To disable either capability, set:
 
 ```dotenv
-PLATFORM_ALLOW_TEST_EXECUTION=true
+PLATFORM_ALLOW_HOST_SCRIPT_EXECUTION=false
+PLATFORM_ALLOW_TEST_EXECUTION=false
 ```
 
 Then recreate the platform service:
@@ -282,11 +284,10 @@ Then recreate the platform service:
 ./deploy/platform-compose up --detach --force-recreate platform
 ```
 
-The published Compose stack keeps
-`PLATFORM_ALLOW_HOST_SCRIPT_EXECUTION=false`. Setup scripts are arbitrary shell
-code and must remain disabled unless a trusted operator supplies a deliberately
-hardened custom deployment. Enabling either switch is an acceptance of code
-execution, not a sandbox guarantee.
+Setup scripts are arbitrary shell code, and generated Playwright tests are
+untrusted code until reviewed. Keeping either switch enabled is an acceptance
+of code execution, not a sandbox guarantee. Use `false` for public, shared, or
+otherwise untrusted deployments.
 
 ## Configuration and secrets
 
@@ -303,8 +304,8 @@ in encrypted, access-controlled backups.
 | `MYSQL_ROOT_PASSWORD` | Compose MySQL bootstrap password |
 | `OPENCODE_SERVER_PASSWORD` | Compose OpenCode service password; copy the same value to `opencode_password` |
 | `PLATFORM_COOKIE_SECURE` | Set to `true` behind HTTPS |
-| `PLATFORM_ALLOW_TEST_EXECUTION` | Explicit opt-in for trusted Playwright code |
-| `PLATFORM_ALLOW_HOST_SCRIPT_EXECUTION` | Explicit opt-in for trusted setup shell code; disabled by the published Compose stack |
+| `PLATFORM_ALLOW_TEST_EXECUTION` | Allows generated Playwright code; enabled by the bundled demo defaults |
+| `PLATFORM_ALLOW_HOST_SCRIPT_EXECUTION` | Allows trusted setup shell code; enabled by the bundled demo defaults |
 
 The platform may include target-system usernames and passwords in planning or
 generation prompts and generated seed scripts. Use only disposable,
