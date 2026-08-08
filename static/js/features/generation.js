@@ -8,8 +8,8 @@ function createGenerationFeature(deps) {
     COVERAGE_POLICY_START,
     COVERAGE_POLICY_END,
     DEFAULT_COVERAGE_PROFILE,
-    SCRIPT_PROMPT_FIXED_TEMPLATE,
-    SCRIPT_PROMPT_NOTE_DEFAULT,
+    getScriptPromptFixedTemplate,
+    getScriptPromptNoteDefault,
     window,
     fetch,
     TextDecoder,
@@ -115,11 +115,11 @@ function renderPlanStreamStatus(status, error = "") {
 }
 
 function renderGenerationTargetPath() {
-  const moduleName = getPlanGenerationModuleName() || "<模块名>";
+  const moduleName = getPlanGenerationModuleName() || moduleNamePlaceholder();
   const planFilename = getPlanGenerationPlanFilename(moduleName);
   const template = state.generation.targetPathTemplate || "";
   elements.planTargetPath.textContent = template
-    ? replaceAllText(replaceAllText(template, "<模块名>", moduleName), "<测试计划名>.md", planFilename)
+    ? replacePlanGenerationTokens(template, moduleName, planFilename)
     : `specs/${moduleName}/${planFilename}`;
 }
 
@@ -222,7 +222,7 @@ function setPlanGenerationRecord(moduleName, planFilename, updates) {
 function getDefaultPlanScriptGenerationRecord(moduleName, planFilename) {
   const filename = planFilename || getDefaultPlanFilename(moduleName);
   const promptFixed = renderScriptPromptFromTemplate(moduleName, filename);
-  const promptNote = SCRIPT_PROMPT_NOTE_DEFAULT;
+  const promptNote = getScriptPromptNoteDefault();
   return {
     status: "idle",
     module_name: moduleName,
@@ -312,8 +312,23 @@ function updatePlanScriptGenerationPromptFromInputs() {
 }
 
 function renderGenerationPromptFromTemplate(moduleName) {
-  const value = moduleName || "<模块名>";
-  return replaceAllText(state.generation.promptTemplate || "", "<模块名>", value);
+  return replaceModuleTokens(state.generation.promptTemplate || "", moduleName || moduleNamePlaceholder());
+}
+
+function moduleNamePlaceholder() {
+  return window.WaterfallI18n?.getLocale() === "en" ? "<module>" : "<模块名>";
+}
+
+function replaceModuleTokens(value, moduleName) {
+  return replaceAllText(replaceAllText(value, "<模块名>", moduleName), "<module>", moduleName);
+}
+
+function replacePlanGenerationTokens(value, moduleName, planFilename) {
+  return replaceAllText(
+    replaceAllText(replaceModuleTokens(value, moduleName), "<测试计划名>.md", planFilename),
+    "<test-plan-name>.md",
+    planFilename,
+  );
 }
 
 function getCoverageProfile(profileKey = state.generation.coverageProfile) {
@@ -425,8 +440,8 @@ function changePlanCoverageProfile() {
 }
 
 function updatePromptForModuleName() {
-  const nextModuleName = getPlanGenerationModuleName() || "<模块名>";
-  const previousModuleName = state.generation.previousModuleName || "<模块名>";
+  const nextModuleName = getPlanGenerationModuleName() || moduleNamePlaceholder();
+  const previousModuleName = state.generation.previousModuleName || moduleNamePlaceholder();
   const currentPrompt = elements.planPrompt.value;
   const wasDefault = currentPrompt.trim() === state.generation.defaultComposedPrompt.trim();
   const nextBasePrompt = renderGenerationPromptFromTemplate(nextModuleName);
@@ -434,7 +449,7 @@ function updatePromptForModuleName() {
   if (wasDefault) {
     resetPlanPromptForCoverage(true);
   } else {
-    elements.planPrompt.value = replaceAllText(currentPrompt, "<模块名>", nextModuleName);
+    elements.planPrompt.value = replaceModuleTokens(currentPrompt, nextModuleName);
     renderPlanCoverageState();
   }
   state.generation.previousModuleName = nextModuleName;
@@ -501,9 +516,9 @@ async function openPlanGenerationModal() {
   updatePlanGenerationMode();
   state.generation.coverageProfile = state.generation.defaultCoverageProfile;
   populateCoverageSelect(elements.planCoverageProfile, state.generation.coverageProfile);
-  state.generation.basePrompt = renderGenerationPromptFromTemplate(initialModuleName || "<模块名>");
+  state.generation.basePrompt = renderGenerationPromptFromTemplate(initialModuleName || moduleNamePlaceholder());
   resetPlanPromptForCoverage(true);
-  state.generation.previousModuleName = initialModuleName || "<模块名>";
+  state.generation.previousModuleName = initialModuleName || moduleNamePlaceholder();
   renderGenerationTargetPath();
   elements.planGenerationModal.classList.remove("hidden");
   if (state.generation.moduleNameMode === "input") {
@@ -554,7 +569,7 @@ async function openRequirementPlanGenerationModal(moduleUid) {
     populateCoverageSelect(elements.planCoverageProfile, state.generation.coverageProfile);
     state.generation.basePrompt = moduleItem.planner_prompt || "";
     resetPlanPromptForCoverage(true);
-    state.generation.previousModuleName = moduleItem.module_name || "<模块名>";
+    state.generation.previousModuleName = moduleItem.module_name || moduleNamePlaceholder();
     renderGenerationTargetPath();
     elements.planGenerationModal.classList.remove("hidden");
     elements.planModeMultiple.focus();
@@ -945,8 +960,12 @@ function resetScriptGenerationView() {
 
 function renderScriptPromptFromTemplate(moduleName, planFilename = getDefaultPlanFilename(moduleName)) {
   return replaceAllText(
-    replaceAllText(SCRIPT_PROMPT_FIXED_TEMPLATE, "<模块名>", moduleName),
-    "<测试计划文件名>",
+    replaceAllText(
+      replaceModuleTokens(getScriptPromptFixedTemplate(), moduleName),
+      "<测试计划文件名>",
+      planFilename,
+    ),
+    "<test-plan-file>",
     planFilename,
   );
 }
