@@ -166,6 +166,9 @@ documentRef.body = createElement();
 documentRef.activeElement = createElement();
 
 const context = {
+  AbortController,
+  clearTimeout,
+  setTimeout,
   window: {
     confirm: () => true,
     requestAnimationFrame(callback) {
@@ -332,7 +335,7 @@ async function requestJson(url, options = {}) {
   requests.push({ url, method: options.method || "GET", body });
   if (url.endsWith("/script-preparation")) {
     if (snapshotInterceptor) {
-      return snapshotInterceptor(url);
+      return snapshotInterceptor(url, options);
     }
     return { snapshot: currentSnapshot };
   }
@@ -597,6 +600,22 @@ const feature = context.window.createAgentScriptPreparationFeature(root, {
   await staleLoad;
   assert.strictEqual(feature.getState().runId, "agent-race-b");
   assert.deepStrictEqual(feature.getState().items.map((item) => item.script_item_id), ["race-b-item"]);
+
+  snapshotInterceptor = (_url, options) => new Promise((_resolve, reject) => {
+    options.signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+  });
+  const timedFeature = context.window.createAgentScriptPreparationFeature(root, {
+    document: documentRef,
+    window: context.window,
+    runId: "agent-timeout",
+    requestJson,
+    snapshotTimeoutMs: 1_000,
+  });
+  await timedFeature.activate();
+  assert.match(timedFeature.getState().snapshotError, /脚本准备进度读取超时/);
+  assert.ok(elements.localNotice.textContent.includes("脚本准备进度暂时无法读取"));
+  timedFeature.destroy();
+  snapshotInterceptor = null;
 
   const partialSource = fs.readFileSync(
     path.join(appDir, "templates/partials/agent_script_preparation.html"),
