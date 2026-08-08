@@ -16,6 +16,7 @@ function createAgentScriptPreparationFeature(root, options = {}) {
   const onStateChange = typeof options.onStateChange === "function" ? options.onStateChange : () => {};
   const confirmAction = typeof options.confirm === "function" ? options.confirm : (message) => windowRef.confirm(message);
   const encodePathPart = options.encodePathPart || ((value) => encodeURIComponent(String(value || "")));
+  const snapshotTimeoutMs = Math.max(1_000, Number(options.snapshotTimeoutMs) || 10_000);
 
   const preparationElement = (name) => {
     const element = root.querySelector(`[data-script-preparation-id="${name}"]`);
@@ -128,6 +129,7 @@ function createAgentScriptPreparationFeature(root, options = {}) {
     editorMode: "",
     editorDraft: null,
     loading: false,
+    snapshotError: "",
     detailLoading: false,
     actionPending: false,
     snapshotRequestId: 0,
@@ -1177,6 +1179,7 @@ function createAgentScriptPreparationFeature(root, options = {}) {
       editorMode: state.editorMode,
       editorDraft: state.editorDraft ? { ...state.editorDraft } : null,
       loading: state.loading,
+      snapshotError: state.snapshotError,
       detailLoading: state.detailLoading,
       actionPending: state.actionPending,
       items: state.items.map((item) => ({ ...item, history: [...item.history] })),
@@ -1201,14 +1204,38 @@ function createAgentScriptPreparationFeature(root, options = {}) {
     const requestId = ++state.snapshotRequestId;
     const requestRunId = state.runId;
     state.loading = true;
+    state.snapshotError = "";
     render();
     try {
-      const data = await requestJson(snapshotUrl());
+      const controller = new AbortController();
+      const scheduleTimeout = windowRef.setTimeout || setTimeout;
+      const cancelTimeout = windowRef.clearTimeout || clearTimeout;
+      const timeoutId = scheduleTimeout(() => controller.abort(), snapshotTimeoutMs);
+      let data;
+      try {
+        data = await requestJson(snapshotUrl(), { signal: controller.signal });
+      } catch (error) {
+        if (controller.signal.aborted) {
+          throw new Error("脚本准备进度读取超时，请稍后重试。", { cause: error });
+        }
+        throw error;
+      } finally {
+        cancelTimeout(timeoutId);
+      }
       if (requestId !== state.snapshotRequestId || requestRunId !== state.runId || !state.active) {
         return null;
       }
       applySnapshot(data);
       return data;
+    } catch (error) {
+      if (requestId !== state.snapshotRequestId || requestRunId !== state.runId || !state.active) {
+        return null;
+      }
+      state.snapshotError = String(error?.message || error || "");
+      const message = "脚本准备进度暂时无法读取，已停止等待。请稍后重试。";
+      state.summary = message;
+      setLocalNotice(`${message}${state.snapshotError ? ` ${state.snapshotError}` : ""}`, "error");
+      return null;
     } finally {
       if (requestId === state.snapshotRequestId) {
         state.loading = false;
@@ -1581,6 +1608,7 @@ function createAgentScriptPreparationFeature(root, options = {}) {
     state.detailRequestId += 1;
     state.actionRequestId += 1;
     state.loading = false;
+    state.snapshotError = "";
     state.detailLoading = false;
     state.actionPending = false;
     state.batchMenuOpen = false;
@@ -1614,6 +1642,7 @@ function createAgentScriptPreparationFeature(root, options = {}) {
     state.editorMode = "";
     state.editorDraft = null;
     state.loading = false;
+    state.snapshotError = "";
     state.detailLoading = false;
     state.actionPending = false;
     render();
