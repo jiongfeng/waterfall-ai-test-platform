@@ -1954,8 +1954,8 @@ async function openArtifact(artifactId) {
   elements.artifactModalTitle.textContent = artifact.title || "生成物";
   elements.artifactModalMeta.textContent = artifactMeta([artifact.kindLabel, statusText(artifact.status), artifact.subtitle]);
   elements.artifactContentTitle.textContent = artifact.contentTitle || "产物文本";
-  elements.artifactPromptText.textContent = "正在加载...";
-  elements.artifactContentText.textContent = "正在加载...";
+  elements.artifactPromptText.textContent = window.WaterfallI18n?.source("正在加载...") || "正在加载...";
+  elements.artifactContentText.textContent = window.WaterfallI18n?.source("正在加载...") || "正在加载...";
   const initialFlow =
     state.retryFlows.find((item) => item.retry_flow_id === artifact.retryFlowId) || findRetryFlowForArtifact(artifact) || null;
   state.openRetryFlowId = initialFlow?.retry_flow_id || "";
