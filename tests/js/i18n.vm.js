@@ -84,6 +84,8 @@ for (const expected of [
   "Template source:",
   "events loaded",
   "artifacts",
+  "Confidence ${value}",
+  "passed · ${failed} failed · ${total} total",
   "Duration ${hours}h ${minutes}m",
 ]) {
   assert.ok(
