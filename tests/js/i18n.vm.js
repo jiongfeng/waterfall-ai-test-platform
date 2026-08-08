@@ -79,4 +79,16 @@ assert.match(
   /scripts total/,
   "Dynamic count formats must have an English localization path.",
 );
+const i18nRuntime = fs.readFileSync(path.join(appDir, "static/js/i18n.js"), "utf8");
+for (const expected of [
+  "Template source:",
+  "events loaded",
+  "artifacts",
+  "Duration ${hours}h ${minutes}m",
+]) {
+  assert.ok(
+    i18nRuntime.includes(expected),
+    `Agent runtime status format must include ${expected}.`,
+  );
+}
 process.stdout.write("i18n catalog and template coverage: ok\n");
