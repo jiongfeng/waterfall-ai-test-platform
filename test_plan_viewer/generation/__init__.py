@@ -12,6 +12,8 @@ from .cases import (
     split_case_index_cases,
     split_case_index_plan,
 )
+from .completion import PlanCompletionProbe, PlanFileSnapshot
+from .event_stream import BoundedSseReader, SseStreamItem, SseStreamItemKind
 from .prompts import (
     ABSOLUTE_PLAN_MAX_CASES,
     CHINESE_ARTIFACT_NAMING_NOTICE,
@@ -44,7 +46,12 @@ __all__ = [
     "DATABASE_BASELINE_WRITE_OPERATION_NOTICE_KEY",
     "JSON_FENCE_PATTERN",
     "MODULE_PLAN_MAX_CASES",
+    "PlanCompletionProbe",
+    "PlanFileSnapshot",
     "PromptDependencies",
+    "BoundedSseReader",
+    "SseStreamItem",
+    "SseStreamItemKind",
     "append_chinese_artifact_naming_notice",
     "append_database_baseline_write_operation_notice",
     "append_prompt_notice_once",
