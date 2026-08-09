@@ -165,6 +165,27 @@ static/js/core/*
 
 SSE 的成功、失败、取消和暂停都必须产生可解析终态，并与数据库终态一致。
 
+Agent 的 OpenCode 模型输出使用分层缓冲，避免把每个 token/delta 直接变成数据库
+事务：输出累计到 4 KiB 或等待 500 ms 时形成一批，单批不超过 16 KiB，并在
+status、error、done 和产物进度等结构化事件之前先刷新。OpenCode `/event` 由
+daemon reader 写入有界队列，主循环通过有超时的读取持续检查墙钟 deadline、取消、
+EOF 和解析错误；完整任务日志先追加到项目工作区文件，再持久化聚合后的 Agent 事件。
+聚合、日志、OpenCode reader/完成探针和 Playwright 执行流分别位于
+`agent/output_buffer.py`、`infrastructure/job_logs.py`、`generation/` 与
+`execution/streaming.py`；`app.py` 只保留兼容装配和 HTTP 入口。
+
+任务日志文件是完整日志的事实来源，`test_jobs.log_tail`、`log_size` 和 `log_path`
+只是查询缓存。流生命周期内复用一个文件 writer，并在内存中保留最后 100,000 bytes；
+数据库日志快照最多每 30 秒或新增 1 MiB 更新一次，任务进入 succeeded、failed 或
+cancelled 等终态时强制刷新。Agent 批次需要同时更新日志快照时，快照和聚合事件在
+同一事务提交。日志查看、下载和诊断仍从完整文件读取。
+
+平台事件 SSE 每页读取 200 条；读满一页时立即读取下一页，追平后才发送心跳并等待。
+浏览器用持久 event id 集合去重，普通 log 事件以 3,000 条环形缓冲有界保留，关键
+status、error、artifact 和 retry 事件单独保留，并用 `requestAnimationFrame` 合并
+同一帧内的渲染请求。`event_id` 单调性、`after_id`、tail、REST/SSE 事件结构和终态
+语义保持不变。
+
 ## 数据所有权
 
 | 数据 | 事实来源 | 备份重点 |
@@ -185,6 +206,24 @@ SSE 的成功、失败、取消和暂停都必须产生可解析终态，并与�
 - 文件内容、Git revision 和 MySQL 元数据保持可恢复一致；
 - 单进程锁不能被误认为多实例协调机制；
 - 所有部署文档保持环境中立，不记录真实地址、账号和客户资料。
+
+## 流式持久化回归验证
+
+在已安装开发依赖的环境中运行专项回归和完整测试：
+
+```bash
+python3 -m unittest \
+  tests.test_agent_output_buffer \
+  tests.test_job_log_store \
+  tests.test_agent_stream_persistence \
+  tests.test_bounded_event_stream \
+  tests.test_plan_completion \
+  tests.test_generation_domain \
+  tests.test_frontend_features \
+  tests.test_app_regressions
+python3 -m unittest discover -s tests
+ruff check .
+```
 
 ## 相关文档
 
