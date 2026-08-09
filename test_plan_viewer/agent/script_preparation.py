@@ -1144,20 +1144,6 @@ class ScriptPreparationService:
             started=bool(started),
             finished=bool(should_continue),
         )
-        if step_status == "running":
-            self.dependencies.update_agent_run(
-                state["run_id"],
-                status="running",
-                current_step=SCRIPT_PREPARATION_STEP_KEY,
-                error="",
-            )
-        elif step_status == "awaiting_action":
-            self.dependencies.update_agent_run(
-                state["run_id"],
-                status=self.dependencies.waiting_run_status,
-                current_step=SCRIPT_PREPARATION_STEP_KEY,
-                error=state.get("error") or "",
-            )
         event_item = max(
             state.get("items") or [],
             key=lambda item: (int(item.get("updated_at") or 0), int(item.get("order_index") or 0)),
@@ -1179,6 +1165,20 @@ class ScriptPreparationService:
                 "item": self._safe(event_item) if event_item else None,
             },
         )
+        if step_status == "running":
+            self.dependencies.update_agent_run(
+                state["run_id"],
+                status="running",
+                current_step=SCRIPT_PREPARATION_STEP_KEY,
+                error="",
+            )
+        elif step_status == "awaiting_action":
+            self.dependencies.update_agent_run(
+                state["run_id"],
+                status=self.dependencies.waiting_run_status,
+                current_step=SCRIPT_PREPARATION_STEP_KEY,
+                error=state.get("error") or "",
+            )
         return state
 
     @staticmethod

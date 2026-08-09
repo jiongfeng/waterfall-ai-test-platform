@@ -182,17 +182,27 @@ def split_case_index_cases(
             f"超过平台绝对上限 {ABSOLUTE_PLAN_MAX_CASES} 个。"
         )
     created = []
+    reused = []
     skipped = []
+    conflicts = []
     module_dir = (
         dependencies.get_specs_dir()
         / dependencies.validate_module_name(module_name)
     )
-    dependencies.ensure_directory(module_dir)
     seen = set()
+    planned_writes = []
     source_name = (
         source_plan_file.name
         if source_plan_file
         else source_filename
+    )
+
+    # Build and validate the complete write plan before touching any target.
+    # A malformed later case must not leave earlier case files behind.
+    source_payload = (
+        dependencies.plan_payload(source_plan_file, module_name)
+        if source_plan_file
+        else {"filename": source_filename}
     )
 
     for case_index, raw_case in enumerate(cases, start=1):
@@ -203,13 +213,16 @@ def split_case_index_cases(
             or raw_case.get("name")
             or ""
         ).strip()
+        raw_filename = str(raw_case.get("filename") or "").strip()
         filename = normalize_case_filename(
-            raw_case.get("filename"),
+            raw_filename,
             title,
             index=case_index,
         )
         if (
-            filename == source_name
+            raw_filename == source_name
+            or raw_filename.startswith("_")
+            or filename == source_name
             or filename.startswith("_")
             or filename in seen
         ):
@@ -225,32 +238,54 @@ def split_case_index_cases(
             module_name,
             filename,
         )
-        if dependencies.file_exists(target_file) and not overwrite:
-            skipped.append(
-                {"filename": filename, "reason": "文件已存在。"}
-            )
-            continue
         markdown = case_to_markdown(
             module_name,
             source_filename,
             {**raw_case, "filename": filename},
         )
-        dependencies.write_text(target_file, markdown)
-        created.append(
-            dependencies.plan_payload(target_file, module_name)
-        )
+        payload = dependencies.plan_payload(target_file, module_name)
+        if dependencies.file_exists(target_file) and not overwrite:
+            if dependencies.read_text(target_file) == markdown:
+                reused.append(payload)
+            else:
+                conflict = {
+                    "filename": filename,
+                    "reason": "文件已存在。",
+                    "reason_code": "content_conflict",
+                }
+                conflicts.append(conflict)
+                # Keep the legacy skipped collection populated for callers
+                # that have not adopted the explicit conflicts field yet.
+                skipped.append(conflict)
+            continue
+        planned_writes.append((target_file, markdown, payload))
 
-    if not created and not skipped:
+    if not planned_writes and not reused and not skipped:
         raise ValueError("cases 数组中没有可拆分的有效用例。")
 
-    source_payload = (
-        dependencies.plan_payload(source_plan_file, module_name)
-        if source_plan_file
-        else {"filename": source_filename}
-    )
+    # A content conflict makes the entire split unsafe. Returning the complete
+    # plan lets the composition root report a precise failure while ensuring
+    # that no non-conflicting case is written as a partial result.
+    if conflicts:
+        return {
+            "created": [],
+            "reused": reused,
+            "skipped": skipped,
+            "conflicts": conflicts,
+            "reason_code": "case_content_conflict",
+            "source": source_payload,
+        }
+
+    dependencies.ensure_directory(module_dir)
+    for target_file, markdown, payload in planned_writes:
+        dependencies.write_text(target_file, markdown)
+        created.append(payload)
+
     return {
         "created": created,
+        "reused": reused,
         "skipped": skipped,
+        "conflicts": [],
         "source": source_payload,
     }
 

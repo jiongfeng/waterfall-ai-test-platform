@@ -615,16 +615,26 @@ class CaseSplittingTests(unittest.TestCase):
                 dependencies,
             )
 
-    def test_split_writes_cases_and_preserves_skip_rules(self):
+    def test_split_writes_cases_and_preserves_non_conflict_skip_rules(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             specs_dir = Path(temporary_directory) / "specs"
             dependencies = make_case_dependencies(specs_dir)
             module_dir = specs_dir / "登录模块"
             module_dir.mkdir(parents=True)
             existing = module_dir / "已有流程.md"
-            existing.write_text("keep", encoding="utf-8")
             source = module_dir / "用例索引.md"
             source.write_text("index", encoding="utf-8")
+            existing_case = {
+                "title": "已有流程",
+                "filename": existing.name,
+                "steps": [],
+            }
+            existing_markdown = cases.case_to_markdown(
+                "登录模块",
+                source.name,
+                existing_case,
+            )
+            existing.write_text(existing_markdown, encoding="utf-8")
 
             result = cases.split_case_index_cases(
                 "登录模块",
@@ -645,11 +655,7 @@ class CaseSplittingTests(unittest.TestCase):
                         "filename": "用例索引.md",
                         "steps": [],
                     },
-                    {
-                        "title": "已有流程",
-                        "filename": "已有流程.md",
-                        "steps": [],
-                    },
+                    existing_case,
                     "ignored",
                 ],
                 dependencies,
@@ -662,7 +668,11 @@ class CaseSplittingTests(unittest.TestCase):
             )
             self.assertEqual(
                 [item["filename"] for item in result["skipped"]],
-                ["登录成功.md", "用例索引.md", "已有流程.md"],
+                ["登录成功.md", "用例索引.md"],
+            )
+            self.assertEqual(
+                [item["filename"] for item in result["reused"]],
+                ["已有流程.md"],
             )
             self.assertEqual(
                 result["source"]["filename"],
@@ -674,7 +684,165 @@ class CaseSplittingTests(unittest.TestCase):
                 "1. 提交有效账号",
                 generated.read_text(encoding="utf-8"),
             )
-            self.assertEqual(existing.read_text(encoding="utf-8"), "keep")
+            self.assertEqual(
+                existing.read_text(encoding="utf-8"),
+                existing_markdown,
+            )
+
+    def test_late_invalid_case_is_rejected_before_any_case_file_is_written(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            specs_dir = Path(temporary_directory) / "specs"
+            dependencies = make_case_dependencies(specs_dir)
+
+            with self.assertRaisesRegex(ValueError, "缺少 title 或 filename"):
+                cases.split_case_index_cases(
+                    "登录模块",
+                    "用例索引.md",
+                    [
+                        {
+                            "title": "登录成功",
+                            "filename": "登录成功.md",
+                            "steps": ["提交有效账号"],
+                        },
+                        {},
+                    ],
+                    dependencies,
+                )
+
+            self.assertFalse((specs_dir / "登录模块" / "登录成功.md").exists())
+
+    def test_identical_existing_case_is_returned_as_reused(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            specs_dir = Path(temporary_directory) / "specs"
+            dependencies = make_case_dependencies(specs_dir)
+            module_dir = specs_dir / "登录模块"
+            module_dir.mkdir(parents=True)
+            raw_case = {
+                "title": "登录成功",
+                "filename": "登录成功.md",
+                "steps": ["提交有效账号"],
+            }
+            expected = cases.case_to_markdown(
+                "登录模块",
+                "用例索引.md",
+                raw_case,
+            )
+            target = module_dir / "登录成功.md"
+            target.write_text(expected, encoding="utf-8")
+
+            result = cases.split_case_index_cases(
+                "登录模块",
+                "用例索引.md",
+                [raw_case],
+                dependencies,
+            )
+
+            self.assertEqual(result["created"], [])
+            self.assertEqual(
+                [item["filename"] for item in result["reused"]],
+                ["登录成功.md"],
+            )
+            self.assertEqual(result["skipped"], [])
+            self.assertEqual(target.read_text(encoding="utf-8"), expected)
+
+    def test_conflicting_existing_case_remains_skipped_without_overwrite(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            specs_dir = Path(temporary_directory) / "specs"
+            dependencies = make_case_dependencies(specs_dir)
+            module_dir = specs_dir / "登录模块"
+            module_dir.mkdir(parents=True)
+            target = module_dir / "登录成功.md"
+            target.write_text("人工维护内容", encoding="utf-8")
+
+            result = cases.split_case_index_cases(
+                "登录模块",
+                "用例索引.md",
+                [
+                    {
+                        "title": "登录成功",
+                        "filename": "登录成功.md",
+                        "steps": ["提交有效账号"],
+                    }
+                ],
+                dependencies,
+            )
+
+            self.assertEqual(result["created"], [])
+            self.assertEqual(result["reused"], [])
+            self.assertEqual(result["reason_code"], "case_content_conflict")
+            self.assertEqual(
+                [item["filename"] for item in result["conflicts"]],
+                ["登录成功.md"],
+            )
+            self.assertEqual(
+                [item["filename"] for item in result["skipped"]],
+                ["登录成功.md"],
+            )
+            self.assertEqual(target.read_text(encoding="utf-8"), "人工维护内容")
+
+    def test_conflict_prevents_non_conflicting_case_from_being_written(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            specs_dir = Path(temporary_directory) / "specs"
+            dependencies = make_case_dependencies(specs_dir)
+            module_dir = specs_dir / "登录模块"
+            module_dir.mkdir(parents=True)
+            conflict = module_dir / "已有登录.md"
+            conflict.write_text("人工维护内容", encoding="utf-8")
+            creatable = module_dir / "新登录.md"
+
+            result = cases.split_case_index_cases(
+                "登录模块",
+                "用例索引.md",
+                [
+                    {
+                        "title": "已有登录",
+                        "filename": conflict.name,
+                        "steps": ["提交有效账号"],
+                    },
+                    {
+                        "title": "新登录",
+                        "filename": creatable.name,
+                        "steps": ["提交备用账号"],
+                    },
+                ],
+                dependencies,
+            )
+
+            self.assertEqual(result["created"], [])
+            self.assertEqual(result["reason_code"], "case_content_conflict")
+            self.assertEqual(
+                [item["filename"] for item in result["conflicts"]],
+                [conflict.name],
+            )
+            self.assertEqual(conflict.read_text(encoding="utf-8"), "人工维护内容")
+            self.assertFalse(creatable.exists())
+
+    def test_unsafe_case_filename_is_normalized_before_target_planning(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            specs_dir = Path(temporary_directory) / "specs"
+            dependencies = make_case_dependencies(specs_dir)
+
+            result = cases.split_case_index_cases(
+                "登录模块",
+                "用例索引.md",
+                [
+                    {
+                        "title": "越界路径",
+                        "filename": "../越界路径.md",
+                        "steps": [],
+                    }
+                ],
+                dependencies,
+            )
+
+            filename = result["created"][0]["filename"]
+            self.assertNotIn("/", filename)
+            self.assertNotIn("\\", filename)
+            self.assertEqual(
+                (specs_dir / "登录模块" / filename).parent,
+                specs_dir / "登录模块",
+            )
+            self.assertFalse((specs_dir / "越界路径.md").exists())
 
     def test_split_plan_reads_json_through_the_injected_dependency(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
