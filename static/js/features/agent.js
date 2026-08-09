@@ -24,6 +24,7 @@ const AGENT_STEPS = [
 ];
 
 const INITIAL_EVENT_LIMIT = 200;
+const MAX_RETAINED_LOG_EVENTS = 3000;
 const MAX_DETAIL_JSON_CHARS = 6000;
 const RETRY_FLOW_ACTIVE_STATUSES = new Set(["queued", "running", "finalizing", "cancelling"]);
 const RETRY_FLOW_TERMINAL_STATUSES = new Set(["succeeded", "failed", "blocked", "cancelled"]);
@@ -39,9 +40,19 @@ const state = {
   selectedRun: null,
   steps: [],
   events: [],
+  criticalEvents: [],
+  logEvents: new Array(MAX_RETAINED_LOG_EVENTS),
+  logEventCount: 0,
+  logEventWriteIndex: 0,
+  eventIds: new Set(),
+  eventsDirty: false,
   activeStepKey: "upload_requirement",
   lastEventId: 0,
   streamController: null,
+  streamRenderScheduled: false,
+  streamRenderToken: 0,
+  streamRenderHandle: null,
+  streamRenderKind: "",
   refreshTimer: null,
   runMenuOpen: false,
   runSearchQuery: "",
@@ -867,7 +878,7 @@ function findModule(moduleName, moduleUid = "") {
 }
 
 function latestEvents(stepKey, predicate = () => true, limit = 30) {
-  return state.events.filter((event) => event.step_key === stepKey && predicate(event)).slice(-limit);
+  return retainedAgentEvents().filter((event) => event.step_key === stepKey && predicate(event)).slice(-limit);
 }
 
 function latestArtifactProgress(stepKey, itemStatus = "") {
@@ -1105,12 +1116,17 @@ function pendingPlanArtifacts(step) {
     .filter((item) => !generated.has(item.module_name) && !failed.has(item.module_name) && !skipped.has(item.module_name))
     .map((item, index) => {
       const running = latestRunning ? item.module_name === latestRunning : !hasProgress && index === 0;
+      const progressParts = running
+        ? runningPayload?.plan_phase === "splitting"
+          ? ["已生成计划", "正在拆分单用例计划。"]
+          : ["正在生成"]
+        : ["等待生成"];
       return {
         id: `generate_plans:pending:${item.module_uid || item.module_name}`,
         type: "plan",
         kindLabel: "测试计划",
         title: item.plan_name || item.module_name,
-        subtitle: artifactMeta([item.module_name, running ? "正在生成" : "等待生成"]),
+        subtitle: artifactMeta([item.module_name, ...progressParts]),
         status: running ? "running" : "queued",
         jobId: findJobIdForModule("generate_plans", item.module_name),
         promptText: item.planner_prompt || "",
@@ -1726,8 +1742,10 @@ async function loadAgentExecutionResult(options = {}) {
 }
 
 function renderEvents() {
-  elements.eventSummary.textContent = `已加载 ${state.events.length} 条事件`;
-  elements.eventLog.textContent = state.events
+  const retainedEvents = retainedAgentEvents();
+  const retentionSummary = state.eventIds.size > retainedEvents.length ? `，内存保留 ${retainedEvents.length} 条` : "";
+  elements.eventSummary.textContent = `已加载 ${state.eventIds.size} 条事件${retentionSummary}`;
+  elements.eventLog.textContent = retainedEvents
     .slice(-400)
     .map((event) => {
       const step = event.step_key ? `[${agentStepLabel(event.step_key)}]` : "";
@@ -1738,6 +1756,7 @@ function renderEvents() {
 }
 
 function renderAll() {
+  invalidateStreamRender();
   renderRunList();
   renderRequirements();
   renderRetryStatusBar();
@@ -2235,8 +2254,7 @@ async function loadRunDetail(runId = state.selectedRunId, options = {}) {
   if (!runId) {
     state.selectedRun = null;
     state.steps = [];
-    state.events = [];
-    state.lastEventId = 0;
+    resetAgentEvents();
     state.retryFlows = [];
     state.activeRetryFlows = [];
     resetAgentExecutionResult();
@@ -2266,7 +2284,8 @@ async function loadRunDetail(runId = state.selectedRunId, options = {}) {
 }
 
 async function loadEvents(reset = false) {
-  if (!state.selectedRunId) {
+  const runId = state.selectedRunId;
+  if (!runId) {
     return;
   }
   const afterId = reset ? 0 : state.lastEventId;
@@ -2277,27 +2296,103 @@ async function loadEvents(reset = false) {
   if (reset) {
     params.set("tail", "1");
   }
-  const data = await requestJson(`/api/agent/runs/${encodeURIComponent(state.selectedRunId)}/events?${params.toString()}`);
+  const data = await requestJson(`/api/agent/runs/${encodeURIComponent(runId)}/events?${params.toString()}`);
+  if (runId !== state.selectedRunId) {
+    return;
+  }
   if (reset) {
-    state.events = [];
-    state.lastEventId = 0;
+    resetAgentEvents(data.events || []);
+    return;
   }
   mergeEvents(data.events || []);
+}
+
+function isCriticalAgentEvent(event) {
+  const payload = isPlainObject(event?.payload) ? event.payload : {};
+  return event?.event_type !== "log" || Boolean(payload.artifact_progress || payload.retry_flow_progress);
+}
+
+function appendRetainedAgentEvent(event) {
+  state.events = [];
+  if (isCriticalAgentEvent(event)) {
+    state.criticalEvents.push(event);
+  } else {
+    state.logEvents[state.logEventWriteIndex] = event;
+    state.logEventWriteIndex = (state.logEventWriteIndex + 1) % MAX_RETAINED_LOG_EVENTS;
+    state.logEventCount = Math.min(state.logEventCount + 1, MAX_RETAINED_LOG_EVENTS);
+  }
+  state.eventsDirty = true;
+}
+
+function retainedLogEvents() {
+  const events = [];
+  const start = (state.logEventWriteIndex - state.logEventCount + MAX_RETAINED_LOG_EVENTS) % MAX_RETAINED_LOG_EVENTS;
+  for (let index = 0; index < state.logEventCount; index += 1) {
+    events.push(state.logEvents[(start + index) % MAX_RETAINED_LOG_EVENTS]);
+  }
+  return events;
+}
+
+function retainedAgentEvents() {
+  if (!state.eventsDirty) {
+    return state.events;
+  }
+  const logs = retainedLogEvents();
+  const critical = state.criticalEvents;
+  const events = [];
+  let logIndex = 0;
+  let criticalIndex = 0;
+  while (logIndex < logs.length || criticalIndex < critical.length) {
+    if (criticalIndex >= critical.length) {
+      events.push(logs[logIndex]);
+      logIndex += 1;
+      continue;
+    }
+    if (logIndex >= logs.length) {
+      events.push(critical[criticalIndex]);
+      criticalIndex += 1;
+      continue;
+    }
+    const logEventId = Number(logs[logIndex]?.event_id) || 0;
+    const criticalEventId = Number(critical[criticalIndex]?.event_id) || 0;
+    if (logEventId < criticalEventId) {
+      events.push(logs[logIndex]);
+      logIndex += 1;
+    } else {
+      events.push(critical[criticalIndex]);
+      criticalIndex += 1;
+    }
+  }
+  state.events = events;
+  state.eventsDirty = false;
+  return state.events;
+}
+
+function resetAgentEvents(events = []) {
+  invalidateStreamRender();
+  state.events = [];
+  state.criticalEvents = [];
+  state.logEvents = new Array(MAX_RETAINED_LOG_EVENTS);
+  state.logEventCount = 0;
+  state.logEventWriteIndex = 0;
+  state.eventIds.clear();
+  state.eventsDirty = false;
+  state.lastEventId = 0;
+  mergeEvents(events);
 }
 
 function mergeEvents(events) {
   if (!events.length) {
     return;
   }
-  const seen = new Set(state.events.map((event) => Number(event.event_id)));
   events.forEach((event) => {
     if (event.run_id && event.run_id !== state.selectedRunId) {
       return;
     }
     const eventId = Number(event.event_id) || 0;
-    if (!seen.has(eventId)) {
-      state.events.push(event);
-      seen.add(eventId);
+    if (!state.eventIds.has(eventId)) {
+      appendRetainedAgentEvent(event);
+      state.eventIds.add(eventId);
       state.lastEventId = Math.max(state.lastEventId, eventId);
       applyRetryFlowProgressEvent(event);
       applyAgentStepProgressEvent(event);
@@ -2372,6 +2467,55 @@ function applyAgentStepProgressEvent(event) {
   }
 }
 
+function invalidateStreamRender() {
+  if (state.streamRenderHandle !== null) {
+    if (state.streamRenderKind === "animation-frame" && typeof window.cancelAnimationFrame === "function") {
+      window.cancelAnimationFrame(state.streamRenderHandle);
+    } else if (state.streamRenderKind === "timeout") {
+      window.clearTimeout(state.streamRenderHandle);
+    }
+  }
+  state.streamRenderHandle = null;
+  state.streamRenderKind = "";
+  state.streamRenderToken += 1;
+  state.streamRenderScheduled = false;
+}
+
+function scheduleStreamRender(runId) {
+  if (state.streamRenderScheduled) {
+    return;
+  }
+  state.streamRenderScheduled = true;
+  const renderToken = state.streamRenderToken;
+  const render = () => {
+    if (renderToken !== state.streamRenderToken) {
+      return;
+    }
+    state.streamRenderHandle = null;
+    state.streamRenderKind = "";
+    state.streamRenderScheduled = false;
+    if (!state.isActive || state.selectedRunId !== runId) {
+      return;
+    }
+    renderRunList();
+    renderRetryStatusBar();
+    renderEvents();
+    renderTimeline();
+    renderArtifacts();
+    notifyCompletedRetryFlows();
+  };
+  if (typeof window.requestAnimationFrame === "function") {
+    state.streamRenderKind = "animation-frame";
+    const handle = window.requestAnimationFrame(render);
+    if (state.streamRenderScheduled && renderToken === state.streamRenderToken) {
+      state.streamRenderHandle = handle ?? null;
+    }
+  } else {
+    state.streamRenderKind = "timeout";
+    state.streamRenderHandle = window.setTimeout(render, 100);
+  }
+}
+
 async function startEventStream() {
   if (!state.selectedRunId) {
     return;
@@ -2415,7 +2559,7 @@ async function startEventStream() {
         if (parsed?.event === "agent-event") {
           pendingEvents.push(parsed.data);
         }
-        if (parsed?.event === "done") {
+        if (parsed?.event === "done" || parsed?.event === "paused") {
           shouldRefreshSelectedRun = true;
         }
         if (parsed?.event === "heartbeat") {
@@ -2433,12 +2577,7 @@ async function startEventStream() {
           return;
         }
         mergeEvents(pendingEvents);
-        renderRunList();
-        renderRetryStatusBar();
-        renderEvents();
-        renderTimeline();
-        renderArtifacts();
-        notifyCompletedRetryFlows();
+        scheduleStreamRender(streamRunId);
         if (
           state.activeStepKey === "run_suite" &&
           pendingEvents.some((event) => event.step_key === "run_suite" && event.event_type === "status")
@@ -2447,6 +2586,7 @@ async function startEventStream() {
         }
       }
       if (shouldRefreshSelectedRun) {
+        invalidateStreamRender();
         await refreshSelectedRun();
         return;
       }
@@ -2480,6 +2620,7 @@ async function selectRun(runId) {
   state.runSearchQuery = "";
   elements.runSearch.value = "";
   state.selectedRunId = runId;
+  resetAgentEvents();
   state.retryFlows = [];
   state.activeRetryFlows = [];
   state.openRetryFlowId = "";
@@ -2542,11 +2683,10 @@ async function submitRun(event) {
     persistSelectedRunId(state.selectedRunId);
     state.selectedRun = data.run;
     state.steps = data.steps || [];
-    state.events = data.events || [];
     state.activeStepKey = data.run.current_step || "upload_requirement";
     state.retryFlows = [];
     state.activeRetryFlows = [];
-    state.lastEventId = Math.max(0, ...state.events.map((item) => Number(item.event_id) || 0));
+    resetAgentEvents(data.events || []);
     state.jobCache.clear();
     state.contentCache.clear();
     resetAgentExecutionResult();
@@ -2596,8 +2736,7 @@ async function resumeRun() {
     });
     state.selectedRun = data.run;
     state.steps = data.steps || [];
-    state.events = data.events || [];
-    state.lastEventId = Math.max(0, ...state.events.map((item) => Number(item.event_id) || 0));
+    resetAgentEvents(data.events || []);
     state.jobCache.clear();
     state.contentCache.clear();
     resetAgentExecutionResult();
@@ -2618,9 +2757,8 @@ function resetAgentProjectState() {
   state.selectedRunId = "";
   state.selectedRun = null;
   state.steps = [];
-  state.events = [];
+  resetAgentEvents();
   state.activeStepKey = "upload_requirement";
-  state.lastEventId = 0;
   state.runMenuOpen = false;
   state.runSearchQuery = "";
   state.currentArtifacts = [];
@@ -2638,6 +2776,7 @@ function resetAgentProjectState() {
 }
 
 function stopEventStream() {
+  invalidateStreamRender();
   if (state.streamController) {
     state.streamController.abort();
     state.streamController = null;
