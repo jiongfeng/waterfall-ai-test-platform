@@ -21,6 +21,7 @@ from flask import Response, g, has_request_context, jsonify, render_template, re
 from test_plan_viewer.agent import diagnostics as agent_diagnostics
 from test_plan_viewer.agent import failure_handling as agent_failure_handling
 from test_plan_viewer.agent import script_preparation as agent_script_preparation
+from test_plan_viewer.agent import stream_consumer as agent_stream_consumer
 from test_plan_viewer.agent.output_buffer import AgentOutputBatcher
 from test_plan_viewer.artifacts import naming as artifact_naming
 from test_plan_viewer.artifacts import paths as artifact_paths
@@ -7582,190 +7583,25 @@ def consume_agent_sse_generator(
     *,
     generator_handles_cancellation=False,
 ):
-    result = {"status": "running", "logs": ""}
-    batcher = AgentOutputBatcher()
-    pending_metadata = {}
-    pending_job_id = None
-    pending_snapshot = None
-
-    def append_result_log(text):
-        if text:
-            result["logs"] = f"{result.get('logs', '')}{text}"[-JOB_LOG_TAIL_LIMIT:]
-
-    def persist_stream_event(job_id, text, metadata, job_log_snapshot=None):
-        error = None
-        for attempt in range(2):
-            try:
-                persist_agent_stream_batch(
-                    run_id,
-                    step_key,
-                    job_id,
-                    text,
-                    metadata,
-                    job_log_snapshot=job_log_snapshot,
-                )
-                return
-            except Exception as exc:
-                error = exc
-                if isinstance(exc, AgentStreamCommitAmbiguous):
-                    break
-                if attempt == 0:
-                    time.sleep(0.05)
-        if error is not None:
-            raise error
-        raise RuntimeError("Agent 输出批次持久化失败。")
-
-    def persist_batch(batch, reason=None):
-        nonlocal pending_metadata, pending_job_id, pending_snapshot
-        if batch is None:
-            return
-        metadata = {
-            **pending_metadata,
-            **batch.metadata(),
-            "flush_reason": reason or batch.reason,
-            "job_id": pending_job_id,
-            "stream_kind": pending_metadata.get("stream_kind") or "model-output",
-        }
-        metadata.pop("text", None)
-        metadata.pop("_job_log_snapshot", None)
-        persist_stream_event(
-            pending_job_id,
-            batch.text,
-            metadata,
-            job_log_snapshot=pending_snapshot,
-        )
-        pending_metadata = {}
-        pending_job_id = None
-        pending_snapshot = None
-
-    def flush_pending(reason="structured"):
-        persist_batch(batcher.flush(reason=reason), reason=reason)
-
-    def consume_delta(data):
-        nonlocal pending_metadata, pending_job_id, pending_snapshot
-        text = data.get("text") or ""
-        if not text:
-            return
-        if data.get("batched"):
-            # stream_plan_generation already applied the byte/time bounds.
-            # Persist before requesting its next yield so resumption is the
-            # acknowledgement that the event and optional log checkpoint
-            # committed together.
-            flush_pending("before-prebatched")
-            metadata = {
-                key: value
-                for key, value in data.items()
-                if key not in {"text", "_job_log_snapshot"}
-            }
-            append_result_log(text)
-            persist_stream_event(
-                data.get("job_id") or None,
-                text,
-                metadata,
-                job_log_snapshot=(
-                    data.get("_job_log_snapshot")
-                    if isinstance(data.get("_job_log_snapshot"), dict)
-                    else None
-                ),
-            )
-            return
-        incoming_job_id = data.get("job_id") or None
-        if batcher.has_pending and pending_job_id != incoming_job_id:
-            flush_pending("job-changed")
-        due = batcher.flush_due()
-        if due is not None:
-            persist_batch(due, reason="interval")
-        pending_job_id = incoming_job_id
-        incoming_metadata = {
-            key: value
-            for key, value in data.items()
-            if key not in {"text", "_job_log_snapshot"}
-        }
-        pending_metadata.update(incoming_metadata)
-        if isinstance(data.get("_job_log_snapshot"), dict):
-            pending_snapshot = data["_job_log_snapshot"]
-        batch_metadata = dict(pending_metadata)
-        batch_job_id = pending_job_id
-        batch_snapshot = pending_snapshot
-        append_result_log(text)
-        batches = batcher.add(text)
-        for batch in batches:
-            pending_metadata = dict(batch_metadata)
-            pending_job_id = batch_job_id
-            pending_snapshot = batch_snapshot
-            persist_batch(batch)
-        if batcher.has_pending:
-            pending_metadata = dict(batch_metadata)
-            pending_job_id = batch_job_id
-            pending_snapshot = batch_snapshot
-
-    try:
-        for chunk in generator:
-            if not generator_handles_cancellation:
-                agent_raise_if_cancelled(run_id)
-            for event, data in parse_sse_text_blocks(chunk):
-                if not isinstance(data, dict):
-                    data = {"value": data}
-                if event != "delta":
-                    if not generator_handles_cancellation:
-                        agent_raise_if_cancelled(run_id, force=True)
-                    flush_pending("structured")
-                if event == "status":
-                    result.update({key: value for key, value in data.items() if value is not None})
-                    append_agent_event(
-                        run_id,
-                        step_key,
-                        "status",
-                        data.get("error") or f"状态：{data.get('status', '')}",
-                        data,
-                        job_id=data.get("job_id"),
-                        asset_id=(data.get("asset") or {}).get("asset_id") if isinstance(data.get("asset"), dict) else None,
-                    )
-                elif event == "log":
-                    message = data.get("message") or ""
-                    if message:
-                        append_result_log(f"{message}\n")
-                        append_agent_event(run_id, step_key, "log", message[:log_limit], data, job_id=data.get("job_id"))
-                elif event == "delta":
-                    consume_delta(data)
-                elif event == "done":
-                    result.update(data)
-                    status = data.get("status") or ("failed" if data.get("ok") is False else "succeeded")
-                    result["status"] = status
-                    append_agent_event(
-                        run_id,
-                        step_key,
-                        "status",
-                        data.get("error") or f"任务{status}",
-                        data,
-                        job_id=data.get("job_id"),
-                        asset_id=(data.get("asset") or {}).get("asset_id") if isinstance(data.get("asset"), dict) else None,
-                        test_run_id=data.get("run_id"),
-                    )
-                else:
-                    append_agent_event(run_id, step_key, "log", json.dumps(data, ensure_ascii=False)[:log_limit], data)
-        flush_pending("generator-finished")
-    except GeneratorExit:
-        try:
-            flush_pending("generator-exit")
-        finally:
-            raise
-    except BaseException:
-        try:
-            flush_pending("exception")
-        except Exception:
-            pass
-        raise
-    finally:
-        close_generator = getattr(generator, "close", None)
-        if callable(close_generator):
-            try:
-                close_generator()
-            except Exception:
-                pass
-    if generator_handles_cancellation and result.get("status") == "cancelled":
-        raise OpencodeTaskCancelled(result.get("error") or "Agent 任务已取消。")
-    return result
+    dependencies = agent_stream_consumer.AgentStreamConsumerDependencies(
+        parse_sse_text_blocks=parse_sse_text_blocks,
+        persist_agent_stream_batch=persist_agent_stream_batch,
+        append_agent_event=append_agent_event,
+        agent_raise_if_cancelled=agent_raise_if_cancelled,
+        ambiguous_commit_error=AgentStreamCommitAmbiguous,
+        cancelled_error=OpencodeTaskCancelled,
+        log_tail_limit=JOB_LOG_TAIL_LIMIT,
+        sleep=time.sleep,
+        batcher_factory=AgentOutputBatcher,
+    )
+    return agent_stream_consumer.consume_agent_sse_generator(
+        run_id,
+        step_key,
+        generator,
+        dependencies,
+        log_limit,
+        generator_handles_cancellation=generator_handles_cancellation,
+    )
 
 
 def ensure_test_platform_reviewer_agent():
@@ -12513,7 +12349,9 @@ def stream_plan_generation(
     part_texts = {}
     next_tool_input_buffers = {}
     streamed_any_text = False
+    terminalized = False
     output_batcher = AgentOutputBatcher()
+    log_redaction_config = [None]
     job_log_writer = (
         BufferedJobLogWriter(get_job_log_path(job_id), tail_bytes=JOB_LOG_TAIL_LIMIT)
         if job_id
@@ -12542,14 +12380,33 @@ def stream_plan_generation(
         return target_file.exists()
 
     def emit_log(message, *, persist=True):
-        if job_id and message and persist:
-            append_test_job_log(
-                job_id,
-                f"{message}\n",
-                writer=job_log_writer,
-                persist_snapshot=not agent_stream,
-            )
-        return sse_payload("log", {"message": message})
+        checkpoint = None
+        if log_redaction_config[0] is None:
+            context_project = current_context_project()
+            if context_project:
+                log_redaction_config[0] = parse_target_system_config(
+                    context_project.get("target_system")
+                )
+            elif has_request_context():
+                log_redaction_config[0] = get_current_target_system_config()
+            else:
+                log_redaction_config[0] = {}
+        safe_message = redact_sensitive_text(message, log_redaction_config[0])
+        payload = {"message": safe_message, "job_id": job_id}
+        if job_log_writer is not None and safe_message and persist:
+            snapshot = job_log_writer.append(f"{safe_message}\n")
+            if is_platform_database_enabled() and job_log_writer.snapshot_due():
+                if agent_stream:
+                    checkpoint = snapshot
+                    payload["_job_log_snapshot"] = snapshot.as_updates()
+                else:
+                    persist_test_job_log_snapshot(job_id, snapshot)
+                    job_log_writer.mark_snapshot_persisted(snapshot)
+        yield sse_payload("log", payload)
+        if checkpoint is not None:
+            # Resumption acknowledges the Agent consumer committed the log
+            # event and its checkpoint in one transaction.
+            job_log_writer.mark_snapshot_persisted(checkpoint)
 
     def build_success_payload():
         if not success_payload_factory:
@@ -12574,6 +12431,7 @@ def stream_plan_generation(
             return None
 
     def emit_success_result():
+        nonlocal terminalized
         success_payload = build_success_payload()
         success_logs = []
         if "video" in success_payload:
@@ -12599,6 +12457,7 @@ def stream_plan_generation(
                     target_asset_id=get_success_target_asset_id(success_payload),
                     log_writer=job_log_writer,
                 )
+                terminalized = True
             elif job_log_writer is not None:
                 snapshot = job_log_writer.snapshot()
                 persist_test_job_log_snapshot(job_id, snapshot)
@@ -12611,11 +12470,11 @@ def stream_plan_generation(
             }
             yield emit_status("running", extra=ready_payload)
             for message in success_logs:
-                yield emit_log(message, persist=False)
+                yield from emit_log(message, persist=False)
             return
         yield emit_status("succeeded", extra=success_payload)
         for message in success_logs:
-            yield emit_log(message, persist=False)
+            yield from emit_log(message, persist=False)
         done_payload = {"ok": True}
         done_payload.update(success_payload)
         if job_id:
@@ -12691,6 +12550,8 @@ def stream_plan_generation(
     def stage_terminal_result(status, error):
         """Write the final file tail and job state before terminal SSE yields."""
 
+        nonlocal terminalized
+
         batch = output_batcher.finish(reason=status)
         terminal_delta = None
         if batch is not None:
@@ -12720,6 +12581,7 @@ def stream_plan_generation(
                 error=str(error),
                 log_writer=job_log_writer,
             )
+            terminalized = True
         return terminal_delta
 
     def wait_for_stable_completion(timeout_seconds=2.0):
@@ -12782,7 +12644,7 @@ def stream_plan_generation(
             now = time.monotonic()
             if now - last_notice >= 10:
                 last_notice = now
-                yield emit_log("OpenCode 仍在执行，正在等待任务完成。")
+                yield from emit_log("OpenCode 仍在执行，正在等待任务完成。")
             time.sleep(0.5)
 
         raise RuntimeError(f"等待 OpenCode 任务完成超时（已等待 {format_timeout_seconds(timeout_seconds)}）。")
@@ -12806,6 +12668,41 @@ def stream_plan_generation(
 
         abort_active_session()
         raise OpencodeTaskCancelled("任务已取消。")
+
+    def send_fallback_prompt_with_cancellation(timeout_seconds):
+        result = []
+        completed = threading.Event()
+
+        def fallback_worker():
+            try:
+                response = send_opencode_prompt_to_session(
+                    session_id,
+                    full_prompt,
+                    default_agent=default_agent,
+                )
+                result.append(("response", response))
+            except BaseException as exc:
+                result.append(("error", exc))
+            finally:
+                completed.set()
+
+        threading.Thread(target=fallback_worker, daemon=True).start()
+        deadline = time.monotonic() + timeout_seconds
+        while not completed.is_set():
+            raise_if_cancelled()
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                abort_active_session()
+                raise RuntimeError(
+                    f"OpenCode 等待模式超时（已等待 {format_timeout_seconds(timeout_seconds)}）。"
+                )
+            completed.wait(min(0.1, remaining))
+
+        raise_if_cancelled()
+        kind, value = result[0]
+        if kind == "error":
+            raise value
+        return value
 
     def trim_log_value(value, limit=30000):
         if value is None:
@@ -12838,7 +12735,7 @@ def stream_plan_generation(
         if key in bucket or not message:
             return ""
         bucket.add(key)
-        return emit_log(message)
+        yield from emit_log(message)
 
     def tool_identity(part=None, properties=None):
         part = part or {}
@@ -12905,45 +12802,45 @@ def stream_plan_generation(
 
         status_key = (identity, "status", state_status, title)
         if state_status == "completed":
-            yield emit_once(seen_tool_states, status_key, f"工具完成：{title}")
+            yield from emit_once(seen_tool_states, status_key, f"工具完成：{title}")
         elif state_status == "error":
-            yield emit_once(
+            yield from emit_once(
                 seen_tool_states,
                 status_key,
                 f"工具失败：{title}，{state.get('error', '')}".rstrip("，"),
             )
         elif state_status == "running":
-            yield emit_once(seen_tool_states, status_key, f"正在执行工具：{title}")
+            yield from emit_once(seen_tool_states, status_key, f"正在执行工具：{title}")
         elif state_status == "pending":
-            yield emit_once(seen_tool_states, status_key, f"工具等待执行：{title}")
+            yield from emit_once(seen_tool_states, status_key, f"工具等待执行：{title}")
 
         input_message = tool_input_message(title, state.get("input"))
         if input_message:
-            yield emit_once(seen_tool_inputs, (identity, "input", fingerprint(input_message)), input_message)
+            yield from emit_once(seen_tool_inputs, (identity, "input", fingerprint(input_message)), input_message)
 
         metadata_message = tool_metadata_message(title, state.get("metadata"))
         if metadata_message:
-            yield emit_once(seen_tool_metadata, (identity, "metadata", fingerprint(metadata_message)), metadata_message)
+            yield from emit_once(seen_tool_metadata, (identity, "metadata", fingerprint(metadata_message)), metadata_message)
 
         if state_status == "completed":
             output = state.get("output")
             output_text = trim_log_value(output)
             if output_text:
-                yield emit_once(
+                yield from emit_once(
                     seen_tool_outputs,
                     (identity, "output", fingerprint(output_text)),
                     f"工具输出：{title}\n{output_text}",
                 )
             attachments_message = tool_attachments_message(title, state.get("attachments"))
             if attachments_message:
-                yield emit_once(
+                yield from emit_once(
                     seen_tool_outputs,
                     (identity, "attachments", fingerprint(attachments_message)),
                     attachments_message,
                 )
         elif state_status == "error" and state.get("error"):
             error_text = trim_log_value(state.get("error"))
-            yield emit_once(
+            yield from emit_once(
                 seen_tool_outputs,
                 (identity, "error", fingerprint(error_text)),
                 f"工具错误：{title}\n{error_text}",
@@ -12954,14 +12851,14 @@ def stream_plan_generation(
         title = properties.get("tool") or properties.get("name") or call_id
 
         if event_type == "session.next.tool.input.started":
-            yield emit_once(seen_tool_states, (call_id, event_type, title), f"工具输入开始：{title}")
+            yield from emit_once(seen_tool_states, (call_id, event_type, title), f"工具输入开始：{title}")
             return
 
         if event_type == "session.next.tool.input.delta":
             delta = properties.get("delta")
             if isinstance(delta, str) and delta:
                 next_tool_input_buffers[call_id] = f"{next_tool_input_buffers.get(call_id, '')}{delta}"
-                yield emit_once(
+                yield from emit_once(
                     seen_tool_inputs,
                     (call_id, event_type, len(next_tool_input_buffers[call_id]), fingerprint(delta)),
                     f"工具输入增量：{title}\n{trim_log_value(delta, 4000)}",
@@ -12972,7 +12869,7 @@ def stream_plan_generation(
             text = properties.get("text")
             if not isinstance(text, str):
                 text = next_tool_input_buffers.get(call_id, "")
-            yield emit_once(
+            yield from emit_once(
                 seen_tool_inputs,
                 (call_id, event_type, fingerprint(text)),
                 f"工具输入完成：{title}\n{trim_log_value(text, 6000)}" if text else f"工具输入完成：{title}",
@@ -12980,23 +12877,23 @@ def stream_plan_generation(
             return
 
         if event_type == "session.next.tool.called":
-            yield emit_once(seen_tool_states, (call_id, event_type, title), f"正在执行工具：{title}")
+            yield from emit_once(seen_tool_states, (call_id, event_type, title), f"正在执行工具：{title}")
             input_message = tool_input_message(title, properties.get("input"))
             if input_message:
-                yield emit_once(seen_tool_inputs, (call_id, "called-input", fingerprint(input_message)), input_message)
+                yield from emit_once(seen_tool_inputs, (call_id, "called-input", fingerprint(input_message)), input_message)
             return
 
         if event_type == "session.next.tool.progress":
             content_text = tool_content_text(properties.get("content"))
             structured_text = compact_json(properties.get("structured"))
             if content_text:
-                yield emit_once(
+                yield from emit_once(
                     seen_tool_outputs,
                     (call_id, event_type, "content", fingerprint(content_text)),
                     f"工具进度：{title}\n{content_text}",
                 )
             if structured_text and structured_text != "{}":
-                yield emit_once(
+                yield from emit_once(
                     seen_tool_metadata,
                     (call_id, event_type, "structured", fingerprint(structured_text)),
                     f"工具进度数据：{title}\n{structured_text}",
@@ -13004,24 +12901,24 @@ def stream_plan_generation(
             return
 
         if event_type == "session.next.tool.success":
-            yield emit_once(seen_tool_states, (call_id, event_type, title), f"工具完成：{title}")
+            yield from emit_once(seen_tool_states, (call_id, event_type, title), f"工具完成：{title}")
             content_text = tool_content_text(properties.get("content"))
             if content_text:
-                yield emit_once(
+                yield from emit_once(
                     seen_tool_outputs,
                     (call_id, "success-content", fingerprint(content_text)),
                     f"工具输出：{title}\n{content_text}",
                 )
             structured_text = compact_json(properties.get("structured"))
             if structured_text and structured_text != "{}":
-                yield emit_once(
+                yield from emit_once(
                     seen_tool_metadata,
                     (call_id, "success-structured", fingerprint(structured_text)),
                     f"工具结构化结果：{title}\n{structured_text}",
                 )
             result_text = compact_json(properties.get("result"))
             if result_text and result_text != "{}":
-                yield emit_once(
+                yield from emit_once(
                     seen_tool_outputs,
                     (call_id, "success-result", fingerprint(result_text)),
                     f"工具原始结果：{title}\n{result_text}",
@@ -13034,14 +12931,14 @@ def stream_plan_generation(
                 message = error.get("message") or compact_json(error)
             else:
                 message = str(error)
-            yield emit_once(
+            yield from emit_once(
                 seen_tool_states,
                 (call_id, event_type, title, fingerprint(message)),
                 f"工具失败：{title}，{message}".rstrip("，"),
             )
             result_text = compact_json(properties.get("result"))
             if result_text and result_text != "{}":
-                yield emit_once(
+                yield from emit_once(
                     seen_tool_outputs,
                     (call_id, "failed-result", fingerprint(result_text)),
                     f"工具失败结果：{title}\n{result_text}",
@@ -13059,13 +12956,13 @@ def stream_plan_generation(
             )
         except Exception:
             for message in setup_logs:
-                yield emit_log(message)
+                yield from emit_log(message)
             raise
         for message in setup_logs:
             raise_if_cancelled()
-            yield emit_log(message)
+            yield from emit_log(message)
         raise_if_cancelled()
-        yield emit_log(f"任务已创建，目标位置：{target_label}")
+        yield from emit_log(f"任务已创建，目标位置：{target_label}")
         session = opencode_request(
             "/session",
             build_opencode_session_payload(session_title, full_prompt, default_agent=default_agent),
@@ -13078,7 +12975,7 @@ def stream_plan_generation(
 
         if set_opencode_task_session(cancel_job_id, session_id):
             raise_if_cancelled()
-        yield emit_log(f"OpenCode session 已创建：{session_id}")
+        yield from emit_log(f"OpenCode session 已创建：{session_id}")
         opencode_timeout = get_opencode_task_timeout_seconds()
 
         try:
@@ -13086,8 +12983,8 @@ def stream_plan_generation(
             event_response = opencode_event_stream(timeout=opencode_timeout)
         except Exception as exc:
             raise_if_cancelled()
-            yield emit_log(f"OpenCode 事件流不可用，改用等待模式：{exc}")
-            response = send_opencode_prompt_to_session(session_id, full_prompt, default_agent=default_agent)
+            yield from emit_log(f"OpenCode 事件流不可用，改用等待模式：{exc}")
+            response = send_fallback_prompt_with_cancellation(opencode_timeout)
             raise_if_cancelled()
             summary = summarize_opencode_response(response)
             if summary:
@@ -13101,7 +12998,7 @@ def stream_plan_generation(
         with event_response:
             worker = threading.Thread(target=prompt_worker, daemon=True)
             worker.start()
-            yield emit_log("已提交到 OpenCode，正在接收实时输出。")
+            yield from emit_log("已提交到 OpenCode，正在接收实时输出。")
 
             deadline = time.monotonic() + opencode_timeout
             is_idle = False
@@ -13129,9 +13026,9 @@ def stream_plan_generation(
                                 "case_count": len(plan_completion_probe.cases),
                             },
                         )
-                        yield emit_log("源计划已生成并通过校验，正在拆分单用例计划。")
+                        yield from emit_log("源计划已生成并通过校验，正在拆分单用例计划。")
                     else:
-                        yield emit_log("已检测到目标内容生成，停止等待 OpenCode 后续事件。")
+                        yield from emit_log("已检测到目标内容生成，停止等待 OpenCode 后续事件。")
                     if session_id:
                         try:
                             abort_opencode_session(session_id)
@@ -13144,6 +13041,8 @@ def stream_plan_generation(
                     return
 
                 if data is None:
+                    if agent_stream:
+                        yield ": agent-stream-tick\n\n"
                     continue
 
                 try:
@@ -13213,13 +13112,13 @@ def stream_plan_generation(
                     if part_type == "patch":
                         files = part.get("files") or []
                         if files:
-                            yield emit_log(f"生成补丁：{', '.join(files)}")
+                            yield from emit_log(f"生成补丁：{', '.join(files)}")
                         continue
 
                 if event_type == "file.edited":
                     file_path = properties.get("file")
                     if file_path:
-                        yield emit_log(f"文件已编辑：{file_path}")
+                        yield from emit_log(f"文件已编辑：{file_path}")
                     continue
 
                 if event_type == "session.diff":
@@ -13227,13 +13126,13 @@ def stream_plan_generation(
                         file_path = item.get("file") if isinstance(item, dict) else None
                         if file_path and file_path not in seen_diff_files:
                             seen_diff_files.add(file_path)
-                            yield emit_log(f"检测到文件变更：{file_path}")
+                            yield from emit_log(f"检测到文件变更：{file_path}")
                     continue
 
                 if event_type == "session.status":
                     status = properties.get("status") or {}
                     if status.get("type") == "retry":
-                        yield emit_log(f"OpenCode 正在重试：{status.get('message', '')}".rstrip("："))
+                        yield from emit_log(f"OpenCode 正在重试：{status.get('message', '')}".rstrip("："))
                     continue
 
                 if event_type == "session.error":
@@ -13251,7 +13150,7 @@ def stream_plan_generation(
                 raise prompt_error[0]
 
             if not is_idle:
-                yield emit_log("OpenCode 事件流已结束，改用状态检查等待任务完成。")
+                yield from emit_log("OpenCode 事件流已结束，改用状态检查等待任务完成。")
                 yield from wait_for_idle(deadline, opencode_timeout)
 
         messages = opencode_request(
@@ -13275,7 +13174,7 @@ def stream_plan_generation(
         if terminal_delta:
             yield terminal_delta
         yield emit_status("cancelled", str(exc))
-        yield emit_log(str(exc), persist=False)
+        yield from emit_log(str(exc), persist=False)
         done_payload = {"ok": False, "status": "cancelled", "error": str(exc)}
         if job_id:
             done_payload["job_id"] = job_id
@@ -13288,7 +13187,7 @@ def stream_plan_generation(
                 job_log_writer.append(pending_batch.text)
             except Exception:
                 pass
-        if job_id and job_log_writer is not None:
+        if job_id and job_log_writer is not None and not terminalized:
             disconnect_error = "流式连接已关闭，任务已取消。"
             try:
                 job_log_writer.append(f"{disconnect_error}\n")
@@ -13311,7 +13210,7 @@ def stream_plan_generation(
         if terminal_delta:
             yield terminal_delta
         yield emit_status("failed", str(exc))
-        yield emit_log(f"任务失败：{exc}", persist=False)
+        yield from emit_log(f"任务失败：{exc}", persist=False)
         done_payload = {"ok": False, "error": str(exc), "status": "failed"}
         if job_id:
             done_payload["job_id"] = job_id

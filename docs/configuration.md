@@ -214,8 +214,10 @@ URL 不得内嵌用户名或密码。OpenCode/模型属于外部数据处理边�
 `opencode_task_timeout_seconds` 和 `script_execution_timeout_seconds` 必须是
 正整数。超时不是资源隔离；部署仍应限制 CPU、内存、PID、磁盘、上传和日志。
 
-Agent 流式输出采用固定的安全阈值：4 KiB/500 ms 聚合、16 KiB 单批上限，任务日志
-数据库快照每 30 秒或新增 1 MiB 刷新，并在终态强制刷新。这些阈值是当前版本的内部
+Agent 流式输出采用固定的安全阈值：模型 delta 和高频工具 log 均按
+4 KiB/500 ms 聚合，单批上限 16 KiB；两类输出关联的任务日志数据库快照均按
+30 秒或新增 1 MiB 刷新，并在终态强制刷新。OpenCode 工具日志中的当前目标系统
+密码会在写入完整日志文件、SSE 和数据库事件前脱敏。这些阈值是当前版本的内部
 持久化契约，不新增 JSON 字段或环境变量，也不要求数据库 schema 迁移。升级后原有
 项目配置、`test_jobs`/`agent_run_events` 数据以及 REST/SSE 客户端继续兼容；完整日志
 文件仍是权威来源，数据库中的 tail 和 size 只作为低频缓存。

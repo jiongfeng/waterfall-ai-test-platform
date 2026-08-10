@@ -165,9 +165,9 @@ static/js/core/*
 
 SSE 的成功、失败、取消和暂停都必须产生可解析终态，并与数据库终态一致。
 
-Agent 的 OpenCode 模型输出使用分层缓冲，避免把每个 token/delta 直接变成数据库
-事务：输出累计到 4 KiB 或等待 500 ms 时形成一批，单批不超过 16 KiB，并在
-status、error、done 和产物进度等结构化事件之前先刷新。OpenCode `/event` 由
+Agent 的 OpenCode 模型 delta 与高频工具 log 使用分层缓冲，避免把每个小输出
+直接变成数据库事务：输出累计到 4 KiB 或等待 500 ms 时形成一批，单批不超过
+16 KiB，并在 status、error、done 和产物进度等结构化事件之前先刷新。OpenCode `/event` 由
 daemon reader 写入有界队列，主循环通过有超时的读取持续检查墙钟 deadline、取消、
 EOF 和解析错误；完整任务日志先追加到项目工作区文件，再持久化聚合后的 Agent 事件。
 聚合、日志、OpenCode reader/完成探针和 Playwright 执行流分别位于
@@ -176,9 +176,13 @@ EOF 和解析错误；完整任务日志先追加到项目工作区文件，再�
 
 任务日志文件是完整日志的事实来源，`test_jobs.log_tail`、`log_size` 和 `log_path`
 只是查询缓存。流生命周期内复用一个文件 writer，并在内存中保留最后 100,000 bytes；
-数据库日志快照最多每 30 秒或新增 1 MiB 更新一次，任务进入 succeeded、failed 或
-cancelled 等终态时强制刷新。Agent 批次需要同时更新日志快照时，快照和聚合事件在
-同一事务提交。日志查看、下载和诊断仍从完整文件读取。
+数据库日志快照对模型 delta 和工具 log 都最多每 30 秒或新增 1 MiB 更新一次，
+任务进入 succeeded、failed 或 cancelled 等终态时强制刷新。Agent 批次需要同时更新日志
+快照时，快照和聚合事件在同一事务提交。工具日志会在写入文件、SSE 和数据库前脱敏
+当前目标系统密码；日志查看、下载和诊断仍从完整文件读取。
+
+OpenCode 事件流不可用时，同步 fallback 在 daemon worker 中运行，主线程以有界等待继续
+轮询跨进程取消。本地回归的取消请求到终态耗时 539 ms，小于 1 秒。
 
 平台事件 SSE 每页读取 200 条；读满一页时立即读取下一页，追平后才发送心跳并等待。
 浏览器用持久 event id 集合去重，普通 log 事件以 3,000 条环形缓冲有界保留，关键
@@ -224,6 +228,16 @@ python3 -m unittest \
 python3 -m unittest discover -s tests
 ruff check .
 ```
+
+2026-08-10 曾在即用即销的 MySQL 5.7.29 隔离容器中使用
+`binlog_format=ROW`、`binlog_row_image=FULL`、`sync_binlog=1` 和
+`innodb_flush_log_at_trx_commit=1` 执行 10,000 条合成输入验收。下表是该次
+回归样本，用于防止写放大回归，不是生产环境的性能 SLO 或运行时承诺：
+
+| 合成负载 | 完整文本 | 事件 / `Com_commit` | `test_jobs` 更新 | binlog 增量 | redo / data 增量 | 最大事件 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 10k 单字符 delta | 30,000 B | 8 / 8 | 1 | 65,045 B | 123,392 / 123,392 B | 4,098 B |
+| 10k 工具 log | 70,000 B | 18 / 18 | 1 | 151,361 B | 228,352 / 228,352 B | 4,102 B |
 
 ## 相关文档
 
