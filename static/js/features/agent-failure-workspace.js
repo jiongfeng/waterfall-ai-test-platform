@@ -186,12 +186,14 @@ function failureItemActionButton(item, action, label, { hidden = false, kind = "
     return "";
   }
   const itemTitle = failureItemTitle(item);
+  const localizedLabel = window.WaterfallI18n?.source?.(label) || label;
   return `<button
     class="failure-action-button ${escapeHtml(kind)}"
     type="button"
     data-failure-action="${escapeHtml(action)}"
     data-failure-item-id="${escapeHtml(item.item_id)}"
-    aria-label="${escapeHtml(`${label}：${itemTitle}`)}"
+    data-i18n-dynamic-attributes
+    aria-label="${escapeHtml(`${localizedLabel}: ${itemTitle}`)}"
     ${disabled ? "disabled" : ""}
   >${escapeHtml(label)}</button>`;
 }
@@ -223,17 +225,17 @@ function failureTableMarkup(items, emptyMessage) {
               <tr>
                 <td>
                   <span class="failure-item-name">
-                    <strong title="${escapeHtml(failureItemTitle(item))}">${escapeHtml(failureItemTitle(item))}</strong>
+                    <strong data-i18n-dynamic title="${escapeHtml(failureItemTitle(item))}">${escapeHtml(failureItemTitle(item))}</strong>
                     <span>${escapeHtml(item.source_type === "repair" ? "脚本修复失败" : "脚本生成失败")}</span>
                   </span>
                 </td>
                 <td>
                   <span class="failure-item-context">
-                    <span title="${escapeHtml(item.module_name || "-")}">${escapeHtml(item.module_name || "-")}</span>
-                    <span title="${escapeHtml(item.plan_filename || "")}">${escapeHtml(item.plan_filename || "")}</span>
+                    <span data-i18n-dynamic title="${escapeHtml(item.module_name || "-")}">${escapeHtml(item.module_name || "-")}</span>
+                    <span data-i18n-dynamic title="${escapeHtml(item.plan_filename || "")}">${escapeHtml(item.plan_filename || "")}</span>
                   </span>
                 </td>
-                <td><span class="failure-error-summary" title="${escapeHtml(item.error || "暂无失败摘要")}">${escapeHtml(item.error || "暂无失败摘要")}</span></td>
+                <td><span class="failure-error-summary" ${item.error ? "data-i18n-dynamic" : ""} title="${escapeHtml(item.error || "暂无失败摘要")}">${escapeHtml(item.error || "暂无失败摘要")}</span></td>
                 <td><span class="status-badge ${escapeHtml(busy ? "running" : item.status)}">${escapeHtml(
                   busy ? "处理中" : failureStatusText(item),
                 )}</span></td>
@@ -371,7 +373,9 @@ function renderFailureEvidence(item) {
   ]
     .map(
       ([label, value]) =>
-        `<span class="failure-context-field"><span>${escapeHtml(label)}</span><strong title="${escapeHtml(value)}">${escapeHtml(value)}</strong></span>`,
+        `<span class="failure-context-field"><span>${escapeHtml(label)}</span><strong ${
+          label === "失败来源" ? "" : "data-i18n-dynamic"
+        } title="${escapeHtml(value)}">${escapeHtml(value)}</strong></span>`,
     )
     .join("");
   const evidence = failureEvidenceEntries(item);
@@ -380,8 +384,8 @@ function renderFailureEvidence(item) {
       (entry, index) => `
         <details class="failure-evidence-item" ${index === 0 ? "open" : ""}>
           <summary>
-            <span>${escapeHtml(entry.title)}</span>
-            <small>${escapeHtml(entry.type || `证据 ${index + 1}`)}</small>
+            <span data-i18n-dynamic>${escapeHtml(entry.title)}</span>
+            <small ${entry.type ? "data-i18n-dynamic" : ""}>${escapeHtml(entry.type || `证据 ${index + 1}`)}</small>
           </summary>
           <pre>${escapeHtml(failureEvidenceText(entry.value))}</pre>
         </details>
@@ -407,8 +411,8 @@ function analysisSection(title, value) {
   }
   const content =
     lines.length > 1
-      ? `<ul>${lines.map((line) => `<li>${escapeHtml(line)}</li>`).join("")}</ul>`
-      : `<p>${escapeHtml(lines[0])}</p>`;
+      ? `<ul>${lines.map((line) => `<li data-i18n-dynamic>${escapeHtml(line)}</li>`).join("")}</ul>`
+      : `<p data-i18n-dynamic>${escapeHtml(lines[0])}</p>`;
   return `<section class="failure-analysis-section"><h3>${escapeHtml(title)}</h3>${content}</section>`;
 }
 
@@ -443,7 +447,7 @@ function renderFailureAnalysis(item, errorMessage = "") {
   elements.failureAnalysisLoading.classList.add("hidden");
   if (errorMessage) {
     elements.failureAnalysisContent.innerHTML = `
-      <div class="failure-analysis-alert">${escapeHtml(errorMessage)}</div>
+      <div class="failure-analysis-alert" data-i18n-dynamic>${escapeHtml(errorMessage)}</div>
       <div class="failure-analysis-empty">可以关闭弹窗后再次点击“分析和建议”重试。</div>
     `;
     return;
@@ -493,10 +497,12 @@ function showFailureActionModal(item, mode) {
   state.failureActionOpener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   resetFailureActionViews();
   elements.failureActionModalMeta.textContent = artifactMeta([
-    item.source_type === "repair" ? "脚本修复失败" : "脚本生成失败",
+    window.WaterfallI18n?.source?.(item.source_type === "repair" ? "脚本修复失败" : "脚本生成失败") ||
+      (item.source_type === "repair" ? "脚本修复失败" : "脚本生成失败"),
     item.module_name,
     failureStatusText(item),
   ]);
+  window.WaterfallI18n?.markDynamic?.(elements.failureActionModalMeta);
   elements.failureActionModal.classList.remove("hidden");
   document.body.classList.add("agent-modal-open");
   window.requestAnimationFrame(() => elements.failureActionModalClose.focus());
@@ -504,7 +510,8 @@ function showFailureActionModal(item, mode) {
 
 async function openFailureDetails(item) {
   showFailureActionModal(item, "details");
-  elements.failureActionModalTitle.textContent = `失败详情 · ${failureItemTitle(item)}`;
+  elements.failureActionModalTitle.textContent = `${window.WaterfallI18n?.source?.("失败详情") || "失败详情"} · ${failureItemTitle(item)}`;
+  window.WaterfallI18n?.markDynamic?.(elements.failureActionModalTitle);
   elements.failureEvidenceView.classList.remove("hidden");
   renderFailureEvidence(item);
 }
@@ -536,7 +543,8 @@ async function loadFailureAnalysis(item) {
 
 async function openFailureAnalysis(item) {
   showFailureActionModal(item, "analysis");
-  elements.failureActionModalTitle.textContent = `分析和建议 · ${failureItemTitle(item)}`;
+  elements.failureActionModalTitle.textContent = `${window.WaterfallI18n?.source?.("分析和建议") || "分析和建议"} · ${failureItemTitle(item)}`;
+  window.WaterfallI18n?.markDynamic?.(elements.failureActionModalTitle);
   elements.failureAnalysisView.classList.remove("hidden");
   const analysis = normalizedFailureAnalysis(item);
   if (analysis && !item.analysis_stale) {
@@ -549,10 +557,13 @@ async function openFailureAnalysis(item) {
 function openFailureRetry(item) {
   showFailureActionModal(item, "retry");
   const isRepair = item.source_type === "repair";
-  elements.failureActionModalTitle.textContent = `${isRepair ? "重新修复" : "重新生成"} · ${failureItemTitle(item)}`;
+  const retryLabel = isRepair ? "重新修复" : "重新生成";
+  elements.failureActionModalTitle.textContent = `${window.WaterfallI18n?.source?.(retryLabel) || retryLabel} · ${failureItemTitle(item)}`;
+  window.WaterfallI18n?.markDynamic?.(elements.failureActionModalTitle);
   elements.failureRetryView.classList.remove("hidden");
   elements.failureRetryKind.textContent = isRepair ? "重新修复" : "重新生成";
   elements.failureRetryName.textContent = failureItemTitle(item);
+  window.WaterfallI18n?.markDynamic?.(elements.failureRetryName);
   elements.failureRetryReason.value = item.error || "暂无失败摘要";
   elements.failureRetryInstructions.value = failureAnalysisSuggestion(item);
   elements.failureRetryTarget.value = item.path || item.script_path || item.candidate_path || artifactMeta([item.module_name, item.filename || item.plan_filename]);
@@ -580,10 +591,13 @@ async function loadFailureScriptContent(item) {
 async function openFailureEdit(item) {
   showFailureActionModal(item, "edit");
   const candidate = item.editable_artifact_kind === "candidate";
-  elements.failureActionModalTitle.textContent = `编辑${candidate ? "候选稿" : "脚本"} · ${failureItemTitle(item)}`;
+  const editLabel = `编辑${candidate ? "候选稿" : "脚本"}`;
+  elements.failureActionModalTitle.textContent = `${window.WaterfallI18n?.source?.(editLabel) || editLabel} · ${failureItemTitle(item)}`;
+  window.WaterfallI18n?.markDynamic?.(elements.failureActionModalTitle);
   elements.failureEditView.classList.remove("hidden");
   elements.failureEditKind.textContent = candidate ? "候选脚本" : "正式脚本";
   elements.failureEditName.textContent = failureItemTitle(item);
+  window.WaterfallI18n?.markDynamic?.(elements.failureEditName);
   elements.failureScriptEditor.value = "正在读取脚本内容…";
   elements.failureScriptEditor.disabled = true;
   elements.failureActionConfirm.textContent = "保存脚本";

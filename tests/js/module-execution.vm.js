@@ -221,6 +221,13 @@ const feature = context.window.createModuleExecutionFeature({
     crypto: { randomUUID: () => "job-id" },
     confirm: () => true,
     requestAnimationFrame: (callback) => callback(),
+    WaterfallI18n: {
+      log: (value) => value,
+      t: (key, { duration }) => ({
+        "duration.elapsed": `Elapsed: ${duration}`,
+        "duration.total": `Duration: ${duration}`,
+      })[key] || key,
+    },
   },
   fetch: fetchImpl,
   TextDecoder,
@@ -265,6 +272,10 @@ assert.deepStrictEqual(
 assert.deepStrictEqual(
   JSON.parse(JSON.stringify(feature.getRepairStatusInfo({ status: "cancelled" }))),
   { label: "已取消", className: "cancelled" },
+);
+assert.strictEqual(
+  feature.formatModuleRepairDuration({ status: "running", started_at: Date.now() - 1000 }),
+  "Elapsed: 00:01",
 );
 
 let executionResult = { status: "running", logs: "", script_results: {} };

@@ -97,6 +97,14 @@ const feature = context.window.createScriptRepairFeature({
     EXECUTION: "execution",
     REPAIR: "repair",
   },
+  window: {
+    WaterfallI18n: {
+      t: (key, { duration }) => ({
+        "repair.elapsed": `Repair elapsed: ${duration}`,
+        "repair.duration": `Repair time: ${duration}`,
+      })[key] || key,
+    },
+  },
   getScriptRunPromptFixedTemplate: () =>
     "@playwright-test-healer\nUse specs/<module>/<module>.md to repair tests/<module>/<test-script>.spec.ts",
   getScriptRunPromptNoteDefault: () => "Do not remove STEP entries",
@@ -149,7 +157,7 @@ state.scriptRun.isRunning = true;
 feature.startScriptRunDurationTimer();
 const runningTimerId = state.scriptRun.durationTimer;
 assert.ok(activeTimers.has(runningTimerId));
-assert.ok(elements.scriptRunDuration.textContent.includes("修复进行时间"));
+assert.ok(elements.scriptRunDuration.textContent.startsWith("Repair elapsed: "));
 feature.stopScriptRunDurationTimer();
 assert.strictEqual(state.scriptRun.durationTimer, null);
 assert.ok(clearedTimers.includes(runningTimerId));

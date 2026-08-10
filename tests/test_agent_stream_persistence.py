@@ -910,6 +910,44 @@ class OpenCodeStreamLifecycleTests(unittest.TestCase):
         abort.assert_called_with("session-1")
         self.assertTrue(response.closed.is_set())
 
+    def test_terminal_success_preserves_finalized_split_plan_contract(self):
+        response = FiniteEventResponse(
+            [{"type": "session.idle", "properties": {"sessionID": "session-1"}}]
+        )
+        finalized = {
+            "plan_filename": "login-case-index.md",
+            "generation_mode": "multiple",
+            "plans": [
+                {"module_name": "Login", "plan_filename": "login-happy-path.md"}
+            ],
+            "split": {"created": [{"filename": "login-happy-path.md"}]},
+            "deleted_source": {"plan_filename": "login-case-index.md"},
+        }
+        with ExitStack() as stack:
+            for stream_patch in self.stream_patches(response, 3):
+                stack.enter_context(stream_patch)
+            events = []
+            for chunk in app.stream_plan_generation(
+                "Login",
+                "prompt",
+                Path("/tmp/login-case-index.md"),
+                setup_targets=[],
+                completion_required=False,
+                success_payload_factory=lambda: finalized,
+            ):
+                events.extend(app.parse_sse_text_blocks(chunk))
+
+        succeeded = [
+            payload
+            for event, payload in events
+            if event == "status" and payload.get("status") == "succeeded"
+        ][-1]
+        done = [payload for event, payload in events if event == "done"][-1]
+        for payload in (succeeded, done):
+            self.assertEqual(payload["plans"], finalized["plans"])
+            self.assertEqual(payload["split"], finalized["split"])
+            self.assertEqual(payload["deleted_source"], finalized["deleted_source"])
+
     def test_deferred_job_success_stays_non_terminal_until_plan_split(self):
         with tempfile.TemporaryDirectory() as directory:
             target = Path(directory) / "计划索引.md"
@@ -1735,6 +1773,35 @@ class MultiplePlanFinalizationTests(unittest.TestCase):
 
 
 class AgentPlanRecoveryTests(unittest.TestCase):
+    def test_recovery_rejects_filesystem_equivalent_case_filenames(self):
+        scenarios = (
+            ("en", "case-index.md", "Login.md", "login.md"),
+            ("zh-CN", "用例索引.md", "ガ登录.md", "カ\u3099登录.md"),
+        )
+        for language, target_name, first, second in scenarios:
+            with self.subTest(language=language), tempfile.TemporaryDirectory() as directory:
+                target = Path(directory) / target_name
+                target.write_text(
+                    "```json\n"
+                    + json.dumps(
+                        {
+                            "cases": [
+                                {"title": "First", "filename": first, "steps": []},
+                                {"title": "Second", "filename": second, "steps": []},
+                            ]
+                        },
+                        ensure_ascii=False,
+                    )
+                    + "\n```\n",
+                    encoding="utf-8",
+                )
+
+                with (
+                    patch.object(app, "agent_project_language", return_value=language),
+                    self.assertRaisesRegex(ValueError, "unsafe or duplicated|不安全或重复"),
+                ):
+                    app.validate_multiple_plan_artifact(target)
+
     def test_resume_reuses_valid_source_plan_without_starting_opencode(self):
         with tempfile.TemporaryDirectory() as directory:
             target = Path(directory) / "计划索引.md"

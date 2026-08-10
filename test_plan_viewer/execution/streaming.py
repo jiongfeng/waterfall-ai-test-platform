@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from functools import partial
 from pathlib import Path
+import re
 from types import FunctionType
 
 from test_plan_viewer.agent.output_buffer import AgentOutputBatcher
@@ -13,14 +14,50 @@ from test_plan_viewer.generation.event_stream import BoundedSseReader
 from test_plan_viewer.infrastructure.job_logs import BufferedJobLogWriter
 
 
+_AGENT_EXECUTION_LOG_PATTERNS = (
+    (
+        re.compile(r"^执行模式：(.+)。$"),
+        lambda match: "Execution mode: {}.".format(
+            {"按文件串行执行": "serial per file", "当前批量执行": "batch"}.get(
+                match.group(1), match.group(1)
+            )
+        ),
+    ),
+    (
+        re.compile(r"^准备执行第 (\d+)/(\d+) 个测试集脚本：(.+)$"),
+        lambda match: f"Preparing test-suite script {match.group(1)}/{match.group(2)}: {match.group(3)}",
+    ),
+    (re.compile(r"^执行命令：(.+)$"), lambda match: f"Command: {match.group(1)}"),
+    (
+        re.compile(r"^开始执行准备脚本：(.+)。$"),
+        lambda match: f"Running setup script: {match.group(1)}.",
+    ),
+    (
+        re.compile(r"^准备脚本完成：(.+)。$"),
+        lambda match: f"Setup script completed: {match.group(1)}.",
+    ),
+)
+
+
+def localize_agent_execution_log(message, project_copy):
+    """Localize only recognized platform log wrappers, never process output."""
+
+    text = str(message or "")
+    if text == "合并 Playwright 测试集执行报告。":
+        return project_copy("Merging the Playwright test-suite report.", text)
+    for pattern, formatter in _AGENT_EXECUTION_LOG_PATTERNS:
+        match = pattern.fullmatch(text)
+        if match:
+            return project_copy(formatter(match), text)
+    return text
+
+
 def _bind_dependencies(function, dependencies):
     """Clone a generator function with one immutable dependency namespace."""
 
     namespace = dict(function.__globals__)
     namespace.update(
-        (name, value)
-        for name, value in vars(dependencies).items()
-        if not name.startswith("__")
+        (name, value) for name, value in vars(dependencies).items() if not name.startswith("__")
     )
     namespace["_BufferedExecutionOutput"] = partial(
         BufferedExecutionOutput,
@@ -184,9 +221,7 @@ class BufferedExecutionOutput:
         self._acknowledge_previous_yield()
         if not text:
             return ""
-        self._output_tail = (
-            f"{self._output_tail}{text}"[-self.dependencies.JOB_LOG_TAIL_LIMIT :]
-        )
+        self._output_tail = f"{self._output_tail}{text}"[-self.dependencies.JOB_LOG_TAIL_LIMIT :]
         return self._batch_events(self.batcher.add(text))
 
     def flush_due(self):
@@ -199,6 +234,9 @@ class BufferedExecutionOutput:
 
     def emit_log(self, message):
         self._acknowledge_previous_yield()
+        project_copy = getattr(self.dependencies, "project_copy", None)
+        if self.agent_stream and callable(project_copy):
+            message = localize_agent_execution_log(message, project_copy)
         prefix = self._batch_events([self.batcher.flush(reason="structured")])
         snapshot = self._append_file(f"{message}\n") if message else None
         self._persist_direct_checkpoint_if_due(snapshot)
@@ -251,7 +289,12 @@ def _stream_script_execution_impl(module_name, filename, context, *, agent_strea
     setup_logs = []
     current_process = None
     terminalized = False
-    script_asset = sync_script_asset(module_name, context["script_file"], change_source="manual", message=f"sync script: {module_name}/{filename}")
+    script_asset = sync_script_asset(
+        module_name,
+        context["script_file"],
+        change_source="manual",
+        message=f"sync script: {module_name}/{filename}",
+    )
     run_id = context["run_id"]
     job_id = f"execution-{run_id}"
     create_test_run(
@@ -261,11 +304,20 @@ def _stream_script_execution_impl(module_name, filename, context, *, agent_strea
         module_name=module_name,
         target_asset_id=script_asset.get("asset_id") if script_asset else None,
         command=context["command_text"],
-        env=build_execution_env_metadata({"script": get_script_test_relative_path(module_name, filename)}),
+        env=build_execution_env_metadata(
+            {"script": get_script_test_relative_path(module_name, filename)}
+        ),
         total_files=1,
     )
-    create_test_job("execution", job_id=job_id, status="running", target_asset_id=script_asset.get("asset_id") if script_asset else None)
-    result_row = create_run_result_for_script(run_id, 1, module_name, filename, command=context["command_text"], status="unknown")
+    create_test_job(
+        "execution",
+        job_id=job_id,
+        status="running",
+        target_asset_id=script_asset.get("asset_id") if script_asset else None,
+    )
+    result_row = create_run_result_for_script(
+        run_id, 1, module_name, filename, command=context["command_text"], status="unknown"
+    )
     result_id = result_row.get("result_id") if result_row else None
     output_stream = _BufferedExecutionOutput(
         job_id,
@@ -366,8 +418,12 @@ def _stream_script_execution_impl(module_name, filename, context, *, agent_strea
             database_reset_status="succeeded" if context.get("setup_resolution") else None,
         )
         summary = build_execution_summary({filename: status}, returncode)
-        update_test_run(run_id, status=status, summary=summary, completed_files=1, error=error, finished=True)
-        register_execution_artifacts(run_id, context, run_result, {filename: result_id} if result_id else {})
+        update_test_run(
+            run_id, status=status, summary=summary, completed_files=1, error=error, finished=True
+        )
+        register_execution_artifacts(
+            run_id, context, run_result, {filename: result_id} if result_id else {}
+        )
         yield from finish_execution_job("succeeded" if returncode == 0 else "failed", error=error)
         yield emit_status(status, error=error, extra=extra)
         yield output_stream.emit_event(
@@ -394,12 +450,35 @@ def _stream_script_execution_impl(module_name, filename, context, *, agent_strea
             **build_run_video_result(started_at, context["results_dir"]),
             **build_playwright_report_result(started_at, context["report_dir"]),
         }
-        update_run_result(result_id, status="failed", error_message=error, database_reset_status="failed")
-        update_test_run(run_id, status="failed", summary=build_execution_summary({filename: "failed"}), completed_files=0, error=error, finished=True)
-        register_execution_artifacts(run_id, context, run_result, {filename: result_id} if result_id else {})
+        update_run_result(
+            result_id, status="failed", error_message=error, database_reset_status="failed"
+        )
+        update_test_run(
+            run_id,
+            status="failed",
+            summary=build_execution_summary({filename: "failed"}),
+            completed_files=0,
+            error=error,
+            finished=True,
+        )
+        register_execution_artifacts(
+            run_id, context, run_result, {filename: result_id} if result_id else {}
+        )
         yield from finish_execution_job("failed", error=error)
         yield emit_status("failed", error=error, extra={"setup": setup_summary, **run_result})
-        yield output_stream.emit_event("done", {"ok": False, "status": "failed", "error": error, "run_id": run_id, "job_id": job_id, "result_id": result_id, "setup": setup_summary, **run_result})
+        yield output_stream.emit_event(
+            "done",
+            {
+                "ok": False,
+                "status": "failed",
+                "error": error,
+                "run_id": run_id,
+                "job_id": job_id,
+                "result_id": result_id,
+                "setup": setup_summary,
+                **run_result,
+            },
+        )
     except FileNotFoundError:
         error = "无法找到 npx，请确认 Node.js/npm 已加入运行环境 PATH。"
         run_result = {
@@ -412,11 +491,31 @@ def _stream_script_execution_impl(module_name, filename, context, *, agent_strea
             error_message=error,
             database_reset_status="succeeded" if context.get("setup_resolution") else None,
         )
-        update_test_run(run_id, status="failed", summary=build_execution_summary({filename: "failed"}), completed_files=1, error=error, finished=True)
-        register_execution_artifacts(run_id, context, run_result, {filename: result_id} if result_id else {})
+        update_test_run(
+            run_id,
+            status="failed",
+            summary=build_execution_summary({filename: "failed"}),
+            completed_files=1,
+            error=error,
+            finished=True,
+        )
+        register_execution_artifacts(
+            run_id, context, run_result, {filename: result_id} if result_id else {}
+        )
         yield from finish_execution_job("failed", error=error)
         yield emit_status("failed", error=error, extra=run_result)
-        yield output_stream.emit_event("done", {"ok": False, "status": "failed", "error": error, "run_id": run_id, "job_id": job_id, "result_id": result_id, **run_result})
+        yield output_stream.emit_event(
+            "done",
+            {
+                "ok": False,
+                "status": "failed",
+                "error": error,
+                "run_id": run_id,
+                "job_id": job_id,
+                "result_id": result_id,
+                **run_result,
+            },
+        )
     except OSError as exc:
         error = f"脚本执行失败：{exc}"
         run_result = {
@@ -429,23 +528,65 @@ def _stream_script_execution_impl(module_name, filename, context, *, agent_strea
             error_message=error,
             database_reset_status="succeeded" if context.get("setup_resolution") else None,
         )
-        update_test_run(run_id, status="failed", summary=build_execution_summary({filename: "failed"}), completed_files=1, error=error, finished=True)
-        register_execution_artifacts(run_id, context, run_result, {filename: result_id} if result_id else {})
+        update_test_run(
+            run_id,
+            status="failed",
+            summary=build_execution_summary({filename: "failed"}),
+            completed_files=1,
+            error=error,
+            finished=True,
+        )
+        register_execution_artifacts(
+            run_id, context, run_result, {filename: result_id} if result_id else {}
+        )
         yield from finish_execution_job("failed", error=error)
         yield emit_status("failed", error=error, extra=run_result)
-        yield output_stream.emit_event("done", {"ok": False, "status": "failed", "error": error, "run_id": run_id, "job_id": job_id, "result_id": result_id, **run_result})
+        yield output_stream.emit_event(
+            "done",
+            {
+                "ok": False,
+                "status": "failed",
+                "error": error,
+                "run_id": run_id,
+                "job_id": job_id,
+                "result_id": result_id,
+                **run_result,
+            },
+        )
     except Exception as exc:
         error = f"测试前准备脚本执行失败：{exc}"
         run_result = {
             **build_run_video_result(started_at, context["results_dir"]),
             **build_playwright_report_result(started_at, context["report_dir"]),
         }
-        update_run_result(result_id, status="failed", error_message=error, database_reset_status="failed")
-        update_test_run(run_id, status="failed", summary=build_execution_summary({filename: "failed"}), completed_files=0, error=error, finished=True)
-        register_execution_artifacts(run_id, context, run_result, {filename: result_id} if result_id else {})
+        update_run_result(
+            result_id, status="failed", error_message=error, database_reset_status="failed"
+        )
+        update_test_run(
+            run_id,
+            status="failed",
+            summary=build_execution_summary({filename: "failed"}),
+            completed_files=0,
+            error=error,
+            finished=True,
+        )
+        register_execution_artifacts(
+            run_id, context, run_result, {filename: result_id} if result_id else {}
+        )
         yield from finish_execution_job("failed", error=error)
         yield emit_status("failed", error=error, extra=run_result)
-        yield output_stream.emit_event("done", {"ok": False, "status": "failed", "error": error, "run_id": run_id, "job_id": job_id, "result_id": result_id, **run_result})
+        yield output_stream.emit_event(
+            "done",
+            {
+                "ok": False,
+                "status": "failed",
+                "error": error,
+                "run_id": run_id,
+                "job_id": job_id,
+                "result_id": result_id,
+                **run_result,
+            },
+        )
     except GeneratorExit:
         cancel_error = "流式连接已关闭，执行任务已取消。"
         terminate_process(current_process)
@@ -470,9 +611,7 @@ def _stream_script_execution_impl(module_name, filename, context, *, agent_strea
             try:
                 output_stream.cancel_job(
                     cancel_error,
-                    target_asset_id=(
-                        script_asset.get("asset_id") if script_asset else None
-                    ),
+                    target_asset_id=(script_asset.get("asset_id") if script_asset else None),
                 )
             except Exception:
                 output_stream.abort()
@@ -507,7 +646,14 @@ def _stream_module_script_execution_impl(module_name, filenames, context, *, age
     create_test_job("execution", job_id=job_id, status="running")
     result_ids = {}
     for index, item_filename in enumerate(filenames, start=1):
-        row = create_run_result_for_script(run_id, index, module_name, item_filename, command=context["command_text"], status="unknown")
+        row = create_run_result_for_script(
+            run_id,
+            index,
+            module_name,
+            item_filename,
+            command=context["command_text"],
+            status="unknown",
+        )
         if row:
             result_ids[item_filename] = row["result_id"]
     script_results = {filename: "running" for filename in filenames}
@@ -578,7 +724,9 @@ def _stream_module_script_execution_impl(module_name, filenames, context, *, age
 
             for index, filename in enumerate(filenames, start=1):
                 relative_script_path = get_script_test_relative_path(module_name, filename)
-                command, command_text = build_playwright_test_command(context["video_config"], [relative_script_path])
+                command, command_text = build_playwright_test_command(
+                    context["video_config"], [relative_script_path]
+                )
                 part_id = f"part-{index:03d}"
                 blob_output_file = context["blob_report_dir"] / f"{part_id}.zip"
                 part_results_dir = context["results_dir"] / part_id
@@ -692,11 +840,15 @@ def _stream_module_script_execution_impl(module_name, filenames, context, *, age
                     result_ids.get(filename),
                     status=script_results[filename],
                     stdout_tail=output_stream.output_tail(),
-                    error_message=None if file_returncode == 0 else f"脚本执行失败，退出码：{file_returncode}",
+                    error_message=None
+                    if file_returncode == 0
+                    else f"脚本执行失败，退出码：{file_returncode}",
                     command=command_text,
                     database_reset_status="succeeded" if item_setup_resolution else None,
                 )
-                register_script_video_artifact(run_id, result_ids.get(filename), part_started_at, part_results_dir)
+                register_script_video_artifact(
+                    run_id, result_ids.get(filename), part_started_at, part_results_dir
+                )
                 update_test_run(run_id, completed_files=completed_playwright_files)
 
             blob_reports = sorted(context["blob_report_dir"].glob("*.zip"))
@@ -710,7 +862,9 @@ def _stream_module_script_execution_impl(module_name, filenames, context, *, age
                     timeout=get_script_execution_timeout_seconds(),
                 )
                 merge_returncode = merge_completed.returncode
-                merge_output = summarize_process_output(merge_completed.stdout, merge_completed.stderr)
+                merge_output = summarize_process_output(
+                    merge_completed.stdout, merge_completed.stderr
+                )
                 if merge_output:
                     pending = emit_delta(strip_ansi(merge_output))
                     if pending:
@@ -842,14 +996,41 @@ def _stream_module_script_execution_impl(module_name, filenames, context, *, age
             yield emit_log(message)
         run_result = build_playwright_report_result(started_at, context["report_dir"])
         script_results = {filename: "failed" for filename in filenames}
-        extra = {"execution_mode": execution_mode, "script_results": script_results, "setup": setup_summary, **run_result}
+        extra = {
+            "execution_mode": execution_mode,
+            "script_results": script_results,
+            "setup": setup_summary,
+            **run_result,
+        }
         for item_filename in filenames:
-            update_run_result(result_ids.get(item_filename), status="failed", error_message=error, database_reset_status="failed")
-        update_test_run(run_id, status="failed", summary=build_execution_summary(script_results), completed_files=0, error=error, finished=True)
+            update_run_result(
+                result_ids.get(item_filename),
+                status="failed",
+                error_message=error,
+                database_reset_status="failed",
+            )
+        update_test_run(
+            run_id,
+            status="failed",
+            summary=build_execution_summary(script_results),
+            completed_files=0,
+            error=error,
+            finished=True,
+        )
         register_execution_artifacts(run_id, context, run_result, result_ids)
         yield from finish_execution_job("failed", error=error)
         yield emit_status("failed", error=error, extra=extra)
-        yield output_stream.emit_event("done", {"ok": False, "status": "failed", "error": error, "run_id": run_id, "job_id": job_id, **extra})
+        yield output_stream.emit_event(
+            "done",
+            {
+                "ok": False,
+                "status": "failed",
+                "error": error,
+                "run_id": run_id,
+                "job_id": job_id,
+                **extra,
+            },
+        )
     except FileNotFoundError:
         error = "无法找到 npx，请确认 Node.js/npm 已加入运行环境 PATH。"
         run_result = build_playwright_report_result(started_at, context["report_dir"])
@@ -862,11 +1043,28 @@ def _stream_module_script_execution_impl(module_name, filenames, context, *, age
                 error_message=error,
                 database_reset_status="succeeded" if context.get("setup_resolution") else None,
             )
-        update_test_run(run_id, status="failed", summary=build_execution_summary(script_results), completed_files=len(filenames), error=error, finished=True)
+        update_test_run(
+            run_id,
+            status="failed",
+            summary=build_execution_summary(script_results),
+            completed_files=len(filenames),
+            error=error,
+            finished=True,
+        )
         register_execution_artifacts(run_id, context, run_result, result_ids)
         yield from finish_execution_job("failed", error=error)
         yield emit_status("failed", error=error, extra=extra)
-        yield output_stream.emit_event("done", {"ok": False, "status": "failed", "error": error, "run_id": run_id, "job_id": job_id, **extra})
+        yield output_stream.emit_event(
+            "done",
+            {
+                "ok": False,
+                "status": "failed",
+                "error": error,
+                "run_id": run_id,
+                "job_id": job_id,
+                **extra,
+            },
+        )
     except OSError as exc:
         error = f"模块脚本批量执行失败：{exc}"
         run_result = build_playwright_report_result(started_at, context["report_dir"])
@@ -879,23 +1077,62 @@ def _stream_module_script_execution_impl(module_name, filenames, context, *, age
                 error_message=error,
                 database_reset_status="succeeded" if context.get("setup_resolution") else None,
             )
-        update_test_run(run_id, status="failed", summary=build_execution_summary(script_results), completed_files=len(filenames), error=error, finished=True)
+        update_test_run(
+            run_id,
+            status="failed",
+            summary=build_execution_summary(script_results),
+            completed_files=len(filenames),
+            error=error,
+            finished=True,
+        )
         register_execution_artifacts(run_id, context, run_result, result_ids)
         yield from finish_execution_job("failed", error=error)
         yield emit_status("failed", error=error, extra=extra)
-        yield output_stream.emit_event("done", {"ok": False, "status": "failed", "error": error, "run_id": run_id, "job_id": job_id, **extra})
+        yield output_stream.emit_event(
+            "done",
+            {
+                "ok": False,
+                "status": "failed",
+                "error": error,
+                "run_id": run_id,
+                "job_id": job_id,
+                **extra,
+            },
+        )
     except Exception as exc:
         error = f"测试前准备脚本执行失败：{exc}"
         run_result = build_playwright_report_result(started_at, context["report_dir"])
         script_results = {filename: "failed" for filename in filenames}
         extra = {"execution_mode": execution_mode, "script_results": script_results, **run_result}
         for item_filename in filenames:
-            update_run_result(result_ids.get(item_filename), status="failed", error_message=error, database_reset_status="failed")
-        update_test_run(run_id, status="failed", summary=build_execution_summary(script_results), completed_files=0, error=error, finished=True)
+            update_run_result(
+                result_ids.get(item_filename),
+                status="failed",
+                error_message=error,
+                database_reset_status="failed",
+            )
+        update_test_run(
+            run_id,
+            status="failed",
+            summary=build_execution_summary(script_results),
+            completed_files=0,
+            error=error,
+            finished=True,
+        )
         register_execution_artifacts(run_id, context, run_result, result_ids)
         yield from finish_execution_job("failed", error=error)
         yield emit_status("failed", error=error, extra=extra)
-        yield output_stream.emit_event("done", {"ok": False, "status": "failed", "error": error, "run_id": run_id, "job_id": job_id, **extra})
+        yield output_stream.emit_event(
+            "done",
+            {
+                "ok": False,
+                "status": "failed",
+                "error": error,
+                "run_id": run_id,
+                "job_id": job_id,
+                **extra,
+            },
+        )
     except GeneratorExit:
         cancel_error = "流式连接已关闭，执行任务已取消。"
         terminate_process(current_process)
@@ -1050,7 +1287,10 @@ def _stream_test_suite_execution_impl(suite_id, suite_name, items, context, *, a
                 updates["error_message"] = error
                 if preparation_failed:
                     updates["database_reset_status"] = "failed"
-                elif context.get("setup_resolution") and execution_mode != EXECUTION_MODE_SERIAL_PER_FILE:
+                elif (
+                    context.get("setup_resolution")
+                    and execution_mode != EXECUTION_MODE_SERIAL_PER_FILE
+                ):
                     updates["database_reset_status"] = "succeeded"
             try:
                 persist_script_result(key, **updates)
@@ -1113,7 +1353,9 @@ def _stream_test_suite_execution_impl(suite_id, suite_name, items, context, *, a
 
             for index, item in enumerate(context["items"], start=1):
                 relative_script_path = item["relative_path"]
-                command, command_text = build_playwright_test_command(context["video_config"], [relative_script_path])
+                command, command_text = build_playwright_test_command(
+                    context["video_config"], [relative_script_path]
+                )
                 part_id = f"part-{index:03d}"
                 blob_output_file = context["blob_report_dir"] / f"{part_id}.zip"
                 part_results_dir = context["results_dir"] / part_id
@@ -1122,7 +1364,9 @@ def _stream_test_suite_execution_impl(suite_id, suite_name, items, context, *, a
                 except OSError:
                     pass
 
-                yield emit_log(f"准备执行第 {index}/{len(context['items'])} 个测试集脚本：{item['key']}")
+                yield emit_log(
+                    f"准备执行第 {index}/{len(context['items'])} 个测试集脚本：{item['key']}"
+                )
                 item_setup_resolution = None
                 if context.get("setup_resolution"):
                     try:
@@ -1232,11 +1476,15 @@ def _stream_test_suite_execution_impl(suite_id, suite_name, items, context, *, a
                     item["key"],
                     status=script_results[item["key"]],
                     stdout_tail=output_stream.output_tail(),
-                    error_message=None if file_returncode == 0 else f"脚本执行失败，退出码：{file_returncode}",
+                    error_message=None
+                    if file_returncode == 0
+                    else f"脚本执行失败，退出码：{file_returncode}",
                     command=command_text,
                     database_reset_status="succeeded" if item_setup_resolution else None,
                 )
-                register_script_video_artifact(run_id, result_ids.get(item["key"]), part_started_at, part_results_dir)
+                register_script_video_artifact(
+                    run_id, result_ids.get(item["key"]), part_started_at, part_results_dir
+                )
                 update_test_run(run_id, completed_files=completed_playwright_files)
                 yield emit_status(
                     "running",
@@ -1258,7 +1506,9 @@ def _stream_test_suite_execution_impl(suite_id, suite_name, items, context, *, a
                     timeout=get_script_execution_timeout_seconds(),
                 )
                 merge_returncode = merge_completed.returncode
-                merge_output = summarize_process_output(merge_completed.stdout, merge_completed.stderr)
+                merge_output = summarize_process_output(
+                    merge_completed.stdout, merge_completed.stderr
+                )
                 if merge_output:
                     pending = emit_delta(strip_ansi(merge_output))
                     if pending:
@@ -1391,23 +1641,63 @@ def _stream_test_suite_execution_impl(suite_id, suite_name, items, context, *, a
         extra = yield from finalize_failed_execution(error, preparation_failed=True)
         extra["setup"] = setup_summary
         yield emit_status("failed", error=error, extra=extra)
-        yield output_stream.emit_event("done", {"ok": False, "status": "failed", "error": error, "run_id": run_id, "job_id": job_id, **extra})
+        yield output_stream.emit_event(
+            "done",
+            {
+                "ok": False,
+                "status": "failed",
+                "error": error,
+                "run_id": run_id,
+                "job_id": job_id,
+                **extra,
+            },
+        )
     except FileNotFoundError as exc:
         missing_target = getattr(exc, "filename", "") or str(exc)
         error = f"测试集执行失败，未找到文件或命令：{missing_target}"
         extra = yield from finalize_failed_execution(error)
         yield emit_status("failed", error=error, extra=extra)
-        yield output_stream.emit_event("done", {"ok": False, "status": "failed", "error": error, "run_id": run_id, "job_id": job_id, **extra})
+        yield output_stream.emit_event(
+            "done",
+            {
+                "ok": False,
+                "status": "failed",
+                "error": error,
+                "run_id": run_id,
+                "job_id": job_id,
+                **extra,
+            },
+        )
     except OSError as exc:
         error = f"测试集执行失败：{exc}"
         extra = yield from finalize_failed_execution(error)
         yield emit_status("failed", error=error, extra=extra)
-        yield output_stream.emit_event("done", {"ok": False, "status": "failed", "error": error, "run_id": run_id, "job_id": job_id, **extra})
+        yield output_stream.emit_event(
+            "done",
+            {
+                "ok": False,
+                "status": "failed",
+                "error": error,
+                "run_id": run_id,
+                "job_id": job_id,
+                **extra,
+            },
+        )
     except Exception as exc:
         error = f"测试集执行异常：{exc}"
         extra = yield from finalize_failed_execution(error)
         yield emit_status("failed", error=error, extra=extra)
-        yield output_stream.emit_event("done", {"ok": False, "status": "failed", "error": error, "run_id": run_id, "job_id": job_id, **extra})
+        yield output_stream.emit_event(
+            "done",
+            {
+                "ok": False,
+                "status": "failed",
+                "error": error,
+                "run_id": run_id,
+                "job_id": job_id,
+                **extra,
+            },
+        )
     except GeneratorExit:
         cancel_error = "流式连接已关闭，执行任务已取消。"
         terminate_process(current_process)
@@ -1461,13 +1751,17 @@ def stream_script_execution(dependencies, module_name, filename, context, *, age
     )
 
 
-def stream_module_script_execution(dependencies, module_name, filenames, context, *, agent_stream=False):
+def stream_module_script_execution(
+    dependencies, module_name, filenames, context, *, agent_stream=False
+):
     return _bind_dependencies(_stream_module_script_execution_impl, dependencies)(
         module_name, filenames, context, agent_stream=agent_stream
     )
 
 
-def stream_test_suite_execution(dependencies, suite_id, suite_name, items, context, *, agent_stream=False):
+def stream_test_suite_execution(
+    dependencies, suite_id, suite_name, items, context, *, agent_stream=False
+):
     return _bind_dependencies(_stream_test_suite_execution_impl, dependencies)(
         suite_id, suite_name, items, context, agent_stream=agent_stream
     )

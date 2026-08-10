@@ -94,7 +94,16 @@ function renderNavigation() {
   elements.requirementUploadWrap.classList.toggle("hidden", state.activeSection !== SECTION.REQUIREMENTS);
   elements.requirementHeaderActions.classList.toggle("hidden", state.activeSection !== SECTION.REQUIREMENTS);
   elements.appTitle.textContent = t(activeMenu?.title || "测试资源");
-  elements.currentUserName.textContent = state.auth.user?.display_name || state.auth.user?.username || "未登录";
+  const userDisplayName = state.auth.user?.display_name || state.auth.user?.username || "";
+  const builtInAdminSourceName =
+    window.WaterfallTranslations?.["zh-CN"]?.["auth.builtInAdminDisplayName"] || "";
+  window.WaterfallI18n?.markDynamic?.(elements.currentUserName);
+  elements.currentUserName.textContent =
+    !state.auth.user
+      ? window.WaterfallI18n?.t("account.signedOut") || "Not signed in"
+      : state.auth.user?.username === "admin" && userDisplayName === builtInAdminSourceName
+      ? window.WaterfallI18n?.t("auth.builtInAdminDisplayName") || userDisplayName
+      : userDisplayName;
   elements.moduleSearch.placeholder =
     state.activeSection === SECTION.REQUIREMENTS
       ? t("搜索需求")
@@ -133,7 +142,15 @@ function getRoleSummary(roles) {
   if (!Array.isArray(roles) || !roles.length) {
     return "-";
   }
-  return roles.map((role) => role.name || role.code).join("、");
+  return roles.map(getRoleDisplayName).join("、");
+}
+
+function getRoleDisplayName(role) {
+  const sourceName = role?.name || role?.code || "";
+  const builtInAdminName = window.WaterfallTranslations?.["zh-CN"]?.["auth.builtInAdminRoleName"] || "";
+  return role?.code === "admin" && sourceName === builtInAdminName
+    ? window.WaterfallI18n?.t("auth.builtInAdminRoleName") || sourceName
+    : sourceName;
 }
 
 function getPermissionSummary(permissionCodes) {
@@ -209,7 +226,9 @@ function renderRoleCheckboxes(selectedRoleIds) {
       return `
         <label class="admin-checkbox">
           <input type="checkbox" name="userRole" value="${role.id}" ${checked} ${disabled} />
-          <span>${escapeHtml(role.name)}${role.status === "active" ? "" : "（已禁用）"}</span>
+          <span data-i18n-dynamic>${escapeHtml(getRoleDisplayName(role))}${
+            role.status === "active" ? "" : t("（已禁用）")
+          }</span>
         </label>
       `;
     })
@@ -246,7 +265,7 @@ function renderUserAdminForm() {
       <div class="admin-form-header">
         <div>
           <h3>${isNew ? "新增用户" : "编辑用户"}</h3>
-          <p>${isNew ? "创建账号并分配角色" : escapeHtml(user?.username || "")}</p>
+          <p ${isNew ? "" : "data-i18n-dynamic"}>${isNew ? "创建账号并分配角色" : escapeHtml(user?.username || "")}</p>
         </div>
         <button class="secondary-button" id="cancelUserEdit" type="button">取消</button>
       </div>
@@ -301,7 +320,7 @@ function renderPasswordResetForm() {
       <div class="admin-form-header">
         <div>
           <h3>重置密码</h3>
-          <p>${escapeHtml(user?.username || "")}</p>
+          <p data-i18n-dynamic>${escapeHtml(user?.username || "")}</p>
         </div>
         <button class="secondary-button" id="cancelPasswordReset" type="button">取消</button>
       </div>
@@ -352,12 +371,12 @@ function renderUserAdminPanel() {
                   .map(
                     (user) => `
                       <tr>
-                        <td>${escapeHtml(user.username)}</td>
-                        <td>${escapeHtml(user.display_name)}</td>
+                        <td data-i18n-dynamic>${escapeHtml(user.username)}</td>
+                        <td data-i18n-dynamic>${escapeHtml(user.display_name)}</td>
                         <td><span class="status-badge ${user.status === "active" ? "success" : "failed"}">${getStatusText(
                           user.status,
                         )}</span></td>
-                        <td>${escapeHtml(getRoleSummary(user.roles))}</td>
+                        <td data-i18n-dynamic>${escapeHtml(getRoleSummary(user.roles))}</td>
                         <td>${formatAuthDate(user.last_login_at)}</td>
                         <td>
                           <div class="module-row-actions">
@@ -546,8 +565,10 @@ function renderRoleAdminPanel() {
                   .map(
                     (role) => `
                       <tr>
-                        <td>${escapeHtml(role.code)}</td>
-                        <td>${escapeHtml(role.name)}${role.is_system ? '<span class="system-tag">系统</span>' : ""}</td>
+                        <td data-i18n-dynamic>${escapeHtml(role.code)}</td>
+                        <td><span data-i18n-dynamic>${escapeHtml(getRoleDisplayName(role))}</span>${
+                          role.is_system ? '<span class="system-tag">系统</span>' : ""
+                        }</td>
                         <td><span class="status-badge ${role.status === "active" ? "success" : "failed"}">${getStatusText(
                           role.status,
                         )}</span></td>

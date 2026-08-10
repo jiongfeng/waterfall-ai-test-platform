@@ -127,7 +127,7 @@ def make_prompt_dependencies(
     )
 
 
-def make_case_dependencies(specs_dir):
+def make_case_dependencies(specs_dir, *, language="zh-CN"):
     return cases.CaseDependencies(
         get_specs_dir=lambda: specs_dir,
         validate_module_name=naming.validate_module_name,
@@ -147,6 +147,7 @@ def make_case_dependencies(specs_dir):
             encoding="utf-8",
             newline="",
         ),
+        get_project_language=lambda: language,
     )
 
 
@@ -444,6 +445,15 @@ class CaseParsingTests(unittest.TestCase):
             ):
                 cases.normalize_case_index_cases(value)
 
+    def test_english_case_index_parsing_errors_are_localized(self):
+        with self.assertRaisesRegex(ValueError, "No JSON object"):
+            cases.extract_case_index("not JSON", language="en")
+        with self.assertRaisesRegex(ValueError, "cases array is empty"):
+            cases.normalize_case_index_cases(
+                {"cases": []},
+                language="en",
+            )
+
 
 class CaseNormalizationParityTests(unittest.TestCase):
     def test_step_normalization_matches_extracted_head_on_random_inputs(self):
@@ -536,6 +546,43 @@ class CaseNormalizationParityTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "缺少 title 或 filename"):
             cases.normalize_case_filename("", "")
 
+    def test_english_case_filename_uses_safe_english_candidates_and_fallback(self):
+        self.assertEqual(
+            cases.normalize_case_filename(
+                "successful-login.md",
+                "Successful Login",
+                language="en",
+            ),
+            "successful-login.md",
+        )
+        self.assertEqual(
+            cases.normalize_case_filename(
+                "../checkout-flow.md",
+                "Checkout Flow",
+                language="en",
+            ),
+            "checkout-flow.md",
+        )
+        self.assertEqual(
+            cases.normalize_case_filename(
+                "登录成功.md",
+                "Successful Login",
+                language="en",
+            ),
+            "Successful Login.md",
+        )
+        self.assertEqual(
+            cases.normalize_case_filename(
+                "测试用例.md",
+                "",
+                index=7,
+                language="en",
+            ),
+            "test-case-007.md",
+        )
+        with self.assertRaisesRegex(ValueError, "missing title or filename"):
+            cases.normalize_case_filename("", "", language="en")
+
     def test_case_markdown_keeps_headings_and_step_expectation_format(self):
         markdown = cases.case_to_markdown(
             "登录模块",
@@ -580,6 +627,43 @@ class CaseNormalizationParityTests(unittest.TestCase):
                 "2. 提交账号密码\n"
                 "   - Expect: 进入首页\n"
                 "   - Expect: 显示用户名\n"
+            ),
+        )
+
+    def test_english_case_markdown_uses_english_labels_and_empty_step_fallback(self):
+        markdown = cases.case_to_markdown(
+            "Login",
+            "case-index.md",
+            {
+                "filename": "successful-login.md",
+                "suite": "Authentication",
+                "description": "Verify a valid account.",
+                "preconditions": ["The account is active."],
+                "steps": [],
+            },
+            language="en",
+        )
+
+        self.assertEqual(
+            markdown,
+            (
+                "# successful-login\n"
+                "\n"
+                "Module: Login\n"
+                "Source: case-index.md\n"
+                "Suite: Authentication\n"
+                "\n"
+                "## Description\n"
+                "\n"
+                "Verify a valid account.\n"
+                "\n"
+                "## Preconditions\n"
+                "\n"
+                "- The account is active.\n"
+                "\n"
+                "## Steps\n"
+                "\n"
+                "1. Add test steps.\n"
             ),
         )
 
@@ -646,11 +730,6 @@ class CaseSplittingTests(unittest.TestCase):
                         "steps": ["提交有效账号"],
                     },
                     {
-                        "title": "重复标题",
-                        "filename": "登录成功.md",
-                        "steps": [],
-                    },
-                    {
                         "title": "源文件",
                         "filename": "用例索引.md",
                         "steps": [],
@@ -668,7 +747,7 @@ class CaseSplittingTests(unittest.TestCase):
             )
             self.assertEqual(
                 [item["filename"] for item in result["skipped"]],
-                ["登录成功.md", "用例索引.md"],
+                ["用例索引.md"],
             )
             self.assertEqual(
                 [item["filename"] for item in result["reused"]],
@@ -688,6 +767,119 @@ class CaseSplittingTests(unittest.TestCase):
                 existing.read_text(encoding="utf-8"),
                 existing_markdown,
             )
+
+    def test_english_split_writes_english_filenames_and_markdown_headings(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            specs_dir = Path(temporary_directory) / "specs"
+            dependencies = make_case_dependencies(
+                specs_dir,
+                language="en",
+            )
+
+            result = cases.split_case_index_cases(
+                "Login",
+                "case-index.md",
+                [
+                    {
+                        "title": "Successful Login",
+                        "filename": "successful-login.md",
+                        "description": "Verify a valid account.",
+                        "preconditions": ["The account is active."],
+                        "steps": ["Submit valid credentials."],
+                    },
+                    {
+                        "title": "Locked Account",
+                        "filename": "锁定账号.md",
+                        "steps": [],
+                    },
+                ],
+                dependencies,
+            )
+
+            self.assertEqual(
+                [item["filename"] for item in result["created"]],
+                ["successful-login.md", "Locked Account.md"],
+            )
+            for payload in result["created"]:
+                markdown = Path(payload["path"]).read_text(encoding="utf-8")
+                self.assertIn("Module: Login", markdown)
+                self.assertIn("Source: case-index.md", markdown)
+                self.assertIn("## Steps", markdown)
+                self.assertNotIn("模块：", markdown)
+                self.assertNotIn("来源：", markdown)
+                self.assertNotIn("## 前置条件", markdown)
+
+    def test_english_split_localizes_validation_and_conflict_reasons(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            specs_dir = Path(temporary_directory) / "specs"
+            dependencies = make_case_dependencies(
+                specs_dir,
+                language="en",
+            )
+            module_dir = specs_dir / "Login"
+            module_dir.mkdir(parents=True)
+            source = module_dir / "case-index.md"
+            source.write_text("index", encoding="utf-8")
+            existing = module_dir / "successful-login.md"
+            existing.write_text("Maintained manually.", encoding="utf-8")
+            valid_case = {
+                "title": "Successful Login",
+                "filename": existing.name,
+                "steps": [],
+            }
+
+            result = cases.split_case_index_cases(
+                "Login",
+                source.name,
+                [
+                    valid_case,
+                    {**valid_case, "filename": source.name},
+                    valid_case,
+                ],
+                dependencies,
+                source_plan_file=source,
+            )
+
+            self.assertEqual(result["reason_code"], "case_content_conflict")
+            self.assertEqual(
+                result["conflicts"][0]["reason"],
+                "File already exists.",
+            )
+            self.assertIn(
+                "Index and internal filenames are not split.",
+                [item["reason"] for item in result["skipped"]],
+            )
+
+            with self.assertRaisesRegex(ValueError, "valid case to split"):
+                cases.split_case_index_cases(
+                    "Login",
+                    source.name,
+                    [None, "invalid"],
+                    dependencies,
+                )
+
+            with self.assertRaisesRegex(ValueError, "platform limit of 25"):
+                cases.split_case_index_cases(
+                    "Login",
+                    source.name,
+                    [
+                        {
+                            "title": f"Case {index}",
+                            "filename": f"case-{index}.md",
+                            "steps": [],
+                        }
+                        for index in range(26)
+                    ],
+                    dependencies,
+                )
+
+            source.write_text("not JSON", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "No JSON object"):
+                cases.split_case_index_plan(
+                    "Login",
+                    source,
+                    dependencies,
+                )
 
     def test_late_invalid_case_is_rejected_before_any_case_file_is_written(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -843,6 +1035,119 @@ class CaseSplittingTests(unittest.TestCase):
                 specs_dir / "登录模块",
             )
             self.assertFalse((specs_dir / "越界路径.md").exists())
+
+    def test_normalized_duplicate_is_an_atomic_conflict_and_preserves_source(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            specs_dir = Path(temporary_directory) / "specs"
+            dependencies = make_case_dependencies(
+                specs_dir,
+                language="en",
+            )
+            module_dir = specs_dir / "Checkout"
+            module_dir.mkdir(parents=True)
+            source = module_dir / "case-index.md"
+            source_content = "source remains recoverable"
+            source.write_text(source_content, encoding="utf-8")
+
+            result = cases.split_case_index_cases(
+                "Checkout",
+                source.name,
+                [
+                    {
+                        "title": "Checkout through an unsafe path",
+                        "filename": "../checkout-flow.md",
+                        "steps": [],
+                    },
+                    {
+                        "title": "Checkout through a safe path",
+                        "filename": "checkout-flow.md",
+                        "steps": [],
+                    },
+                    {
+                        "title": "Review Inventory",
+                        "filename": "review-inventory.md",
+                        "steps": [],
+                    },
+                ],
+                dependencies,
+                source_plan_file=source,
+            )
+
+            self.assertEqual(result["created"], [])
+            self.assertEqual(result["reason_code"], "case_content_conflict")
+            self.assertEqual(
+                result["conflicts"],
+                [
+                    {
+                        "filename": "checkout-flow.md",
+                        "reason": (
+                            "Multiple cases resolve to the same filename."
+                        ),
+                        "reason_code": "duplicate_filename",
+                    }
+                ],
+            )
+            self.assertEqual(source.read_text(encoding="utf-8"), source_content)
+            self.assertFalse((module_dir / "checkout-flow.md").exists())
+            self.assertFalse((module_dir / "review-inventory.md").exists())
+
+    def test_filesystem_equivalent_names_are_an_atomic_conflict(self):
+        scenarios = (
+            (
+                "en",
+                "Checkout",
+                "case-index.md",
+                "Login.md",
+                "login.md",
+                "Review Inventory.md",
+            ),
+            (
+                "zh-CN",
+                "登录模块",
+                "用例索引.md",
+                "ガ登录.md",
+                "カ\u3099登录.md",
+                "复核库存.md",
+            ),
+        )
+        for language, module, source_name, first, second, independent in scenarios:
+            with self.subTest(language=language), tempfile.TemporaryDirectory() as directory:
+                specs_dir = Path(directory) / "specs"
+                dependencies = make_case_dependencies(
+                    specs_dir,
+                    language=language,
+                )
+                module_dir = specs_dir / module
+                module_dir.mkdir(parents=True)
+                source = module_dir / source_name
+                source_content = "source remains recoverable"
+                source.write_text(source_content, encoding="utf-8")
+
+                result = cases.split_case_index_cases(
+                    module,
+                    source.name,
+                    [
+                        {"title": "First", "filename": first, "steps": []},
+                        {"title": "Second", "filename": second, "steps": []},
+                        {
+                            "title": "Independent",
+                            "filename": independent,
+                            "steps": [],
+                        },
+                    ],
+                    dependencies,
+                    source_plan_file=source,
+                )
+
+                self.assertEqual(result["created"], [])
+                self.assertEqual(result["reason_code"], "case_content_conflict")
+                self.assertEqual(len(result["conflicts"]), 1)
+                self.assertEqual(
+                    result["conflicts"][0]["reason_code"],
+                    "duplicate_filename",
+                )
+                self.assertEqual(source.read_text(encoding="utf-8"), source_content)
+                self.assertFalse((module_dir / independent).exists())
 
     def test_split_plan_reads_json_through_the_injected_dependency(self):
         with tempfile.TemporaryDirectory() as temporary_directory:

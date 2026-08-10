@@ -62,6 +62,93 @@ class PlanCompletionProbeTests(unittest.TestCase):
             self.assertEqual(probe.cases[0]["filename"], "登录成功.md")
             self.assertEqual(probe.last_error, "")
 
+    def test_english_plan_completes_with_english_case_filenames(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "case-index.md"
+            clock = FakeClock()
+            probe = PlanCompletionProbe(
+                target,
+                clock=clock,
+                language="en",
+            )
+            target.write_text(
+                plan_markdown(
+                    [
+                        valid_case(
+                            "Successful Login",
+                            "successful-login.md",
+                        ),
+                        valid_case(
+                            "Locked Account",
+                            "locked-account.md",
+                        ),
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            self.assertFalse(probe.check())
+            clock.advance(0.5)
+            self.assertTrue(probe.check())
+            self.assertEqual(probe.language, "en")
+            self.assertEqual(
+                [case["filename"] for case in probe.cases],
+                ["successful-login.md", "locked-account.md"],
+            )
+
+    def test_english_normalization_rejects_titles_that_fall_back_to_same_filename(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "case-index.md"
+            clock = FakeClock()
+            probe = PlanCompletionProbe(
+                target,
+                clock=clock,
+                language="en",
+            )
+            target.write_text(
+                plan_markdown(
+                    [
+                        valid_case("Same Title", "中文一.md"),
+                        valid_case("Same Title", "中文二.md"),
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            self.assertFalse(probe.check())
+            clock.advance(0.5)
+            self.assertFalse(probe.check())
+            self.assertIn("unsafe or duplicated", probe.last_error)
+
+    def test_filesystem_equivalent_filenames_never_complete(self):
+        scenarios = (
+            ("en", "case-index.md", "Login.md", "login.md"),
+            ("zh-CN", "用例索引.md", "ガ登录.md", "カ\u3099登录.md"),
+        )
+        for language, target_name, first, second in scenarios:
+            with self.subTest(language=language), tempfile.TemporaryDirectory() as directory:
+                target = Path(directory) / target_name
+                clock = FakeClock()
+                probe = PlanCompletionProbe(
+                    target,
+                    clock=clock,
+                    language=language,
+                )
+                target.write_text(
+                    plan_markdown(
+                        [
+                            valid_case("First", first),
+                            valid_case("Second", second),
+                        ]
+                    ),
+                    encoding="utf-8",
+                )
+
+                self.assertFalse(probe.check())
+                clock.advance(0.5)
+                self.assertFalse(probe.check())
+                self.assertIn("unsafe or duplicated", probe.last_error)
+
     def test_candidate_change_restarts_the_stability_window(self):
         with tempfile.TemporaryDirectory() as directory:
             target = Path(directory) / "用例索引.md"
@@ -103,14 +190,13 @@ class PlanCompletionProbeTests(unittest.TestCase):
             clock.advance(0.5)
             self.assertTrue(probe.check())
 
-    def test_empty_malformed_oversized_and_unsafe_plans_never_complete(self):
+    def test_empty_malformed_and_oversized_plans_never_complete(self):
         invalid_contents = {
             "empty": "",
             "malformed": "```json\n{not-json}\n```",
             "oversized": plan_markdown(
                 [valid_case(f"用例{index}", f"用例{index}.md") for index in range(26)]
             ),
-            "unsafe": plan_markdown([valid_case("越界", "../越界.md")]),
         }
 
         for label, content in invalid_contents.items():
@@ -124,6 +210,32 @@ class PlanCompletionProbeTests(unittest.TestCase):
                 clock.advance(0.5)
                 self.assertFalse(probe.check())
                 self.assertTrue(probe.last_error)
+
+    def test_english_probe_accepts_a_raw_path_that_split_normalizes_safely(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "case-index.md"
+            clock = FakeClock()
+            probe = PlanCompletionProbe(
+                target,
+                clock=clock,
+                language="en",
+            )
+            target.write_text(
+                plan_markdown(
+                    [
+                        valid_case(
+                            "Checkout Flow",
+                            "../checkout-flow.md",
+                        )
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            self.assertFalse(probe.check())
+            clock.advance(0.5)
+            self.assertTrue(probe.check())
+            self.assertEqual(probe.last_error, "")
 
     def test_mixed_or_source_only_case_entries_are_rejected(self):
         invalid_cases = [

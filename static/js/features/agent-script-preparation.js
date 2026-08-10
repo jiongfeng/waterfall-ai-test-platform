@@ -12,11 +12,25 @@ function createAgentScriptPreparationFeature(root, options = {}) {
   }
 
   const getRunId = typeof options.getRunId === "function" ? options.getRunId : () => "";
-  const notify = typeof options.setNotice === "function" ? options.setNotice : setLocalNotice;
+  const noticeTarget = typeof options.setNotice === "function" ? options.setNotice : setLocalNotice;
+  const notify = (message, type = "", dynamic = false) => noticeTarget(message, type, dynamic);
   const onStateChange = typeof options.onStateChange === "function" ? options.onStateChange : () => {};
   const confirmAction = typeof options.confirm === "function" ? options.confirm : (message) => windowRef.confirm(message);
   const encodePathPart = options.encodePathPart || ((value) => encodeURIComponent(String(value || "")));
   const snapshotTimeoutMs = Math.max(1_000, Number(options.snapshotTimeoutMs) || 10_000);
+  const translate = (key, params, fallback) => {
+    const translated = windowRef.WaterfallI18n?.t?.(key, params);
+    return translated && translated !== key ? translated : fallback;
+  };
+  const platformText = (value) => windowRef.WaterfallI18n?.source?.(value) || value;
+  const markDynamic = (element, enabled = true) => windowRef.WaterfallI18n?.markDynamic?.(element, enabled);
+  const setMixedText = (element, parts) => {
+    markDynamic(element, false);
+    element.innerHTML = parts
+      .filter(({ text }) => text !== null && text !== undefined && text !== "")
+      .map(({ text, dynamic = false }) => `<span ${dynamic ? "data-i18n-dynamic" : ""}>${escapeHtml(text)}</span>`)
+      .join('<span aria-hidden="true"> · </span>');
+  };
 
   const preparationElement = (name) => {
     const element = root.querySelector(`[data-script-preparation-id="${name}"]`);
@@ -115,7 +129,12 @@ function createAgentScriptPreparationFeature(root, options = {}) {
     active: false,
     runId: String(options.runId || getRunId() || ""),
     status: "queued",
-    summary: "系统依次完成生成、执行和一次自动修复；待人工脚本不阻塞后续处理。",
+    summary: translate(
+      "scriptPreparation.summary",
+      {},
+      "系统依次完成生成、执行和一次自动修复；待人工脚本不阻塞后续处理。",
+    ),
+    summaryDynamic: false,
     items: [],
     counts: {},
     filter: "all",
@@ -139,7 +158,8 @@ function createAgentScriptPreparationFeature(root, options = {}) {
     editorOpener: null,
   };
 
-  function setLocalNotice(message, type = "") {
+  function setLocalNotice(message, type = "", dynamic = false) {
+    markDynamic(elements.localNotice, dynamic);
     elements.localNotice.textContent = message || "";
     elements.localNotice.className = `notice script-preparation-notice ${type || ""}`.trim();
     elements.localNotice.classList.toggle("hidden", !message);
@@ -184,7 +204,7 @@ function createAgentScriptPreparationFeature(root, options = {}) {
     if (!value) {
       return "-";
     }
-    return new Intl.DateTimeFormat("zh-CN", {
+    return new Intl.DateTimeFormat(windowRef.WaterfallI18n?.getLocale?.() || "zh-CN", {
       month: "2-digit",
       day: "2-digit",
       hour: "2-digit",
@@ -198,7 +218,7 @@ function createAgentScriptPreparationFeature(root, options = {}) {
     if (!value) {
       return "-";
     }
-    return new Intl.DateTimeFormat("zh-CN", {
+    return new Intl.DateTimeFormat(windowRef.WaterfallI18n?.getLocale?.() || "zh-CN", {
       hour: "2-digit",
       minute: "2-digit",
       second: "2-digit",
@@ -214,9 +234,11 @@ function createAgentScriptPreparationFeature(root, options = {}) {
     }
     const seconds = Math.max(0, Math.floor((finish - start) / 1000));
     if (seconds >= 60) {
-      return `${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒`;
+      const minutes = Math.floor(seconds / 60);
+      const rest = seconds % 60;
+      return translate("scriptPreparation.durationMinutesSeconds", { minutes, seconds: rest }, `${minutes} 分 ${rest} 秒`);
     }
-    return `${seconds} 秒`;
+    return translate("scriptPreparation.durationSeconds", { seconds }, `${seconds} 秒`);
   }
 
   function normalizeStatus(value) {
@@ -251,13 +273,13 @@ function createAgentScriptPreparationFeature(root, options = {}) {
     const status = normalizeStatus(value);
     const group = statusGroup(status);
     if (group === "ready") {
-      return { label: "已通过", className: "success" };
+      return { label: platformText("已通过"), className: "success" };
     }
     if (group === "awaiting_human") {
-      return { label: "待人工", className: "script-preparation-warning" };
+      return { label: platformText("待人工"), className: "script-preparation-warning" };
     }
     if (group === "abandoned") {
-      return { label: "已放弃", className: "script-preparation-muted" };
+      return { label: platformText("已放弃"), className: "script-preparation-muted" };
     }
     const labels = {
       queued: "等待中",
@@ -268,7 +290,7 @@ function createAgentScriptPreparationFeature(root, options = {}) {
       editing: "保存中",
       finalizing: "收尾中",
     };
-    return { label: labels[status] || "处理中", className: "running" };
+    return { label: platformText(labels[status] || "处理中"), className: "running" };
   }
 
   function normalizeHistory(history, index) {
@@ -436,9 +458,11 @@ function createAgentScriptPreparationFeature(root, options = {}) {
         : counts.total && counts.ready + counts.abandoned === counts.total
           ? "succeeded"
           : "queued";
+    const rawSummary = firstText(source.summary, source.description, data?.summary);
     return {
       status: normalizeStatus(suppliedStatus || inferredStatus),
-      summary: firstText(source.summary, source.description, data?.summary, state.summary),
+      summary: rawSummary || state.summary,
+      summaryDynamic: Boolean(rawSummary) || state.summaryDynamic,
       counts,
       items,
       updated_at: firstNumber(source.updated_at, data?.updated_at),
@@ -449,6 +473,7 @@ function createAgentScriptPreparationFeature(root, options = {}) {
     const snapshot = normalizeSnapshot(data);
     state.status = snapshot.status;
     state.summary = snapshot.summary;
+    state.summaryDynamic = snapshot.summaryDynamic;
     state.items = snapshot.items;
     state.counts = snapshot.counts;
     const visibleIds = new Set(snapshot.items.map((item) => item.script_item_id));
@@ -496,7 +521,7 @@ function createAgentScriptPreparationFeature(root, options = {}) {
     if (revisionId) {
       return `revision ${revisionId}`;
     }
-    return "暂无候选";
+    return platformText("暂无候选");
   }
 
   function itemDisplayTitle(item) {
@@ -509,14 +534,14 @@ function createAgentScriptPreparationFeature(root, options = {}) {
     }
     const group = statusGroup(item.status);
     if (group === "ready") {
-      return "执行通过";
+      return platformText("执行通过");
     }
     if (group === "abandoned") {
-      return "不进入测试集";
+      return platformText("不进入测试集");
     }
     if (group === "awaiting_human") {
       const action = recommendedAction(item);
-      return action === "regenerate" ? "建议重新生成" : action === "repair" ? "建议重新修复" : "等待人工处理";
+      return platformText(action === "regenerate" ? "建议重新生成" : action === "repair" ? "建议重新修复" : "等待人工处理");
     }
     return statusInfo(item.status).label;
   }
@@ -534,14 +559,14 @@ function createAgentScriptPreparationFeature(root, options = {}) {
   }
 
   function actionLabel(action) {
-    return (
+    return platformText(
       {
         edit: "人工编辑脚本",
         execute: "重新执行当前版本",
         abandon: "忽略脚本",
         regenerate: "重新生成",
         repair: "重新修复",
-      }[action] || action
+      }[action] || action,
     );
   }
 
@@ -566,18 +591,23 @@ function createAgentScriptPreparationFeature(root, options = {}) {
   function actionAvailability(item, action) {
     const capability = item?.capabilities?.[action];
     if (capability === false || capability?.enabled === false) {
-      return { enabled: false, reason: firstText(capability?.reason, "当前状态不支持此操作。") };
+      const rawReason = firstText(capability?.reason);
+      return {
+        enabled: false,
+        reason: rawReason || platformText("当前状态不支持此操作。"),
+        reasonDynamic: Boolean(rawReason),
+      };
     }
     if (["edit", "execute", "repair"].includes(action) && !hasCurrentScript(item)) {
-      return { enabled: false, reason: "尚未生成候选脚本，当前只能重新生成或忽略脚本。" };
+      return { enabled: false, reason: platformText("尚未生成候选脚本，当前只能重新生成或忽略脚本。"), reasonDynamic: false };
     }
     if (action === "repair" && !promptValues(item, action).enabled) {
-      return { enabled: false, reason: "当前没有可用的修复 Prompt。" };
+      return { enabled: false, reason: platformText("当前没有可用的修复 Prompt。"), reasonDynamic: false };
     }
-    return { enabled: true, reason: "" };
+    return { enabled: true, reason: "", reasonDynamic: false };
   }
 
-  function stageLabel(stage, item) {
+  function stageLabelInfo(stage, item) {
     const type = normalizeStatus(stage?.stage_type);
     const inputVersion = firstNumber(
       stage?.input_version,
@@ -611,34 +641,44 @@ function createAgentScriptPreparationFeature(root, options = {}) {
       abandon: "忽略脚本",
       ignored: "忽略脚本",
     };
-    let label = labels[type] || stage?.stage_name || stage?.title || stage?.name || "处理记录";
+    const rawLabel = firstText(stage?.stage_name, stage?.title, stage?.name);
+    let label = labels[type] ? platformText(labels[type]) : rawLabel || platformText("处理记录");
+    let dynamic = Boolean(!labels[type] && rawLabel);
     if (["execute", "execution", "verify", "verification"].includes(type) && inputVersion) {
-      label = `执行 v${inputVersion}`;
+      label = translate("scriptPreparation.stageExecuteVersion", { input: inputVersion }, `执行 v${inputVersion}`);
+      dynamic = false;
     }
     if (["repair", "auto_repair", "rerepair"].includes(type) && inputVersion && outputVersion) {
-      label = `${type === "rerepair" ? "重新修复" : "自动修复"} v${inputVersion} → v${outputVersion}`;
+      const key = type === "rerepair" ? "scriptPreparation.stageRepairAgainVersions" : "scriptPreparation.stageAutoRepairVersions";
+      const fallback = `${type === "rerepair" ? "重新修复" : "自动修复"} v${inputVersion} → v${outputVersion}`;
+      label = translate(key, { input: inputVersion, output: outputVersion }, fallback);
+      dynamic = false;
     }
     if (["generate", "generation", "regenerate"].includes(type) && outputVersion) {
-      label = `${type === "regenerate" ? "重新生成" : "生成脚本"} v${outputVersion}`;
+      const key = type === "regenerate" ? "scriptPreparation.stageRegenerateVersion" : "scriptPreparation.stageGenerateVersion";
+      const fallback = `${type === "regenerate" ? "重新生成" : "生成脚本"} v${outputVersion}`;
+      label = translate(key, { output: outputVersion }, fallback);
+      dynamic = false;
     }
-    return label || itemDisplayTitle(item);
+    if (!label) return { text: itemDisplayTitle(item), dynamic: true };
+    return { text: label, dynamic };
   }
 
   function historyStatusInfo(stage) {
     const status = normalizeStatus(stage?.status);
     if (READY_STATUSES.has(status) || ["completed", "repaired", "generated"].includes(status)) {
-      return { label: "成功", className: "success", marker: "完成" };
+      return { label: platformText("成功"), className: "success", marker: platformText("完成") };
     }
     if (["failed", "blocked", "error"].includes(status)) {
-      return { label: "失败", className: "failed", marker: "失败" };
+      return { label: platformText("失败"), className: "failed", marker: platformText("失败") };
     }
     if (HUMAN_STATUSES.has(status) || HUMAN_HISTORY_TYPES.has(stage?.stage_type)) {
-      return { label: "待人工", className: "pending", marker: "待处理" };
+      return { label: platformText("待人工"), className: "pending", marker: platformText("待处理") };
     }
     if (ABANDONED_STATUSES.has(status)) {
-      return { label: "已放弃", className: "abandoned", marker: "放弃" };
+      return { label: platformText("已放弃"), className: "abandoned", marker: platformText("放弃") };
     }
-    return { label: "进行中", className: "running", marker: "进行中" };
+    return { label: platformText("进行中"), className: "running", marker: platformText("进行中") };
   }
 
   function visibleItems() {
@@ -658,9 +698,17 @@ function createAgentScriptPreparationFeature(root, options = {}) {
 
   function renderStageHeader() {
     const counts = state.counts;
-    elements.stageTitle.textContent = "脚本准备";
-    elements.stageSummary.textContent = state.summary;
-    elements.stageMeta.textContent = state.runId ? `${state.runId} · 脚本准备` : "尚未选择 Agent 任务";
+    const title = translate("scriptPreparation.title", {}, "脚本准备");
+    elements.stageTitle.textContent = title;
+    markDynamic(elements.stageSummary, state.summaryDynamic);
+    elements.stageSummary.textContent = state.summaryDynamic
+      ? state.summary
+      : translate("scriptPreparation.summary", {}, "系统依次完成生成、执行和一次自动修复；待人工脚本不阻塞后续处理。");
+    if (state.runId) setMixedText(elements.stageMeta, [{ text: state.runId, dynamic: true }, { text: title }]);
+    else {
+      markDynamic(elements.stageMeta, false);
+      elements.stageMeta.textContent = platformText("尚未选择 Agent 任务");
+    }
     const info = statusInfo(state.status);
     elements.stageStatus.textContent = info.label;
     elements.stageStatus.className = `status-badge ${info.className}`;
@@ -709,11 +757,19 @@ function createAgentScriptPreparationFeature(root, options = {}) {
     const missingCurrentScript = selectedItems.filter((item) => !hasCurrentScript(item)).length;
     elements.batchHint.textContent = state.selectedIds.size
       ? missingCurrentScript
-        ? `其中 ${missingCurrentScript} 条尚无候选脚本，只能重新生成或忽略`
+        ? translate(
+            "scriptPreparation.batchMissingCandidates",
+            { count: missingCurrentScript },
+            `其中 ${missingCurrentScript} 条尚无候选脚本，只能重新生成或忽略`,
+          )
         : awaitingSelected === state.selectedIds.size
-          ? "仅选中待人工脚本"
-          : `其中待人工 ${awaitingSelected} 条`
-      : "选择脚本后执行批量操作";
+          ? platformText("仅选中待人工脚本")
+          : translate(
+              "scriptPreparation.batchAwaitingCount",
+              { count: awaitingSelected },
+              `其中待人工 ${awaitingSelected} 条`,
+            )
+      : platformText("选择脚本后执行批量操作");
     elements.batchMenuToggle.disabled = !state.selectedIds.size || state.actionPending;
     elements.clearSelection.disabled = !state.selectedIds.size || state.actionPending;
     [elements.batchExecute, elements.batchRepair].forEach((button) => {
@@ -739,7 +795,8 @@ function createAgentScriptPreparationFeature(root, options = {}) {
                 type="checkbox"
                 data-script-preparation-action="select-item"
                 data-item-id="${escapeHtml(item.script_item_id)}"
-                aria-label="选择 ${escapeHtml(itemDisplayTitle(item))}"
+                data-i18n-dynamic-attributes
+                aria-label="${translate("action.select", {}, "选择")} ${escapeHtml(itemDisplayTitle(item))}"
                 ${selected ? "checked" : ""}
                 ${state.actionPending ? "disabled" : ""}
               />
@@ -747,15 +804,15 @@ function createAgentScriptPreparationFeature(root, options = {}) {
             <td>
               <button class="script-preparation-name" type="button" data-script-preparation-action="open-detail" data-item-id="${escapeHtml(
                 item.script_item_id,
-              )}">${escapeHtml(itemDisplayTitle(item))}</button>
-              <small title="${escapeHtml(item.path || item.filename || item.plan_filename)}">${escapeHtml(
+              )}" data-i18n-dynamic>${escapeHtml(itemDisplayTitle(item))}</button>
+              <small ${item.path || item.filename || item.plan_filename ? "data-i18n-dynamic" : ""} title="${escapeHtml(item.path || item.filename || item.plan_filename)}">${escapeHtml(
                 item.path || item.filename || item.plan_filename || "自动准备队列",
               )}</small>
             </td>
-            <td title="${escapeHtml(item.module_name || "-")}">${escapeHtml(item.module_name || "-")}</td>
+            <td data-i18n-dynamic title="${escapeHtml(item.module_name || "-")}">${escapeHtml(item.module_name || "-")}</td>
             <td><span class="status-badge ${escapeHtml(info.className)}">${escapeHtml(info.label)}</span></td>
             <td>${escapeHtml(versionLabel(item))}</td>
-            <td title="${escapeHtml(itemProgressText(item))}">${escapeHtml(itemProgressText(item))}</td>
+            <td ${item.progress_message ? "data-i18n-dynamic" : ""} title="${escapeHtml(itemProgressText(item))}">${escapeHtml(itemProgressText(item))}</td>
             <td>${escapeHtml(formatDateTime(item.updated_at))}</td>
             <td><button class="script-preparation-detail-link" type="button" data-script-preparation-action="open-detail" data-item-id="${escapeHtml(
               item.script_item_id,
@@ -804,13 +861,16 @@ function createAgentScriptPreparationFeature(root, options = {}) {
     elements.historyList.innerHTML = item.history
       .map((stage) => {
         const info = historyStatusInfo(stage);
+        const labelInfo = stageLabelInfo(stage, item);
         const active = stage.history_id === state.selectedHistoryId;
         const duration = formatDuration(stage.started_at, stage.finished_at);
         const version = stage.output_version || stage.version_no;
         const meta = [
           formatClock(stage.finished_at || stage.started_at),
           info.label,
-          version ? `产出 v${version}` : "",
+          version
+            ? translate("scriptPreparation.historyOutputVersion", { version }, `产出 v${version}`)
+            : "",
           duration,
         ]
           .filter((entry) => entry && entry !== "-")
@@ -825,7 +885,7 @@ function createAgentScriptPreparationFeature(root, options = {}) {
           >
             <span class="script-preparation-history-rail" aria-hidden="true"><span></span></span>
             <span class="script-preparation-history-copy">
-              <strong>${escapeHtml(stageLabel(stage, item))}</strong>
+              <strong ${labelInfo.dynamic ? "data-i18n-dynamic" : ""}>${escapeHtml(labelInfo.text)}</strong>
               <small>${escapeHtml(meta || info.label)}</small>
             </span>
           </button>
@@ -843,10 +903,14 @@ function createAgentScriptPreparationFeature(root, options = {}) {
     const action = recommendedAction(item);
     const failed = analysisFailed(item);
     const actionText = action === "regenerate"
-      ? "重新生成完整脚本"
+      ? platformText("重新生成完整脚本")
       : action === "repair"
-        ? `重新修复当前候选 ${versionLabel(item)}`
-        : "暂无有效推荐";
+        ? translate(
+            "scriptPreparation.analysisRepairCurrentCandidate",
+            { version: versionLabel(item) },
+            `重新修复当前候选 ${versionLabel(item)}`,
+          )
+        : platformText("暂无有效推荐");
     const summary = firstText(
       analysis.summary,
       analysis.root_cause,
@@ -861,11 +925,11 @@ function createAgentScriptPreparationFeature(root, options = {}) {
       <h3 class="script-preparation-section-title">AI 分析 <span class="status-badge ${failed ? "failed" : "success"}">${failed ? "分析失败" : "分析完成"}</span></h3>
       <div class="script-preparation-analysis-callout ${failed ? "failed" : ""}">
         <span class="script-preparation-analysis-label">AI</span>
-        <div><strong>${failed ? "未形成自动推荐" : `推荐：${escapeHtml(actionText)}`}</strong><p>${escapeHtml(summary)}</p></div>
+        <div><strong>${failed ? platformText("未形成自动推荐") : escapeHtml(translate("scriptPreparation.analysisRecommendation", { action: actionText }, `推荐：${actionText}`))}</strong><p data-i18n-dynamic>${escapeHtml(summary)}</p></div>
       </div>
       <section class="script-preparation-content-card">
         <h4>分析结论</h4>
-        <p>${escapeHtml(firstText(
+        <p data-i18n-dynamic>${escapeHtml(firstText(
           analysis.suggestion,
           typeof analysis.recommendation === "string" ? analysis.recommendation : "",
           analysis.analysis_error,
@@ -876,14 +940,18 @@ function createAgentScriptPreparationFeature(root, options = {}) {
         <h4>关键证据</h4>
         ${
           facts.length || evidence.length
-            ? `<ul>${[...facts, ...evidence].slice(0, 8).map((entry) => `<li>${escapeHtml(entry)}</li>`).join("")}</ul>`
-            : `<p>${escapeHtml(firstText(item.error, "详细证据会随执行记录一并保留。"))}</p>`
+            ? `<ul>${[...facts, ...evidence].slice(0, 8).map((entry) => `<li data-i18n-dynamic>${escapeHtml(entry)}</li>`).join("")}</ul>`
+            : `<p ${item.error ? "data-i18n-dynamic" : ""}>${escapeHtml(firstText(item.error, "详细证据会随执行记录一并保留。"))}</p>`
         }
       </section>
       <section class="script-preparation-content-card">
         <h4>版本依据</h4>
-        <p>分析基于候选 ${escapeHtml(versionLabel(item))} 与最近一次失败执行。脚本或 Prompt 更新后，本建议应重新计算。</p>
-        ${risks.length ? `<ul>${risks.map((entry) => `<li>${escapeHtml(entry)}</li>`).join("")}</ul>` : ""}
+        <p>${escapeHtml(translate(
+          "scriptPreparation.analysisVersionBasis",
+          { version: versionLabel(item) },
+          `分析基于候选 ${versionLabel(item)} 与最近一次失败执行。脚本或 Prompt 更新后，本建议应重新计算。`,
+        ))}</p>
+        ${risks.length ? `<ul>${risks.map((entry) => `<li data-i18n-dynamic>${escapeHtml(entry)}</li>`).join("")}</ul>` : ""}
       </section>
     `;
   }
@@ -899,12 +967,16 @@ function createAgentScriptPreparationFeature(root, options = {}) {
 
   function previewJson(value) {
     const text = JSON.stringify(value, null, 2);
-    return text.length > 6000 ? `${text.slice(0, 6000)}\n... 已截断` : text;
+    const truncated = translate("scriptPreparation.contentTruncated", {}, "... 已截断");
+    return text.length > 6000 ? `${text.slice(0, 6000)}\n${truncated}` : text;
   }
 
   function failureMarkup(item, stage) {
     const detail = stageDetailObject(stage);
+    const rawError = firstText(stage.error, detail.error, detail.error_message, item.error);
     const error = firstText(stage.error, detail.error, detail.error_message, item.error, "本次处理失败。");
+    const rawTitle = firstText(detail.title, detail.failure_step);
+    const labelInfo = stageLabelInfo(stage, item);
     const inputVersion = firstNumber(
       stage.input_version,
       stage.base_version_no,
@@ -913,11 +985,15 @@ function createAgentScriptPreparationFeature(root, options = {}) {
     );
     return `
       <div class="script-preparation-history-notice">
-        <span>你正在查看 ${escapeHtml(formatClock(stage.finished_at || stage.started_at))} 的历史记录，内容只读</span>
+        <span>${escapeHtml(translate(
+          "scriptPreparation.historyReadOnlyAt",
+          { time: formatClock(stage.finished_at || stage.started_at) },
+          `你正在查看 ${formatClock(stage.finished_at || stage.started_at)} 的历史记录，内容只读`,
+        ))}</span>
         <button class="secondary-button" type="button" data-script-preparation-action="return-latest">返回最新</button>
       </div>
-      <h3 class="script-preparation-section-title">${escapeHtml(stageLabel(stage, item))} <span class="status-badge failed">失败</span></h3>
-      <div class="script-preparation-error-callout"><strong>${escapeHtml(firstText(detail.title, detail.failure_step, "脚本处理失败"))}</strong><span>${escapeHtml(
+      <h3 class="script-preparation-section-title"><span ${labelInfo.dynamic ? "data-i18n-dynamic" : ""}>${escapeHtml(labelInfo.text)}</span> <span class="status-badge failed">失败</span></h3>
+      <div class="script-preparation-error-callout"><strong ${rawTitle ? "data-i18n-dynamic" : ""}>${escapeHtml(firstText(detail.title, detail.failure_step, "脚本处理失败"))}</strong><span ${rawError ? "data-i18n-dynamic" : ""}>${escapeHtml(
         error,
       )}</span></div>
       <div class="script-preparation-input-grid">
@@ -948,27 +1024,40 @@ function createAgentScriptPreparationFeature(root, options = {}) {
       stage.version_no,
       item.revision_versions?.[stage.output_revision_id],
     );
+    const labelInfo = stageLabelInfo(stage, item);
+    const rawTriggerSource = firstText(stage.trigger_source, stage.created_by);
+    const detailMessage = firstText(stage.message, stage.summary);
+    const recordedMessage = translate(
+      "scriptPreparation.stageRecorded",
+      { stage: labelInfo.text },
+      `${labelInfo.text}已记录。`,
+    );
+    const promptSeparator = translate(
+      "scriptPreparation.additionalRequirementsSeparator",
+      {},
+      "\n\n补充要求：\n",
+    );
     return `
-      <h3 class="script-preparation-section-title">${escapeHtml(stageLabel(stage, item))} <span class="status-badge ${escapeHtml(
+      <h3 class="script-preparation-section-title"><span ${labelInfo.dynamic ? "data-i18n-dynamic" : ""}>${escapeHtml(labelInfo.text)}</span> <span class="status-badge ${escapeHtml(
         info.className === "failed" ? "failed" : info.className === "success" ? "success" : "running",
       )}">${escapeHtml(info.label)}</span></h3>
       <div class="script-preparation-input-grid">
         <div><span>输入版本</span><strong>${escapeHtml(inputVersion ? `v${inputVersion}` : "-")}</strong></div>
         <div><span>输出版本</span><strong>${escapeHtml(outputVersion ? `v${outputVersion}` : "-")}</strong></div>
-        <div><span>触发来源</span><strong>${escapeHtml(firstText(stage.trigger_source, stage.created_by, "自动流程"))}</strong></div>
+        <div><span>触发来源</span><strong ${rawTriggerSource ? "data-i18n-dynamic" : ""}>${escapeHtml(rawTriggerSource || platformText("自动流程"))}</strong></div>
       </div>
       <section class="script-preparation-content-card">
         <h4>阶段详情</h4>
         ${
           Object.keys(detail).length
             ? `<pre class="script-preparation-code-box">${escapeHtml(previewJson(detail))}</pre>`
-            : `<p>${escapeHtml(firstText(stage.message, stage.summary, `${stageLabel(stage, item)}已记录。`))}</p>`
+            : `<p ${detailMessage || labelInfo.dynamic ? "data-i18n-dynamic" : ""}>${escapeHtml(detailMessage || recordedMessage)}</p>`
         }
       </section>
       ${
         firstText(stage.original_prompt, stage.supplemental_prompt)
-          ? `<section class="script-preparation-content-card"><h4>Prompt 快照</h4><p>${escapeHtml(
-              [stage.original_prompt, stage.supplemental_prompt].filter(Boolean).join("\n\n补充要求：\n"),
+          ? `<section class="script-preparation-content-card"><h4>Prompt 快照</h4><p data-i18n-dynamic>${escapeHtml(
+              [stage.original_prompt, stage.supplemental_prompt].filter(Boolean).join(promptSeparator),
             )}</p></section>`
           : ""
       }
@@ -1018,7 +1107,7 @@ function createAgentScriptPreparationFeature(root, options = {}) {
         <div class="script-preparation-readonly-summary">
           <div><span>处理结果</span><strong>${escapeHtml(info.label)}</strong></div>
           <div><span>输入版本</span><strong>${escapeHtml(inputVersion ? `v${inputVersion}` : "-")}</strong></div>
-          <div><span>触发来源</span><strong>${escapeHtml(firstText(stage?.trigger_source, "自动流程"))}</strong></div>
+          <div><span>触发来源</span><strong ${firstText(stage?.trigger_source) ? "data-i18n-dynamic" : ""}>${escapeHtml(firstText(stage?.trigger_source) || platformText("自动流程"))}</strong></div>
         </div>
         <div class="script-preparation-version-note">只有最新的待人工阶段可以执行人工处理。</div>
         <button class="primary-button script-preparation-block" type="button" data-script-preparation-action="return-latest">返回最新状态</button>
@@ -1047,14 +1136,19 @@ function createAgentScriptPreparationFeature(root, options = {}) {
       ["edit", "execute", "regenerate", "repair", "abandon"].map((action) => [action, actionAvailability(item, action)]),
     );
     const buttonAttributes = (action) => {
-      const reason = controlsPending ? "脚本详情或操作仍在处理中。" : availability[action]?.reason || "";
-      return `${controlsPending || !availability[action]?.enabled ? "disabled" : ""}${reason ? ` title="${escapeHtml(reason)}"` : ""}`;
+      const reason = controlsPending ? platformText("脚本详情或操作仍在处理中。") : availability[action]?.reason || "";
+      const dynamic = !controlsPending && availability[action]?.reasonDynamic;
+      return `${controlsPending || !availability[action]?.enabled ? "disabled" : ""}${reason ? ` ${dynamic ? "data-i18n-dynamic-attributes " : ""}title="${escapeHtml(reason)}"` : ""}`;
     };
     const primaryDecisionButton = recommended
       ? `
         <button class="primary-button script-preparation-block script-preparation-large" type="button" data-script-preparation-action="item-${escapeHtml(
           recommended,
-        )}" ${buttonAttributes(recommended)}>按建议${escapeHtml(actionLabel(recommended))}</button>
+        )}" ${buttonAttributes(recommended)}>${escapeHtml(translate(
+          "scriptPreparation.followRecommendation",
+          { action: actionLabel(recommended) },
+          `按建议${actionLabel(recommended)}`,
+        ))}</button>
       `
       : "";
     const alternativeDecisionButtons = recommended
@@ -1071,8 +1165,12 @@ function createAgentScriptPreparationFeature(root, options = {}) {
       ${
         recommended
           ? `<section class="script-preparation-prompt-card">
-              <header><span>${recommended === "repair" ? "重新修复" : "重新生成"}补充 Prompt</span><span class="status-badge running">AI 预生成</span></header>
-              <p>${escapeHtml(supplemental)}</p>
+              <header><span>${escapeHtml(translate(
+                "scriptPreparation.supplementalPromptTitle",
+                { action: actionLabel(recommended) },
+                `${actionLabel(recommended)}补充 Prompt`,
+              ))}</span><span class="status-badge running">AI 预生成</span></header>
+              <p data-i18n-dynamic>${escapeHtml(supplemental)}</p>
             </section>`
           : `<div class="script-preparation-version-note">AI 未形成有效推荐，请根据失败详情人工选择操作。</div>`
       }
@@ -1097,14 +1195,28 @@ function createAgentScriptPreparationFeature(root, options = {}) {
       return;
     }
     const info = statusInfo(item.status);
-    elements.detailMeta.textContent = ["脚本准备", item.case_id, item.module_name].filter(Boolean).join(" · ");
-    elements.detailTitle.textContent = item.display_name || item.filename || "脚本详情";
+    setMixedText(elements.detailMeta, [
+      { text: translate("scriptPreparation.title", {}, "脚本准备") },
+      { text: item.case_id, dynamic: true },
+      { text: item.module_name, dynamic: true },
+    ]);
+    const detailTitle = item.display_name || item.filename;
+    windowRef.WaterfallI18n?.markDynamic?.(elements.detailTitle, Boolean(detailTitle));
+    elements.detailTitle.textContent = detailTitle || platformText("脚本详情");
+    const currentVersion = versionLabel(item);
+    const lastVerifiedVersion = item.last_verified_version ? `v${item.last_verified_version}` : platformText("无");
     elements.detailBadges.innerHTML = `
       <span class="status-badge ${escapeHtml(info.className)}">${escapeHtml(info.label)}</span>
-      <span class="status-badge script-preparation-muted">当前候选 ${escapeHtml(versionLabel(item))}</span>
-      <span class="status-badge script-preparation-muted">最后验证成功版本：${escapeHtml(
-        item.last_verified_version ? `v${item.last_verified_version}` : "无",
-      )}</span>
+      <span class="status-badge script-preparation-muted">${escapeHtml(translate(
+        "scriptPreparation.currentCandidate",
+        { version: currentVersion },
+        `当前候选 ${currentVersion}`,
+      ))}</span>
+      <span class="status-badge script-preparation-muted">${escapeHtml(translate(
+        "scriptPreparation.lastVerifiedVersion",
+        { version: lastVerifiedVersion },
+        `最后验证成功版本：${lastVerifiedVersion}`,
+      ))}</span>
     `;
     renderHistory();
     renderDetailContent();
@@ -1129,9 +1241,22 @@ function createAgentScriptPreparationFeature(root, options = {}) {
     elements.editorSave.classList.toggle("hidden", !editingScript);
     elements.editorSaveExecute.classList.toggle("hidden", !editingScript);
     elements.editorConfirm.classList.toggle("hidden", editingScript);
-    elements.editorMeta.textContent = `脚本准备 · ${itemDisplayTitle(item)}`;
-    elements.editorBaseline.textContent = `候选 ${versionLabel(item)}`;
-    elements.editorTarget.textContent = item.current_version ? `候选 v${item.current_version + 1}` : "新候选版本";
+    setMixedText(elements.editorMeta, [
+      { text: translate("scriptPreparation.title", {}, "脚本准备") },
+      { text: itemDisplayTitle(item), dynamic: true },
+    ]);
+    elements.editorBaseline.textContent = translate(
+      "scriptPreparation.candidateVersion",
+      { version: versionLabel(item) },
+      `候选 ${versionLabel(item)}`,
+    );
+    elements.editorTarget.textContent = item.current_version
+      ? translate(
+          "scriptPreparation.nextCandidateVersion",
+          { version: item.current_version + 1 },
+          `候选 v${item.current_version + 1}`,
+        )
+      : platformText("新候选版本");
     if (editingScript) {
       elements.editorTitle.textContent = "人工编辑脚本";
       elements.editorDescription.textContent = "保存会创建新候选版本；选择保存并执行后重新进入自动验证流程。";
@@ -1216,7 +1341,7 @@ function createAgentScriptPreparationFeature(root, options = {}) {
         data = await requestJson(snapshotUrl(), { signal: controller.signal });
       } catch (error) {
         if (controller.signal.aborted) {
-          throw new Error("脚本准备进度读取超时，请稍后重试。", { cause: error });
+          throw new Error(platformText("脚本准备进度读取超时，请稍后重试。"), { cause: error });
         }
         throw error;
       } finally {
@@ -1232,9 +1357,14 @@ function createAgentScriptPreparationFeature(root, options = {}) {
         return null;
       }
       state.snapshotError = String(error?.message || error || "");
-      const message = "脚本准备进度暂时无法读取，已停止等待。请稍后重试。";
+      const message = translate(
+        "scriptPreparation.snapshotUnavailable",
+        {},
+        "脚本准备进度暂时无法读取，已停止等待。请稍后重试。",
+      );
       state.summary = message;
-      setLocalNotice(`${message}${state.snapshotError ? ` ${state.snapshotError}` : ""}`, "error");
+      state.summaryDynamic = false;
+      setLocalNotice(`${message}${state.snapshotError ? ` ${state.snapshotError}` : ""}`, "error", Boolean(state.snapshotError));
       return null;
     } finally {
       if (requestId === state.snapshotRequestId) {
@@ -1295,7 +1425,8 @@ function createAgentScriptPreparationFeature(root, options = {}) {
         windowRef.requestAnimationFrame?.(() => elements.detailClose.focus());
       }
     } catch (error) {
-      notify(error.message || "读取脚本详情失败。", "error");
+      const rawError = firstText(error?.message);
+      notify(rawError || platformText("读取脚本详情失败。"), "error", Boolean(rawError));
     }
   }
 
@@ -1337,7 +1468,7 @@ function createAgentScriptPreparationFeature(root, options = {}) {
     }
     const availability = actionAvailability(state.openItem, mode);
     if (!availability.enabled) {
-      notify(availability.reason, "error");
+      notify(availability.reason, "error", availability.reasonDynamic);
       return;
     }
     const prompts = promptValues(state.openItem, mode);
@@ -1415,12 +1546,16 @@ function createAgentScriptPreparationFeature(root, options = {}) {
     if (!["edit", "execute", "abandon", "regenerate", "repair"].includes(action)) {
       throw new Error("不支持的脚本准备操作。");
     }
-    if (action === "abandon" && !confirmAction(`确定忽略“${itemDisplayTitle(item)}”吗？该脚本不会进入测试集。`)) {
+    if (action === "abandon" && !confirmAction(translate(
+      "scriptPreparation.confirmAbandonItem",
+      { title: itemDisplayTitle(item) },
+      `确定忽略“${itemDisplayTitle(item)}”吗？该脚本不会进入测试集。`,
+    ))) {
       return null;
     }
     const actionCapability = actionAvailability(item, action);
     if (!actionCapability.enabled) {
-      notify(actionCapability.reason, "error");
+      notify(actionCapability.reason, "error", actionCapability.reasonDynamic);
       return null;
     }
     const previousHistoryId = state.selectedHistoryId;
@@ -1445,7 +1580,16 @@ function createAgentScriptPreparationFeature(root, options = {}) {
         return data;
       }
       applyActionResponse(data);
-      notify(data?.message || `${actionLabel(action)}已提交。`, "success");
+      const rawMessage = firstText(data?.message);
+      notify(
+        rawMessage || translate(
+          "scriptPreparation.actionSubmitted",
+          { action: actionLabel(action) },
+          `${actionLabel(action)}已提交。`,
+        ),
+        "success",
+        Boolean(rawMessage),
+      );
       if (state.editorMode) {
         closeEditor();
       }
@@ -1457,7 +1601,16 @@ function createAgentScriptPreparationFeature(root, options = {}) {
       }
       state.selectedHistoryId = previousHistoryId;
       state.followLatestHistory = previousFollowLatest;
-      notify(error.message || `${actionLabel(action)}失败。`, "error");
+      const rawError = firstText(error?.message);
+      notify(
+        rawError || translate(
+          "scriptPreparation.actionFailed",
+          { action: actionLabel(action) },
+          `${actionLabel(action)}失败。`,
+        ),
+        "error",
+        Boolean(rawError),
+      );
       throw error;
     } finally {
       if (requestId === state.actionRequestId && requestRunId === state.runId) {
@@ -1503,7 +1656,11 @@ function createAgentScriptPreparationFeature(root, options = {}) {
     if (!["execute", "abandon", "regenerate", "repair"].includes(action)) {
       throw new Error("不支持的批量脚本准备操作。");
     }
-    if (action === "abandon" && !confirmAction(`确定忽略选中的 ${itemIds.length} 条脚本吗？它们不会进入测试集。`)) {
+    if (action === "abandon" && !confirmAction(translate(
+      "scriptPreparation.confirmAbandonBatch",
+      { count: itemIds.length },
+      `确定忽略选中的 ${itemIds.length} 条脚本吗？它们不会进入测试集。`,
+    ))) {
       return null;
     }
     const requestId = ++state.actionRequestId;
@@ -1538,9 +1695,18 @@ function createAgentScriptPreparationFeature(root, options = {}) {
       applyActionResponse(data);
       const accepted = firstNumber(data?.accepted_count, data?.accepted?.length, itemIds.length);
       const rejected = firstNumber(data?.rejected_count, data?.rejected?.length);
+      const rawMessage = firstText(data?.message);
+      const rejectedText = rejected
+        ? translate("scriptPreparation.batchRejected", { count: rejected }, `，拒绝 ${rejected} 条`)
+        : "";
       notify(
-        data?.message || `批量${actionLabel(action)}已提交：接受 ${accepted} 条${rejected ? `，拒绝 ${rejected} 条` : ""}。`,
+        rawMessage || translate(
+          "scriptPreparation.batchSubmitted",
+          { action: actionLabel(action), accepted, rejected: rejectedText },
+          `批量${actionLabel(action)}已提交：接受 ${accepted} 条${rejectedText}。`,
+        ),
         rejected ? "error" : "success",
+        Boolean(rawMessage),
       );
       state.selectedIds.clear();
       await refresh({ includeDetail: false });
@@ -1549,7 +1715,16 @@ function createAgentScriptPreparationFeature(root, options = {}) {
       if (requestId !== state.actionRequestId || requestRunId !== state.runId) {
         return null;
       }
-      notify(error.message || `批量${actionLabel(action)}失败。`, "error");
+      const rawError = firstText(error?.message);
+      notify(
+        rawError || translate(
+          "scriptPreparation.batchFailed",
+          { action: actionLabel(action) },
+          `批量${actionLabel(action)}失败。`,
+        ),
+        "error",
+        Boolean(rawError),
+      );
       throw error;
     } finally {
       if (requestId === state.actionRequestId && requestRunId === state.runId) {
@@ -1598,7 +1773,8 @@ function createAgentScriptPreparationFeature(root, options = {}) {
     try {
       await loadSnapshot();
     } catch (error) {
-      notify(error.message || "读取脚本准备状态失败。", "error");
+      const rawError = firstText(error?.message);
+      notify(rawError || platformText("读取脚本准备状态失败。"), "error", Boolean(rawError));
     }
   }
 

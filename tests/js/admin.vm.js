@@ -4,7 +4,17 @@ const path = require("path");
 const vm = require("vm");
 
 const appDir = path.resolve(__dirname, "../..");
-const context = { window: {} };
+const context = {
+  window: {
+    WaterfallTranslations: {
+      "zh-CN": { "auth.builtInAdminDisplayName": "管理员" },
+    },
+    WaterfallI18n: {
+      source: (value) => value,
+      t: (key) => (key === "auth.builtInAdminDisplayName" ? "Administrator" : key),
+    },
+  },
+};
 vm.createContext(context);
 vm.runInContext(
   fs.readFileSync(path.join(appDir, "static/js/features/admin.js"), "utf8"),
@@ -163,6 +173,15 @@ const feature = context.window.createAdminFeature({
   assert.strictEqual(elements.currentUserName.textContent, "Alice");
   assert.strictEqual(elements.moduleSearch.placeholder, "搜索模块或计划");
   assert.strictEqual(renderProjectCalls, 1);
+
+  state.auth.user = { username: "admin", display_name: "管理员" };
+  state.auth.isAdmin = true;
+  feature.renderNavigation();
+  assert.strictEqual(elements.currentUserName.textContent, "Administrator");
+  state.auth.user = { username: "alice", display_name: "管理员" };
+  state.auth.isAdmin = false;
+  feature.renderNavigation();
+  assert.strictEqual(elements.currentUserName.textContent, "管理员");
 
   await feature.loadAdminUsers();
   assert.deepStrictEqual(requests.slice(-3), [

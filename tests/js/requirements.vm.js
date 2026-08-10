@@ -17,6 +17,9 @@ const requirementModulesList = {
   querySelector: () => null,
   querySelectorAll: () => [],
 };
+const requirementModuleSummary = { textContent: "" };
+const requirementModuleListSummary = { textContent: "" };
+const requirementModuleSelectionCount = { textContent: "" };
 const state = {
   activeSection: "other",
   isEditing: false,
@@ -70,10 +73,11 @@ const state = {
 };
 const elements = {
   requirementModulesList,
-  requirementModuleListSummary: null,
+  requirementModuleSummary,
+  requirementModuleListSummary,
   requirementModuleActions: null,
   requirementModuleBulkActions: null,
-  requirementModuleSelectionCount: null,
+  requirementModuleSelectionCount,
   requirementModuleBulkToggle: null,
   requirementModuleBulkCancel: null,
   requirementModuleBulkDelete: null,
@@ -131,6 +135,21 @@ const feature = context.window.createRequirementsFeature({
     setInterval: () => 1,
     clearInterval: () => {},
     requestAnimationFrame: (callback) => callback(),
+    WaterfallI18n: {
+      log: (value) => value,
+      t: (key, params = {}) => {
+        const messages = {
+          "requirements.candidateMeta": "{count} candidates · {timestamp}",
+          "requirements.moduleTabCount": "· {count}",
+          "requirements.candidateModuleCount": "Candidate modules: {count}",
+          "requirements.selectedModuleCount": "Selected: {count}",
+        };
+        return Object.entries(params).reduce(
+          (text, [name, value]) => text.replaceAll(`{${name}}`, String(value)),
+          messages[key] || key,
+        );
+      },
+    },
   },
   fetch: async () => {
     throw new Error("The focused VM paths must not issue fetch");
@@ -151,7 +170,8 @@ const feature = context.window.createRequirementsFeature({
   formatTimestampMs: String,
   isPlainObject: (value) =>
     Boolean(value && typeof value === "object" && !Array.isArray(value)),
-  getChinesePlanFilenameFromName: () => "测试计划.md",
+  getPlanFilenameForProjectLanguage: (planName, moduleName, fallbackStem) =>
+    `${planName || fallbackStem || moduleName}.md`,
   normalizeRequirementPlanGenerationBatch: (value) => value,
   persistRequirementPlanGenerationBatches: () => {
     persistenceCalls += 1;
@@ -206,6 +226,15 @@ const feature = context.window.createRequirementsFeature({
   normalizeRequirement: (value) => (value?.requirement_uid ? value : null),
 });
 
+feature.renderRequirementModuleCounts();
+assert.strictEqual(requirementModuleSummary.textContent, "· 2");
+assert.strictEqual(requirementModuleListSummary.textContent, "Candidate modules: 2");
+assert.strictEqual(requirementModuleSelectionCount.textContent, "Selected: 0");
+assert.strictEqual(
+  feature.requirementText("requirements.candidateMeta", { count: 2, timestamp: "08/10/2026" }, "fallback"),
+  "2 candidates · 08/10/2026",
+);
+
 const payload = feature.getRequirementModulePayloadFromItem({
   ...state.requirements.modules[0],
   status: "generated",
@@ -214,6 +243,14 @@ assert.strictEqual(payload.status, "generated");
 assert.deepStrictEqual(JSON.parse(JSON.stringify(payload.test_points)), [
   "登录成功",
 ]);
+assert.strictEqual(
+  feature.getRequirementModulePlanTargetPath({
+    module_name: "Login and Authentication",
+    plan_name: "login-case-index",
+  }),
+  "specs/Login and Authentication/login-case-index.md",
+  "English batch target paths must use the same project-language filename policy as the backend.",
+);
 
 feature.mergeRequirementModuleUpdate({
   module_uid: "module-1",
@@ -267,6 +304,9 @@ assert.deepStrictEqual(
       data: {
         ok: true,
         plan_filename: "购物车.md",
+        plans: [{ plan_filename: "cart-add-item.md" }],
+        split: { created: [{ filename: "cart-add-item.md" }] },
+        deleted_source: { plan_filename: "购物车.md" },
         requirement_module: {
           module_uid: "module-2",
           module_name: "购物车结算",
@@ -279,6 +319,10 @@ assert.deepStrictEqual(
     state.requirements.modules[0],
   );
   assert.strictEqual(batchState.status, "succeeded");
+  assert.deepStrictEqual(
+    JSON.parse(JSON.stringify(batchState.plans)),
+    [{ plan_filename: "cart-add-item.md" }],
+  );
   assert.strictEqual(state.requirements.modules[0].module_name, "购物车结算");
   assert.strictEqual(
     state.requirements.planGenerationBatches["requirement-1"].items[

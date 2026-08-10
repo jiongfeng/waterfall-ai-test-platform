@@ -55,6 +55,8 @@ function createGenerationFeature(deps) {
     mergeRequirementModuleUpdate,
   } = requirements;
 
+  const localizeGenerationLog = (value) => window.WaterfallI18n?.log(value) || value;
+
 function resetGenerationJobView() {
   state.generation.jobId = null;
   state.generation.isRunning = false;
@@ -75,7 +77,7 @@ function appendPlanJobLog(message) {
   elements.planJobOutput.classList.remove("hidden");
   const current = elements.planJobLogs.textContent;
   const prefix = current && !current.endsWith("\n") ? "\n" : "";
-  elements.planJobLogs.textContent += `${prefix}${message}\n`;
+  elements.planJobLogs.textContent += `${prefix}${localizeGenerationLog(message)}\n`;
   elements.planJobLogs.scrollTop = elements.planJobLogs.scrollHeight;
 }
 
@@ -123,7 +125,7 @@ function renderGenerationTargetPath() {
     : `specs/${moduleName}/${planFilename}`;
 }
 
-function renderGenerationDuration(element, record, runningLabel, finishedLabel) {
+function renderGenerationDuration(element, record) {
   if (!element) {
     return;
   }
@@ -136,15 +138,18 @@ function renderGenerationDuration(element, record, runningLabel, finishedLabel) 
 
   const isRunning = record.status === "running";
   const finishedAt = record.finished_at || (isRunning ? Date.now() : record.updated_at);
-  const label = isRunning ? runningLabel : finishedLabel;
-  element.textContent = `${label}：${formatDuration(finishedAt - record.started_at)}`;
+  const duration = formatDuration(finishedAt - record.started_at);
+  const key = isRunning ? "generation.elapsed" : "generation.duration";
+  const fallback = isRunning ? `生成进行时间：${duration}` : `生成耗时：${duration}`;
+  const translated = window.WaterfallI18n?.t?.(key, { duration });
+  element.textContent = translated && translated !== key ? translated : fallback;
   element.classList.remove("hidden");
 }
 
 function refreshPlanGenerationDuration() {
   const key = getPlanRecordKey();
   const record = key ? state.plans.generationRecords[key] : null;
-  renderGenerationDuration(elements.planRecordDuration, record, "生成进行时间", "生成耗时");
+  renderGenerationDuration(elements.planRecordDuration, record);
 }
 
 function startPlanGenerationDurationTimer() {
@@ -164,7 +169,7 @@ function stopPlanGenerationDurationTimer() {
 function refreshPlanScriptGenerationDuration() {
   const key = getPlanRecordKey();
   const record = key ? state.plans.scriptGenerationRecords[key] : null;
-  renderGenerationDuration(elements.planScriptDuration, record, "生成进行时间", "生成耗时");
+  renderGenerationDuration(elements.planScriptDuration, record);
 }
 
 function startPlanScriptGenerationDurationTimer() {
@@ -598,7 +603,7 @@ function closePlanGenerationModal() {
 
 function renderPlanJob(job) {
   elements.planJobOutput.classList.remove("hidden");
-  elements.planJobLogs.textContent = (job.logs || []).join("\n");
+  elements.planJobLogs.textContent = localizeGenerationLog((job.logs || []).join("\n"));
   elements.planJobLogs.scrollTop = elements.planJobLogs.scrollHeight;
   elements.planJobStatus.className = "job-status";
 
@@ -793,20 +798,7 @@ async function submitPlanGeneration() {
       if (result.requirement_module) {
         mergeRequirementModuleUpdate(result.requirement_module);
       }
-      if (generationMode === PLAN_GENERATION_MODE.MULTIPLE) {
-        if (!Array.isArray(result.plans) || !result.plans.length) {
-          await splitGeneratedPlanCases(resultModule, resultPlanFilename);
-        }
-        await loadPlanModules();
-        await selectPlanModule(resultModule, true);
-      } else {
-        state.plans.selectedModule = resultModule;
-        state.plans.selectedPlanFile = resultPlanFilename;
-        state.plans.activeTab = PLAN_VIEW_TAB.PLAN_GENERATION;
-        persistViewState();
-        await loadPlanModules();
-        await selectPlan(resultModule, resultPlanFilename, true);
-      }
+      await openPlanGenerationResult(result, resultModule, resultPlanFilename, generationMode);
       resetPlanGenerationSource();
       return;
     }
@@ -879,6 +871,11 @@ function handlePlanStreamEvent({ event, data }, previousResult, moduleName, plan
       plan_filename: nextPlanFilename,
       target_path: data.target_path || previousResult.target_path,
       error: data.error || previousResult.error,
+      plans: Array.isArray(data.plans) ? data.plans : previousResult.plans,
+      created: Array.isArray(data.created) ? data.created : previousResult.created,
+      reused: Array.isArray(data.reused) ? data.reused : previousResult.reused,
+      split: data.split || previousResult.split,
+      deleted_source: data.deleted_source || previousResult.deleted_source,
     };
     renderPlanStreamStatus(nextResult.status, nextResult.error);
     setPlanGenerationRecord(moduleName, nextPlanFilename, {
@@ -930,6 +927,11 @@ function handlePlanStreamEvent({ event, data }, previousResult, moduleName, plan
         typeof data.prompt_customized === "boolean" ? data.prompt_customized : previousResult.prompt_customized,
       job_id: data.job_id || previousResult.job_id || "",
       prompt: data.job?.prompt || previousResult.prompt || "",
+      plans: Array.isArray(data.plans) ? data.plans : previousResult.plans,
+      created: Array.isArray(data.created) ? data.created : previousResult.created,
+      reused: Array.isArray(data.reused) ? data.reused : previousResult.reused,
+      split: data.split || previousResult.split,
+      deleted_source: data.deleted_source || previousResult.deleted_source,
     };
     setPlanGenerationRecord(moduleName, nextResult.plan_filename || planFilename, {
       status: nextResult.status,
@@ -945,6 +947,55 @@ function handlePlanStreamEvent({ event, data }, previousResult, moduleName, plan
   }
 
   return previousResult;
+}
+
+function generatedPlanFilenames(result = {}) {
+  const items = [
+    ...(Array.isArray(result.plans) ? result.plans : []),
+    ...(Array.isArray(result.created) ? result.created : []),
+    ...(Array.isArray(result.reused) ? result.reused : []),
+    ...(Array.isArray(result.split?.created) ? result.split.created : []),
+    ...(Array.isArray(result.split?.reused) ? result.split.reused : []),
+  ];
+  return [...new Set(items.map((item) => (
+    typeof item === "string" ? item : item?.plan_filename || item?.filename || ""
+  )).filter(Boolean))];
+}
+
+async function openPlanGenerationResult(result, moduleName, planFilename, generationMode) {
+  if (generationMode === PLAN_GENERATION_MODE.MULTIPLE) {
+    let filenames = generatedPlanFilenames(result);
+    let modulesLoaded = false;
+    if (!filenames.length) {
+      await loadPlanModules();
+      modulesLoaded = true;
+      const listed = state.plans.modules
+        .find((item) => item.name === moduleName)?.plans
+        ?.map((item) => item.filename)
+        .filter(Boolean) || [];
+      if (listed.includes(planFilename)) {
+        filenames = generatedPlanFilenames(await splitGeneratedPlanCases(moduleName, planFilename));
+        await loadPlanModules();
+      } else {
+        filenames = listed;
+      }
+    }
+    if (!modulesLoaded) {
+      await loadPlanModules();
+    }
+    if (filenames.length) {
+      await selectPlan(moduleName, filenames[0], true);
+    } else {
+      await selectPlanModule(moduleName, true);
+    }
+    return;
+  }
+  state.plans.selectedModule = moduleName;
+  state.plans.selectedPlanFile = planFilename;
+  state.plans.activeTab = PLAN_VIEW_TAB.PLAN_GENERATION;
+  persistViewState();
+  await loadPlanModules();
+  await selectPlan(moduleName, planFilename, true);
 }
 
 function resetScriptGenerationView() {
@@ -978,7 +1029,7 @@ function appendScriptJobLog(message) {
   elements.planScriptJobOutput.classList.remove("hidden");
   const current = elements.planScriptJobLogs.textContent;
   const prefix = current && !current.endsWith("\n") ? "\n" : "";
-  elements.planScriptJobLogs.textContent += `${prefix}${message}\n`;
+  elements.planScriptJobLogs.textContent += `${prefix}${localizeGenerationLog(message)}\n`;
   elements.planScriptJobLogs.scrollTop = elements.planScriptJobLogs.scrollHeight;
 }
 
@@ -1330,6 +1381,8 @@ return {
   submitPlanGeneration,
   readPlanGenerationStream,
   handlePlanStreamEvent,
+  generatedPlanFilenames,
+  openPlanGenerationResult,
   resetScriptGenerationView,
   renderScriptPromptFromTemplate,
   getScriptGenerationPrompt,

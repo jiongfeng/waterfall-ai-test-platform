@@ -8,7 +8,11 @@ from pathlib import Path
 import time
 from typing import Callable
 
-from test_plan_viewer.artifacts.naming import validate_plan_filename
+from test_plan_viewer.artifacts.naming import (
+    plan_filename_collision_key,
+    validate_plan_filename,
+)
+from test_plan_viewer.configuration import normalize_project_language
 
 from .cases import extract_case_index, normalize_case_filename, normalize_case_index_cases
 from .prompts import ABSOLUTE_PLAN_MAX_CASES
@@ -43,6 +47,7 @@ class PlanCompletionProbe:
         *,
         stable_interval: float = 0.5,
         max_cases: int = ABSOLUTE_PLAN_MAX_CASES,
+        language: str = "zh-CN",
         clock: Callable[[], float] = time.monotonic,
         read_bytes: Callable[[Path], bytes] | None = None,
     ) -> None:
@@ -54,6 +59,7 @@ class PlanCompletionProbe:
         self.target_file = Path(target_file)
         self.stable_interval = float(stable_interval)
         self.max_cases = int(max_cases)
+        self.language = normalize_project_language(language)
         self._clock = clock
         self._read_bytes = read_bytes or (lambda path: path.read_bytes())
         self.baseline = self._capture_snapshot()
@@ -114,36 +120,50 @@ class PlanCompletionProbe:
         if not content:
             raise ValueError("Plan file is empty.")
         markdown_text = content.decode("utf-8")
-        parsed = extract_case_index(markdown_text)
-        cases = normalize_case_index_cases(parsed)
+        parsed = extract_case_index(
+            markdown_text,
+            language=self.language,
+        )
+        cases = normalize_case_index_cases(
+            parsed,
+            language=self.language,
+        )
         if len(cases) > self.max_cases:
             raise ValueError(
                 f"Plan contains {len(cases)} cases; maximum is {self.max_cases}."
             )
 
-        filenames = set()
+        filename_keys = set()
+        target_key = plan_filename_collision_key(self.target_file.name)
         for index, raw_case in enumerate(cases, start=1):
             if not isinstance(raw_case, dict):
                 raise ValueError(f"cases[{index - 1}] must be an object.")
             title = str(raw_case.get("title") or raw_case.get("name") or "").strip()
             raw_filename = str(raw_case.get("filename") or "").strip()
-            if raw_filename:
-                validate_plan_filename(raw_filename)
-            if raw_filename == self.target_file.name or raw_filename.startswith("_"):
+            if (
+                plan_filename_collision_key(raw_filename) == target_key
+                or raw_filename.startswith("_")
+            ):
                 raise ValueError(
                     f"Case filename is unsafe or duplicated: {raw_filename}"
                 )
-            filename = normalize_case_filename(raw_filename, title, index=index)
+            filename = normalize_case_filename(
+                raw_filename,
+                title,
+                index=index,
+                language=self.language,
+            )
             validate_plan_filename(filename)
+            filename_key = plan_filename_collision_key(filename)
             if (
-                filename == self.target_file.name
+                filename_key == target_key
                 or filename.startswith("_")
-                or filename in filenames
+                or filename_key in filename_keys
             ):
                 raise ValueError(f"Case filename is unsafe or duplicated: {filename}")
-            filenames.add(filename)
+            filename_keys.add(filename_key)
 
-        if not filenames:
+        if not filename_keys:
             raise ValueError("Plan does not contain a usable case filename.")
         return cases
 

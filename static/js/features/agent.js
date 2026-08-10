@@ -229,8 +229,8 @@ function resetAgentCoveragePrompt() {
   renderAgentCoverageState();
 }
 
-function setNotice(message, type = "") {
-  elements.notice.textContent = message || "";
+function setNotice(message, type = "", dynamic = false) {
+  setAgentDynamicText(elements.notice, dynamic ? message || "" : localizeAgentText(message || ""), dynamic);
   elements.notice.setAttribute("role", type === "error" ? "alert" : "status");
   elements.notice.className = `notice ${type || ""}`.trim();
   elements.notice.classList.toggle("hidden", !message);
@@ -266,7 +266,7 @@ function formatJsonPreview(value) {
   if (text.length <= MAX_DETAIL_JSON_CHARS) {
     return text;
   }
-  return `${text.slice(0, MAX_DETAIL_JSON_CHARS)}\n... 已截断，完整内容请查看日志下载或数据库记录。`;
+  return `${text.slice(0, MAX_DETAIL_JSON_CHARS)}\n${localizeAgentText("... 已截断，完整内容请查看日志下载或数据库记录。")}`;
 }
 
 function formatClock(timestamp) {
@@ -274,7 +274,7 @@ function formatClock(timestamp) {
   if (!value) {
     return "";
   }
-  return new Intl.DateTimeFormat("zh-CN", {
+  return new Intl.DateTimeFormat(window.WaterfallI18n?.getLocale?.() || "en", {
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit",
@@ -287,7 +287,7 @@ function formatDateTime(timestamp) {
   if (!value) {
     return "-";
   }
-  return new Intl.DateTimeFormat("zh-CN", {
+  return new Intl.DateTimeFormat(window.WaterfallI18n?.getLocale?.() || "en", {
     month: "2-digit",
     day: "2-digit",
     hour: "2-digit",
@@ -319,7 +319,7 @@ function formatDuration(startedAt, finishedAt, status) {
 }
 
 function statusText(status) {
-  return (
+  return localizeAgentText(
     {
       queued: "等待中",
       running: "运行中",
@@ -431,7 +431,7 @@ function retryFlowTitle(flow) {
 }
 
 function retryPhaseText(phase) {
-  return (
+  return localizeAgentText(
     {
       queued: "等待开始",
       generating: "正在重新生成",
@@ -445,25 +445,25 @@ function retryPhaseText(phase) {
 
 function retryFlowProgressText(flow) {
   if (!flow) {
-    return "等待重试";
+    return localizeAgentText("等待重试");
   }
   if (flow.progress_message) {
-    return flow.progress_message;
+    return localizeAgentText(flow.progress_message);
   }
   if (flow.status === "succeeded") {
-    return "已恢复并验证通过";
+    return localizeAgentText("已恢复并验证通过");
   }
   if (flow.status === "failed") {
-    return "重试并验证失败";
+    return localizeAgentText("重试并验证失败");
   }
   if (flow.status === "blocked") {
-    return "执行受阻，等待处理";
+    return localizeAgentText("执行受阻，等待处理");
   }
   if (flow.status === "cancelling") {
-    return "正在停止重试";
+    return localizeAgentText("正在停止重试");
   }
   if (flow.status === "cancelled") {
-    return "重试已停止";
+    return localizeAgentText("重试已停止");
   }
   return retryPhaseText(flow.current_phase);
 }
@@ -616,7 +616,7 @@ function getStepInput(stepKey) {
 }
 
 function agentStepLabel(stepKey) {
-  return (AGENT_STEPS.find(([key]) => key === stepKey) || [stepKey, stepKey])[1];
+  return localizeAgentText((AGENT_STEPS.find(([key]) => key === stepKey) || [stepKey, stepKey])[1]);
 }
 
 function countSummary(counts) {
@@ -649,7 +649,7 @@ function countSummary(counts) {
   };
   return Object.entries(counts)
     .filter(([, value]) => value !== null && value !== undefined && value !== "")
-    .map(([key, value]) => `<span class="count-pill">${escapeHtml(labels[key] || key)} ${escapeHtml(value)}</span>`)
+    .map(([key, value]) => `<span class="count-pill">${escapeHtml(localizeAgentText(labels[key] || key))} ${escapeHtml(value)}</span>`)
     .join("");
 }
 
@@ -657,7 +657,7 @@ function progressText(stepKey, step) {
   const counts = step?.counts || {};
   const output = step?.output || {};
   if (stepKey === "generate_plans" && (counts.modules || counts.generated || counts.failed)) {
-    return `${Number(counts.generated || 0)} / ${Number(counts.modules || counts.generated || 0)}`;
+    return agentPlanModuleProgressText(step);
   }
   if (stepKey === "prepare_scripts" && counts.total) {
     return `${Number(counts.ready || 0) + Number(counts.abandoned || 0)} / ${Number(counts.total)}`;
@@ -701,10 +701,10 @@ function renderRunList() {
   elements.currentRunMain.setAttribute("aria-expanded", String(state.runMenuOpen));
   elements.runDropdown.classList.toggle("hidden", !state.runMenuOpen);
   if (!run) {
-    elements.currentRunTitle.textContent = "选择任务";
+    setAgentDynamicText(elements.currentRunTitle, "选择任务", false);
     setBadge(elements.currentRunStatus, "idle");
   } else {
-    elements.currentRunTitle.textContent = run.requirement_title || run.run_id;
+    setAgentDynamicText(elements.currentRunTitle, run.requirement_title || run.run_id);
     setBadge(elements.currentRunStatus, selectedRetryCount ? "retrying" : run.status);
   }
 
@@ -743,8 +743,10 @@ function renderRunList() {
             const retrying = runHasActiveRetrySummary(item);
             return `
             <button class="run-item ${item.run_id === state.selectedRunId ? "active" : ""}" type="button" data-run-id="${escapeHtml(item.run_id)}">
-              <span class="run-item-title">${escapeHtml(item.requirement_title || item.run_id)}</span>
-              <span class="run-item-meta">${escapeHtml(agentStepLabel(item.current_step))} · ${retrying ? "有脚本正在重试 · " : ""}${escapeHtml(agentCoverageMeta(item))} · ${formatDateTime(item.created_at)}</span>
+              <span class="run-item-title" data-i18n-dynamic>${escapeHtml(item.requirement_title || item.run_id)}</span>
+              <span class="run-item-meta">${escapeHtml(agentStepLabel(item.current_step))} · ${
+                retrying ? escapeHtml(localizeAgentText("有脚本正在重试 · ")) : ""
+              }${escapeHtml(localizeAgentText(agentCoverageMeta(item)))} · ${formatDateTime(item.created_at)}</span>
               <span class="status-badge ${escapeHtml(retrying ? "retrying" : item.status)}">${escapeHtml(statusText(retrying ? "retrying" : item.status))}</span>
             </button>
           `;
@@ -781,23 +783,23 @@ function retryTimelineMeta(stepKey) {
   const phases = flows.map((flow) => flow.current_phase);
   if (stepKey === "generate_scripts") {
     const generating = phases.filter((phase) => ["queued", "generating"].includes(phase)).length;
-    return generating ? `${generating} 项重试生成中` : `${flows.length} 项已重新生成`;
+    return localizeAgentText(generating ? `${generating} 项重试生成中` : `${flows.length} 项已重新生成`);
   }
   if (stepKey === "execute_scripts") {
     const executing = phases.filter((phase) => phase === "executing").length;
     const advanced = phases.filter((phase) => ["repairing", "verifying"].includes(phase)).length;
     if (executing) {
-      return `${executing} 项单独执行中`;
+      return localizeAgentText(`${executing} 项单独执行中`);
     }
-    return advanced ? `${advanced} 项执行后待处理` : "";
+    return advanced ? localizeAgentText(`${advanced} 项执行后待处理`) : "";
   }
   if (stepKey === "repair_scripts") {
     const repairing = phases.filter((phase) => phase === "repairing").length;
     const verifying = phases.filter((phase) => phase === "verifying").length;
     if (repairing) {
-      return `${repairing} 项自动修复中`;
+      return localizeAgentText(`${repairing} 项自动修复中`);
     }
-    return verifying ? `${verifying} 项修复后复验中` : "";
+    return verifying ? localizeAgentText(`${verifying} 项修复后复验中`) : "";
   }
   return "";
 }
@@ -810,10 +812,11 @@ function renderRetryStatusBar() {
     return;
   }
   const flow = flows[0];
-  elements.retryStatusTitle.textContent = flows.length > 1 ? `正在重试并验证 ${flows.length} 个脚本` : "正在重试并验证脚本";
+  elements.retryStatusTitle.textContent = localizeAgentText(flows.length > 1 ? `正在重试并验证 ${flows.length} 个脚本` : "正在重试并验证脚本");
   elements.retryStatusMeta.textContent = `${retryFlowTitle(flow)} · ${retryFlowProgressText(flow)}${
-    flows.length > 1 ? ` · 另有 ${flows.length - 1} 项` : ""
+    flows.length > 1 ? ` · ${localizeAgentText(`另有 ${flows.length - 1} 项`)}` : ""
   }`;
+  window.WaterfallI18n?.markDynamic?.(elements.retryStatusMeta);
   elements.retryStatusView.dataset.retryFlowId = flow.retry_flow_id;
 }
 
@@ -902,7 +905,7 @@ function eventLogText(stepKey, predicate = () => true) {
   return rows
     .map((event) => {
       const payload = event.payload && Object.keys(event.payload).length ? `\n${formatJsonPreview(event.payload)}` : "";
-      return `${formatDateTime(event.created_at)} ${event.event_type}: ${event.message}${payload}`;
+      return `${formatDateTime(event.created_at)} ${event.event_type}: ${localizeAgentLog(event.message)}${payload}`;
     })
     .join("\n\n");
 }
@@ -949,7 +952,6 @@ function getScriptJobId(script) {
 function artifactMeta(parts) {
   return parts.filter(Boolean).join(" · ");
 }
-
 function retryItemKeyCandidates(item) {
   const source = isPlainObject(item?.contentObject) ? item.contentObject : item || {};
   const moduleName = String(source.module_name || item?.moduleName || "").trim();
@@ -1038,7 +1040,7 @@ function planArtifact(plan, index, sourceStep = "generate_plans", status = "succ
     id: `${sourceStep}:plan:${plan.module_name || ""}:${plan.plan_filename || plan.filename || index}`,
     type: "plan",
     kindLabel: "测试计划",
-    title: plan.plan_filename || plan.filename || plan.name || `计划 ${index + 1}`,
+    title: plan.plan_filename || plan.filename || plan.name || localizeAgentText(`计划 ${index + 1}`),
     subtitle: artifactMeta([plan.module_name, plan.path]),
     status,
     jobId: getPlanJobId(plan) || moduleItem?.source_job_id || "",
@@ -1055,7 +1057,7 @@ function scriptArtifact(script, index, sourceStep = "generate_scripts", status =
     id: `${sourceStep}:script:${script.module_name || ""}:${script.filename || index}`,
     type: "script",
     kindLabel: "测试脚本",
-    title: script.filename || script.plan_filename || `脚本 ${index + 1}`,
+    title: script.filename || script.plan_filename || localizeAgentText(`脚本 ${index + 1}`),
     subtitle: artifactMeta([script.module_name, script.path || script.plan_filename]),
     status,
     jobId: getScriptJobId(script),
@@ -1118,9 +1120,9 @@ function pendingPlanArtifacts(step) {
       const running = latestRunning ? item.module_name === latestRunning : !hasProgress && index === 0;
       const progressParts = running
         ? runningPayload?.plan_phase === "splitting"
-          ? ["已生成计划", "正在拆分单用例计划。"]
-          : ["正在生成"]
-        : ["等待生成"];
+          ? [localizeAgentText("已生成计划"), localizeAgentText("正在拆分单用例计划。")]
+          : [localizeAgentText("正在生成")]
+        : [localizeAgentText("等待生成")];
       return {
         id: `generate_plans:pending:${item.module_uid || item.module_name}`,
         type: "plan",
@@ -1161,7 +1163,7 @@ function pendingScriptArtifacts(step) {
         type: "script",
         kindLabel: "测试脚本",
         title: plan.plan_filename,
-        subtitle: artifactMeta([plan.module_name, running ? "正在生成" : "等待生成"]),
+        subtitle: artifactMeta([plan.module_name, localizeAgentText(running ? "正在生成" : "等待生成")]),
         status: running ? "running" : "queued",
         jobId: findJobIdForScriptItem("generate_scripts", plan.module_name, plan.plan_filename),
         promptObject: { source_plan: plan, step_input: getStepInput("generate_scripts") },
@@ -1193,8 +1195,8 @@ function pendingRepairArtifacts(step) {
         id: `repair_scripts:pending:${script.module_name || ""}:${script.filename || script.plan_filename || index}`,
         type: "script",
         kindLabel: "待修复脚本",
-        title: script.filename || script.plan_filename || `脚本 ${index + 1}`,
-        subtitle: artifactMeta([script.module_name, running ? "正在修复" : "等待修复"]),
+        title: script.filename || script.plan_filename || localizeAgentText(`脚本 ${index + 1}`),
+        subtitle: artifactMeta([script.module_name, localizeAgentText(running ? "正在修复" : "等待修复")]),
         status: running ? "running" : "queued",
         jobId: findJobIdForScriptItem("repair_scripts", script.module_name, "", script.filename || script.plan_filename),
         promptObject: { source_script: script, step_input: getStepInput("repair_scripts") },
@@ -1207,14 +1209,18 @@ function pendingRepairArtifacts(step) {
     });
 }
 
+function localizedPlatformFailure(stepKey, error) {
+  return window.WaterfallI18n?.platformFailure?.(stepKey, error) ?? String(error || "");
+}
 function failureArtifacts(stepKey, failures, typeLabel, baseStatus = "failed") {
   return asArray(failures).map((item, index) =>
     jsonArtifact({
       id: `${stepKey}:failure:${item.module_name || ""}:${item.plan_filename || item.filename || index}`,
       type: "failure",
       kindLabel: typeLabel,
-      title: item.plan_filename || item.filename || item.module_name || `失败项 ${index + 1}`,
-      subtitle: artifactMeta([item.module_name, item.error]),
+      title:
+        item.plan_filename || item.filename || item.module_name || localizeAgentText(`失败项 ${index + 1}`),
+      subtitle: [item.module_name, localizedPlatformFailure(stepKey, item.error)].filter(Boolean).join(" · "),
       status: baseStatus,
       sourceStep: stepKey,
       attemptId: item.attempt_id || item.failure_id || item.root_attempt_id || "",
@@ -1240,7 +1246,7 @@ function artifactsForStep(stepKey) {
           id: "upload_requirement:requirement",
           type: "requirement",
           kindLabel: "需求",
-          title: state.selectedRun?.requirement_title || "需求文件",
+          title: state.selectedRun?.requirement_title || localizeAgentText("需求文件"),
           subtitle: artifactMeta([state.selectedRun?.requirement_uid, state.selectedRun?.run_id]),
           status: state.selectedRun ? "succeeded" : "queued",
           sourceStep: stepKey,
@@ -1260,8 +1266,11 @@ function artifactsForStep(stepKey) {
           id: `analyze_requirement:module:${item.module_uid || index}`,
           type: "module",
           kindLabel: "候选模块",
-          title: item.module_name || item.plan_name || `模块 ${index + 1}`,
-          subtitle: artifactMeta([item.business_goal, item.confidence ? `置信度 ${item.confidence}` : ""]),
+          title: item.module_name || item.plan_name || localizeAgentText(`模块 ${index + 1}`),
+          subtitle: artifactMeta([
+            item.business_goal,
+            item.confidence ? localizeAgentText(`置信度 ${item.confidence}`) : "",
+          ]),
           status: "succeeded",
           sourceStep: stepKey,
           promptText: item.planner_prompt || "",
@@ -1277,8 +1286,8 @@ function artifactsForStep(stepKey) {
             id: `review_modules:module:${item.module_uid || index}`,
             type: "module",
             kindLabel: "确认模块",
-            title: item.module_name || item.plan_name || `模块 ${index + 1}`,
-            subtitle: artifactMeta([item.business_goal, "保留"]),
+            title: item.module_name || item.plan_name || localizeAgentText(`模块 ${index + 1}`),
+            subtitle: artifactMeta([item.business_goal, localizeAgentText("保留")]),
             status: "succeeded",
             sourceStep: stepKey,
             promptText: item.planner_prompt || "",
@@ -1292,7 +1301,7 @@ function artifactsForStep(stepKey) {
               id: `review_modules:decision:${item.module_uid || index}`,
               type: "decision",
               kindLabel: "审查决策",
-              title: item.module_name || item.module_uid || `决策 ${index + 1}`,
+              title: item.module_name || item.module_uid || localizeAgentText(`决策 ${index + 1}`),
               subtitle: artifactMeta([item.action, item.reason]),
               status: item.action === "delete" ? "excluded" : "succeeded",
               sourceStep: stepKey,
@@ -1316,7 +1325,7 @@ function artifactsForStep(stepKey) {
             id: `review_plans:decision:${item.module_name || ""}:${item.plan_filename || index}`,
             type: "decision",
             kindLabel: "计划决策",
-            title: item.plan_filename || item.module_name || `决策 ${index + 1}`,
+            title: item.plan_filename || item.module_name || localizeAgentText(`决策 ${index + 1}`),
             subtitle: artifactMeta([item.module_name, item.action, item.reason]),
             status: item.action === "delete" ? "excluded" : "succeeded",
             sourceStep: stepKey,
@@ -1340,8 +1349,8 @@ function artifactsForStep(stepKey) {
             id: `execute_scripts:passed:${item.module_name || ""}:${item.filename || index}`,
             type: "execution",
             kindLabel: "执行结果",
-            title: item.filename || `通过脚本 ${index + 1}`,
-            subtitle: artifactMeta([item.module_name, item.execution_run_id, "通过"]),
+            title: item.filename || localizeAgentText(`通过脚本 ${index + 1}`),
+            subtitle: artifactMeta([item.module_name, item.execution_run_id, localizeAgentText("通过")]),
             status: "passed",
             sourceStep: stepKey,
             contentTitle: "执行结果",
@@ -1368,7 +1377,7 @@ function artifactsForStep(stepKey) {
             id: `review_failed_scripts:decision:${item.module_name || ""}:${item.filename || index}`,
             type: "decision",
             kindLabel: "失败处理",
-            title: item.filename || item.module_name || `处理 ${index + 1}`,
+            title: item.filename || item.module_name || localizeAgentText(`处理 ${index + 1}`),
             subtitle: artifactMeta([item.module_name, item.action, item.reason]),
             status: item.action === "exclude" ? "excluded" : "succeeded",
             sourceStep: stepKey,
@@ -1384,8 +1393,11 @@ function artifactsForStep(stepKey) {
               id: `create_suite:suite:${output.suite.id || "suite"}`,
               type: "suite",
               kindLabel: "测试集",
-              title: output.suite.name || output.suite.id || "测试集",
-              subtitle: artifactMeta([output.suite.id, `${asArray(output.suite.items).length} 个脚本`]),
+              title: output.suite.name || output.suite.id || localizeAgentText("测试集"),
+              subtitle: artifactMeta([
+                output.suite.id,
+                localizeAgentText(`${asArray(output.suite.items).length} 个脚本`),
+              ]),
               status: "succeeded",
               sourceStep: stepKey,
               contentTitle: "测试集详情",
@@ -1400,9 +1412,13 @@ function artifactsForStep(stepKey) {
               id: "run_suite:result",
               type: "execution",
               kindLabel: "执行汇总",
-              title: "测试集执行结果",
+              title: localizeAgentText("测试集执行结果"),
               subtitle: output.summary
-                ? artifactMeta([`通过 ${output.summary.passed || 0}`, `失败 ${output.summary.failed || 0}`, `总数 ${output.summary.total || 0}`])
+                ? artifactMeta([
+                    localizedAgentCount("通过", output.summary.passed || 0),
+                    localizedAgentCount("失败", output.summary.failed || 0),
+                    localizedAgentCount("总数", output.summary.total || 0),
+                  ])
                 : "",
               status: output.summary?.failed ? "failed" : "succeeded",
               sourceStep: stepKey,
@@ -1453,10 +1469,9 @@ function renderArtifacts() {
   const stepLabel = agentStepLabel(state.activeStepKey);
   const artifacts = artifactsForStep(state.activeStepKey);
   state.currentArtifacts = artifacts;
-
   if (!run) {
-    elements.runSubtitle.textContent = "暂无运行任务";
-    elements.runTitle.textContent = "选择左侧任务，或上传需求启动 Agent";
+    setAgentDynamicText(elements.runSubtitle, localizeAgentText("暂无运行任务"), false);
+    setAgentDynamicText(elements.runTitle, localizeAgentText("选择左侧任务，或上传需求启动 Agent"), false);
     elements.artifactStageSummary.textContent = "暂无阶段产物";
     elements.planGenerationDetails.classList.add("hidden");
     elements.planGenerationMeta.textContent = "";
@@ -1464,12 +1479,16 @@ function renderArtifacts() {
     setBadge(elements.runStatus, "idle");
   } else {
     const planGeneration = isPlainObject(run.plan_generation) ? run.plan_generation : {};
-    elements.runSubtitle.textContent = `${run.run_id} · ${agentCoverageMeta(run)} · ${formatDateTime(run.created_at)}`;
-    elements.runTitle.textContent = run.requirement_title || run.run_id;
+    setAgentDynamicText(elements.runSubtitle, `${run.run_id} · ${localizeAgentText(agentCoverageMeta(run))} · ${formatDateTime(run.created_at)}`);
+    setAgentDynamicText(elements.runTitle, run.requirement_title || run.run_id);
     elements.artifactStageSummary.textContent = `${stepLabel} · ${statusText(step?.status || "queued")} · ${artifacts.length} 个生成物`;
     elements.planGenerationDetails.classList.remove("hidden");
-    elements.planGenerationMeta.textContent = agentCoverageMeta(run);
-    elements.planGenerationPrompt.textContent = planGeneration.coverage_prompt || "未保存策略文本。";
+    elements.planGenerationMeta.textContent = localizeAgentText(agentCoverageMeta(run));
+    setAgentDynamicText(
+      elements.planGenerationPrompt,
+      planGeneration.coverage_prompt || localizeAgentText("未保存策略文本。"),
+      Boolean(planGeneration.coverage_prompt),
+    );
     setBadge(elements.runStatus, state.activeRetryFlows.length ? "retrying" : run.status);
   }
 
@@ -1483,10 +1502,12 @@ function renderArtifacts() {
               <span class="artifact-type">${escapeHtml(item.kindLabel || "产物")}</span>
               <span class="artifact-main">
                 <span class="artifact-title-row">
-                  <strong>${escapeHtml(item.title || "未命名产物")}</strong>
+                  <strong data-i18n-dynamic>${escapeHtml(item.title || localizeAgentText("未命名产物"))}</strong>
                   <span class="status-badge ${escapeHtml(item.status || "")}">${escapeHtml(statusText(item.status))}</span>
                 </span>
-                <span class="artifact-subtitle">${escapeHtml(artifactMeta([retryMeta, item.subtitle || item.contentTitle || ""]))}</span>
+                <span class="artifact-subtitle" data-i18n-dynamic>${escapeHtml(
+                  artifactMeta([retryMeta, item.subtitle || localizeAgentText(item.contentTitle || "")]),
+                )}</span>
               </span>
               <span class="artifact-chevron">›</span>
             </button>
@@ -1749,7 +1770,7 @@ function renderEvents() {
     .slice(-400)
     .map((event) => {
       const step = event.step_key ? `[${agentStepLabel(event.step_key)}]` : "";
-      return `${formatDateTime(event.created_at)} ${step} ${event.event_type}: ${event.message}`;
+      return `${formatDateTime(event.created_at)} ${step} ${event.event_type}: ${localizeAgentLog(event.message)}`;
     })
     .join("\n");
   elements.eventLog.scrollTop = elements.eventLog.scrollHeight;
@@ -1780,7 +1801,7 @@ async function resolvePromptText(artifact) {
       if (artifact.promptText) {
         return artifact.promptText;
       }
-      return `读取任务生成语句失败：${error.message}`;
+      return localizeAgentText(`读取任务生成语句失败：${error.message}`);
     }
   }
   if (artifact.promptText) {
@@ -1904,7 +1925,7 @@ function renderArtifactRetryState() {
       : flow && RETRY_FLOW_TERMINAL_STATUSES.has(flow.status)
         ? flow.status
         : artifact.status;
-  elements.artifactModalMeta.textContent = artifactMeta([artifact.kindLabel, statusText(modalStatus), artifact.subtitle]);
+  setAgentDynamicText(elements.artifactModalMeta, artifactMeta([localizeAgentText(artifact.kindLabel), statusText(modalStatus), artifact.subtitle]));
 
   elements.artifactDiagnosticActions.classList.toggle("hidden", !showActions);
   elements.artifactDiagnosticDownload.classList.toggle("hidden", !isFailureArtifact);
@@ -1938,7 +1959,7 @@ function renderArtifactRetryState() {
   if (!flow) {
     return;
   }
-  elements.artifactRetryProgressTitle.textContent = `${retryFlowTitle(flow)} · 重试并验证`;
+  setAgentDynamicText(elements.artifactRetryProgressTitle, `${retryFlowTitle(flow)} · ${localizeAgentText("重试并验证")}`);
   elements.artifactRetryProgressStatus.textContent = retryFlowProgressText(flow);
   const badgeStatus = isActiveRetryFlow(flow) ? "running" : flow.status === "succeeded" ? "succeeded" : flow.status;
   setBadge(elements.artifactRetryProgressBadge, badgeStatus);
@@ -1956,11 +1977,13 @@ function renderArtifactRetryState() {
       )}</em></li>`;
     })
     .join("");
+  const retryError = !isActiveRetryFlow(flow) && flow.status !== "succeeded" ? flow.error : "";
+  window.WaterfallI18n?.markDynamic?.(elements.artifactRetryProgressNote, Boolean(retryError));
   elements.artifactRetryProgressNote.textContent = isActiveRetryFlow(flow)
     ? "重试在后台运行，关闭弹窗或切换页面不会停止任务。"
     : flow.status === "succeeded"
       ? "新脚本已完成执行验证；本次重试的历史记录和诊断信息会继续保留。"
-      : flow.error || "本次流程已结束，可以查看失败详情后再次重试。";
+      : retryError || "本次流程已结束，可以查看失败详情后再次重试。";
 }
 
 async function openArtifact(artifactId) {
@@ -1970,8 +1993,8 @@ async function openArtifact(artifactId) {
   }
   state.openArtifact = artifact;
   state.artifactModalOpener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-  elements.artifactModalTitle.textContent = artifact.title || "生成物";
-  elements.artifactModalMeta.textContent = artifactMeta([artifact.kindLabel, statusText(artifact.status), artifact.subtitle]);
+  setAgentDynamicText(elements.artifactModalTitle, artifact.title || localizeAgentText("生成物"), Boolean(artifact.title));
+  setAgentDynamicText(elements.artifactModalMeta, artifactMeta([localizeAgentText(artifact.kindLabel), statusText(artifact.status), artifact.subtitle]));
   elements.artifactContentTitle.textContent = artifact.contentTitle || "产物文本";
   elements.artifactPromptText.textContent = window.WaterfallI18n?.source("正在加载...") || "正在加载...";
   elements.artifactContentText.textContent = window.WaterfallI18n?.source("正在加载...") || "正在加载...";
@@ -1989,7 +2012,7 @@ async function openArtifact(artifactId) {
     elements.artifactPromptText.textContent = promptText;
     elements.artifactContentText.textContent = contentText;
   } catch (error) {
-    elements.artifactContentText.textContent = `读取产物失败：${error.message}`;
+    elements.artifactContentText.textContent = localizeAgentText(`读取产物失败：${error.message}`);
   }
 }
 

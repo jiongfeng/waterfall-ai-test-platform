@@ -1,10 +1,14 @@
 import re
 from pathlib import Path
+import unicodedata
 
 
 CJK_NAME_PATTERN = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
 ASCII_LETTER_PATTERN = re.compile(r"[A-Za-z]")
 ARTIFACT_FILENAME_UNSAFE_PATTERN = re.compile(r"[\\/<>:\"|?*\x00]+")
+ENGLISH_ARTIFACT_STEM_UNSAFE_PATTERN = re.compile(
+    r"[^A-Za-z0-9 ._()-]+"
+)
 
 
 def validate_module_name(module_name):
@@ -118,6 +122,17 @@ def validate_plan_filename(filename):
     return filename
 
 
+def plan_filename_collision_key(filename):
+    """Return a cross-platform key for detecting equivalent plan filenames.
+
+    NFC preserves compatibility characters while composing canonically
+    equivalent Unicode spellings. ``casefold`` then prevents filenames that
+    alias on common case-insensitive filesystems from being planned twice.
+    """
+
+    return unicodedata.normalize("NFC", str(filename or "")).casefold()
+
+
 def validate_chinese_plan_filename(
     filename,
     *,
@@ -203,6 +218,41 @@ def get_case_plan_filename_from_title(
         unique_key=unique_key,
     )
     return validate_chinese_plan(f"{stem}.md")
+
+
+def get_english_case_plan_filename_from_title(
+    filename,
+    title,
+    index=None,
+    *,
+    strip_suffix=strip_artifact_suffix,
+    validate_plan=validate_plan_filename,
+    unsafe_pattern=ARTIFACT_FILENAME_UNSAFE_PATTERN,
+    english_unsafe_pattern=ENGLISH_ARTIFACT_STEM_UNSAFE_PATTERN,
+):
+    """Return a safe English case filename without inventing Chinese text.
+
+    Model output may contain an unsafe path, a non-English filename paired
+    with an English title, or neither usable value. Prefer the supplied
+    filename, then the title, and finally a deterministic English fallback.
+    The ASCII filtering is intentional: an English project must not regain
+    CJK text through the filename fallback used by legacy Chinese projects.
+    """
+
+    if not str(filename or "").strip() and not str(title or "").strip():
+        raise ValueError("Case is missing title or filename.")
+
+    for value in (filename, title):
+        stem = strip_suffix(str(value or "").strip(), ".md")
+        stem = unsafe_pattern.sub("-", stem)
+        stem = english_unsafe_pattern.sub("", stem)
+        stem = re.sub(r"\s+", " ", stem)
+        stem = re.sub(r"-+", "-", stem).strip(" ._-")
+        if has_ascii_letters(stem):
+            return validate_plan(f"{stem}.md")
+
+    suffix = f"-{int(index):03d}" if index is not None else ""
+    return validate_plan(f"test-case{suffix}.md")
 
 
 def validate_script_filename(filename):
