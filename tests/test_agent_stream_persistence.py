@@ -47,6 +47,26 @@ class BlockingEventResponse:
         self.close()
 
 
+class FiniteEventResponse:
+    def __init__(self, events):
+        self.events = events
+        self.closed = False
+
+    def __iter__(self):
+        for event in self.events:
+            yield f"data: {json.dumps(event, ensure_ascii=False)}\n".encode()
+            yield b"\n"
+
+    def close(self):
+        self.closed = True
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        self.close()
+
+
 class AgentStreamBatchingTests(unittest.TestCase):
     def test_batched_event_serialization_keeps_payload_text_compatibility(self):
         event = app.serialize_agent_event(
@@ -153,6 +173,193 @@ class AgentStreamBatchingTests(unittest.TestCase):
         self.assertTrue(all(len(item[1].encode("utf-8")) <= 16 * 1024 for item in persisted))
         self.assertEqual(result["logs"], "x" * 10_000)
 
+    def test_ten_thousand_tool_logs_are_batched_without_losing_unicode(self):
+        persisted = []
+        messages = [f"工具日志-{index:05d}-🚀" for index in range(10_000)]
+        expected = "".join(f"{message}\n" for message in messages)
+
+        def chunks():
+            for message in messages:
+                yield app.sse_payload(
+                    "log",
+                    {"message": message, "job_id": "planner-1"},
+                )
+
+        with (
+            patch.object(app, "agent_raise_if_cancelled"),
+            patch.object(
+                app,
+                "persist_agent_stream_batch",
+                side_effect=lambda _run, _step, job_id, text, metadata, **kwargs: (
+                    persisted.append(
+                        (job_id, text, metadata, kwargs.get("job_log_snapshot"))
+                    )
+                ),
+            ),
+            patch.object(app, "append_agent_event") as append_event,
+        ):
+            result = app.consume_agent_sse_generator(
+                "agent-1",
+                "generate_plans",
+                chunks(),
+            )
+
+        self.assertEqual("".join(item[1] for item in persisted), expected)
+        self.assertLessEqual(len(persisted), 60)
+        self.assertTrue(all(item[0] == "planner-1" for item in persisted))
+        self.assertTrue(all(len(item[1].encode("utf-8")) <= 16 * 1024 for item in persisted))
+        self.assertTrue(all(item[2].get("batched") is True for item in persisted))
+        self.assertTrue(all(item[2].get("stream_kind") == "tool-log" for item in persisted))
+        self.assertTrue(all(item[2].get("source_event_type") == "log" for item in persisted))
+        self.assertTrue(all("message" not in item[2] for item in persisted))
+        self.assertEqual(result["logs"], expected[-app.JOB_LOG_TAIL_LIMIT :])
+        append_event.assert_not_called()
+
+    def test_tool_log_checkpoint_commits_before_the_producer_resumes(self):
+        timeline = []
+        snapshot = {"log_path": "/tmp/job.log", "log_tail": "tail", "log_size": 4}
+
+        def chunks():
+            yield app.sse_payload(
+                "log",
+                {"message": "工具输入", "job_id": "planner-1"},
+            )
+            yield app.sse_payload(
+                "log",
+                {
+                    "message": "工具完成",
+                    "job_id": "planner-1",
+                    "_job_log_snapshot": snapshot,
+                },
+            )
+            timeline.append("producer-resumed")
+            yield app.sse_payload(
+                "status",
+                {"status": "running", "job_id": "planner-1"},
+            )
+
+        def persist(_run, _step, job_id, text, metadata, **kwargs):
+            timeline.append(
+                (
+                    "persist",
+                    job_id,
+                    text,
+                    metadata,
+                    kwargs.get("job_log_snapshot"),
+                )
+            )
+
+        with (
+            patch.object(app, "agent_raise_if_cancelled"),
+            patch.object(app, "persist_agent_stream_batch", side_effect=persist),
+            patch.object(
+                app,
+                "append_agent_event",
+                side_effect=lambda *_args, **_kwargs: timeline.append("status"),
+            ),
+        ):
+            app.consume_agent_sse_generator("agent-1", "generate_plans", chunks())
+
+        persisted = timeline[0]
+        self.assertEqual(persisted[0:3], ("persist", "planner-1", "工具输入\n工具完成\n"))
+        self.assertEqual(persisted[3]["stream_kind"], "tool-log")
+        self.assertEqual(persisted[4], snapshot)
+        self.assertEqual(timeline[1:], ["producer-resumed", "status"])
+
+    def test_structured_events_force_tool_logs_and_keep_their_event_types(self):
+        timeline = []
+
+        def chunks():
+            yield app.sse_payload("log", {"message": "before-error", "job_id": "planner-1"})
+            yield app.sse_payload("error", {"error": "failed", "job_id": "planner-1"})
+            yield app.sse_payload("log", {"message": "before-decision", "job_id": "planner-1"})
+            yield app.sse_payload(
+                "decision",
+                {"message": "keep", "job_id": "planner-1"},
+            )
+
+        with (
+            patch.object(app, "agent_raise_if_cancelled"),
+            patch.object(
+                app,
+                "persist_agent_stream_batch",
+                side_effect=lambda _run, _step, _job, text, *_args, **_kwargs: (
+                    timeline.append(("log", text))
+                ),
+            ),
+            patch.object(
+                app,
+                "append_agent_event",
+                side_effect=lambda _run, _step, event_type, *_args, **_kwargs: (
+                    timeline.append(("structured", event_type))
+                ),
+            ),
+        ):
+            app.consume_agent_sse_generator("agent-1", "generate_plans", chunks())
+
+        self.assertEqual(
+            timeline,
+            [
+                ("log", "before-error\n"),
+                ("structured", "error"),
+                ("log", "before-decision\n"),
+                ("structured", "decision"),
+            ],
+        )
+
+    def test_agent_comment_ticks_flush_a_silent_tool_log_at_500ms(self):
+        class FakeClock:
+            now = 0.0
+
+            def __call__(self):
+                return self.now
+
+            def advance(self, seconds):
+                self.now += seconds
+
+        clock = FakeClock()
+        persisted = []
+        observations = []
+        real_batcher = app.AgentOutputBatcher
+
+        def chunks():
+            yield app.sse_payload(
+                "log",
+                {"message": "waiting", "job_id": "planner-1"},
+            )
+            observations.append(("after-log", len(persisted)))
+            clock.advance(0.49)
+            yield ": agent-stream-tick\n\n"
+            observations.append(("before-deadline", len(persisted)))
+            clock.advance(0.01)
+            yield ": agent-stream-tick\n\n"
+            observations.append(("at-deadline", len(persisted)))
+
+        with (
+            patch.object(app, "AgentOutputBatcher", side_effect=lambda: real_batcher(clock=clock)),
+            patch.object(app, "agent_raise_if_cancelled"),
+            patch.object(
+                app,
+                "persist_agent_stream_batch",
+                side_effect=lambda _run, _step, _job, text, metadata, **_kwargs: (
+                    persisted.append((text, metadata))
+                ),
+            ),
+            patch.object(app, "append_agent_event"),
+        ):
+            app.consume_agent_sse_generator("agent-1", "generate_plans", chunks())
+
+        self.assertEqual(
+            observations,
+            [
+                ("after-log", 0),
+                ("before-deadline", 0),
+                ("at-deadline", 1),
+            ],
+        )
+        self.assertEqual(persisted[0][0], "waiting\n")
+        self.assertEqual(persisted[0][1]["flush_reason"], "interval")
+
     def test_structured_status_flushes_pending_delta_first(self):
         timeline = []
 
@@ -233,6 +440,102 @@ class AgentStreamBatchingTests(unittest.TestCase):
                 app.consume_agent_sse_generator("agent-1", "generate_plans", chunks())
 
         self.assertEqual(persist.call_count, 1)
+
+    def test_generator_exit_flush_failure_preserves_generator_exit(self):
+        def chunks():
+            yield app.sse_payload(
+                "delta",
+                {"text": "pending tail", "job_id": "planner-1"},
+            )
+            raise GeneratorExit()
+
+        with (
+            patch.object(app, "agent_raise_if_cancelled"),
+            patch.object(
+                app,
+                "persist_agent_stream_batch",
+                side_effect=RuntimeError("database unavailable"),
+            ) as persist,
+            patch.object(app, "append_agent_event") as append_error,
+        ):
+            with self.assertRaises(GeneratorExit):
+                app.consume_agent_sse_generator(
+                    "agent-1",
+                    "generate_plans",
+                    chunks(),
+                )
+
+        self.assertEqual(persist.call_count, 2)
+        error_payload = append_error.call_args.args[4]
+        self.assertEqual(error_payload["business_error"], "GeneratorExit")
+        self.assertEqual(error_payload["flush_error"], "database unavailable")
+        self.assertEqual(error_payload["flush_phase"], "generator-exit")
+
+    def test_business_and_flush_errors_are_observable_without_replacing_business_error(self):
+        business_error = ValueError("generation failed")
+
+        def chunks():
+            yield app.sse_payload(
+                "delta",
+                {"text": "pending tail", "job_id": "planner-1"},
+            )
+            raise business_error
+
+        with (
+            patch.object(app, "agent_raise_if_cancelled"),
+            patch.object(
+                app,
+                "persist_agent_stream_batch",
+                side_effect=RuntimeError("database unavailable"),
+            ) as persist,
+            patch.object(app, "append_agent_event") as append_error,
+        ):
+            with self.assertRaises(ValueError) as raised:
+                app.consume_agent_sse_generator(
+                    "agent-1",
+                    "generate_plans",
+                    chunks(),
+                )
+
+        self.assertIs(raised.exception, business_error)
+        self.assertEqual(persist.call_count, 2)
+        error_payload = append_error.call_args.args[4]
+        self.assertEqual(error_payload["business_error"], "generation failed")
+        self.assertEqual(error_payload["flush_error"], "database unavailable")
+        self.assertEqual(error_payload["flush_phase"], "exception")
+
+    def test_flush_error_reporting_failure_does_not_replace_business_error(self):
+        business_error = ValueError("generation failed")
+
+        def chunks():
+            yield app.sse_payload(
+                "delta",
+                {"text": "pending tail", "job_id": "planner-1"},
+            )
+            raise business_error
+
+        with (
+            patch.object(app, "agent_raise_if_cancelled"),
+            patch.object(
+                app,
+                "persist_agent_stream_batch",
+                side_effect=RuntimeError("database unavailable"),
+            ),
+            patch.object(
+                app,
+                "append_agent_event",
+                side_effect=RuntimeError("error reporting unavailable"),
+            ) as append_error,
+        ):
+            with self.assertRaises(ValueError) as raised:
+                app.consume_agent_sse_generator(
+                    "agent-1",
+                    "generate_plans",
+                    chunks(),
+                )
+
+        self.assertIs(raised.exception, business_error)
+        self.assertEqual(append_error.call_count, 1)
 
     def test_batch_persistence_uses_one_connection_and_one_commit(self):
         class Cursor:
@@ -544,6 +847,7 @@ class OpenCodeStreamLifecycleTests(unittest.TestCase):
             patch.object(app, "opencode_event_stream", return_value=response),
             patch.object(app, "send_opencode_prompt_async", return_value={}),
             patch.object(app, "abort_opencode_session"),
+            patch.object(app, "persist_agent_stream_batch"),
         )
 
     def test_silent_stream_honors_wall_clock_deadline(self):
@@ -555,6 +859,7 @@ class OpenCodeStreamLifecycleTests(unittest.TestCase):
                 for stream_patch in self.stream_patches(response, 0.25):
                     stack.enter_context(stream_patch)
                 events = []
+                chunks = []
                 for chunk in app.stream_plan_generation(
                     "模块",
                     "prompt",
@@ -562,6 +867,7 @@ class OpenCodeStreamLifecycleTests(unittest.TestCase):
                     setup_targets=[],
                     completion_required=False,
                 ):
+                    chunks.append(chunk)
                     events.extend(app.parse_sse_text_blocks(chunk))
             elapsed = time.monotonic() - started_at
 
@@ -570,6 +876,7 @@ class OpenCodeStreamLifecycleTests(unittest.TestCase):
         self.assertIn("实时输出超时", done["error"])
         self.assertLess(elapsed, 1.5)
         self.assertTrue(response.closed.is_set())
+        self.assertFalse(any("agent-stream-tick" in chunk for chunk in chunks))
 
     def test_valid_stable_plan_finishes_during_upstream_silence(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -645,6 +952,282 @@ class OpenCodeStreamLifecycleTests(unittest.TestCase):
         self.assertEqual(ready[0]["status"], "running")
         self.assertEqual(ready[0]["plan_phase"], "splitting")
 
+    def test_terminal_success_is_not_downgraded_when_consumer_persistence_fails(self):
+        failures = (
+            (RuntimeError("database unavailable"), 2),
+            (app.AgentStreamCommitAmbiguous("unknown commit"), 1),
+        )
+        for failure, expected_attempts in failures:
+            with self.subTest(failure=type(failure).__name__):
+                response = FiniteEventResponse(
+                    [
+                        {
+                            "type": "session.idle",
+                            "properties": {"sessionID": "session-1"},
+                        }
+                    ]
+                )
+                finish_statuses = []
+                with tempfile.TemporaryDirectory() as directory, ExitStack() as stack:
+                    for stream_patch in self.stream_patches(response, 3):
+                        stack.enter_context(stream_patch)
+                    stack.enter_context(
+                        patch.object(
+                            app,
+                            "opencode_request",
+                            side_effect=lambda path, *_args, **_kwargs: (
+                                {"id": "session-1"} if path == "/session" else []
+                            ),
+                        )
+                    )
+                    stack.enter_context(
+                        patch.object(
+                            app,
+                            "get_job_log_path",
+                            return_value=Path(directory) / "planner-terminal.log",
+                        )
+                    )
+                    stack.enter_context(patch.object(app, "update_test_job"))
+                    stack.enter_context(
+                        patch.object(
+                            app,
+                            "get_test_job",
+                            return_value={
+                                "job_id": "planner-terminal",
+                                "status": "running",
+                            },
+                        )
+                    )
+                    stack.enter_context(
+                        patch.object(app, "is_platform_database_enabled", return_value=False)
+                    )
+                    stack.enter_context(patch.object(app, "append_agent_event"))
+                    stack.enter_context(
+                        patch.object(
+                            app,
+                            "finish_test_job",
+                            side_effect=lambda _job_id, status, **_kwargs: (
+                                finish_statuses.append(status)
+                            ),
+                        )
+                    )
+                    persist = stack.enter_context(
+                        patch.object(
+                            app,
+                            "persist_agent_stream_batch",
+                            side_effect=failure,
+                        )
+                    )
+
+                    with self.assertRaises(type(failure)):
+                        app.consume_agent_sse_generator(
+                            "agent-terminal",
+                            "generate_plans",
+                            app.stream_plan_generation(
+                                "Module",
+                                "prompt",
+                                Path(directory) / "plan.md",
+                                setup_targets=[],
+                                completion_required=False,
+                                cancel_job_id="planner-terminal",
+                                job_id="planner-terminal",
+                                agent_stream=True,
+                            ),
+                            generator_handles_cancellation=True,
+                        )
+
+                self.assertEqual(finish_statuses, ["succeeded"])
+                self.assertEqual(persist.call_count, expected_attempts)
+                self.assertTrue(response.closed)
+
+    def test_closing_failed_or_cancelled_terminal_stream_does_not_reterminalize(self):
+        for terminal_status in ("failed", "cancelled"):
+            with self.subTest(terminal_status=terminal_status):
+                finish_statuses = []
+
+                def opencode_request(path, *_args, **_kwargs):
+                    if terminal_status == "failed" and path == "/session":
+                        raise RuntimeError("session creation failed")
+                    return {"id": "session-1"}
+
+                with tempfile.TemporaryDirectory() as directory, ExitStack() as stack:
+                    stack.enter_context(patch.object(app, "register_opencode_task"))
+                    stack.enter_context(patch.object(app, "cleanup_opencode_task"))
+                    stack.enter_context(patch.object(app, "prepare_bound_setup"))
+                    stack.enter_context(
+                        patch.object(
+                            app,
+                            "is_opencode_task_cancelled",
+                            return_value=terminal_status == "cancelled",
+                        )
+                    )
+                    stack.enter_context(
+                        patch.object(app, "build_opencode_session_payload", return_value={})
+                    )
+                    stack.enter_context(
+                        patch.object(app, "opencode_project_query", return_value={})
+                    )
+                    stack.enter_context(
+                        patch.object(app, "opencode_request", side_effect=opencode_request)
+                    )
+                    stack.enter_context(
+                        patch.object(
+                            app,
+                            "get_job_log_path",
+                            return_value=Path(directory) / f"planner-{terminal_status}.log",
+                        )
+                    )
+                    stack.enter_context(patch.object(app, "update_test_job"))
+                    stack.enter_context(
+                        patch.object(
+                            app,
+                            "get_test_job",
+                            return_value={
+                                "job_id": f"planner-{terminal_status}",
+                                "status": terminal_status,
+                            },
+                        )
+                    )
+                    stack.enter_context(
+                        patch.object(app, "is_platform_database_enabled", return_value=False)
+                    )
+                    stack.enter_context(
+                        patch.object(
+                            app,
+                            "finish_test_job",
+                            side_effect=lambda _job_id, status, **_kwargs: (
+                                finish_statuses.append(status)
+                            ),
+                        )
+                    )
+                    generator = app.stream_plan_generation(
+                        "Module",
+                        "prompt",
+                        Path(directory) / "plan.md",
+                        setup_targets=[],
+                        completion_required=False,
+                        cancel_job_id=f"planner-{terminal_status}",
+                        job_id=f"planner-{terminal_status}",
+                    )
+                    for chunk in generator:
+                        events = list(app.parse_sse_text_blocks(chunk))
+                        if any(
+                            event == "status" and payload.get("status") == terminal_status
+                            for event, payload in events
+                        ):
+                            break
+                    else:
+                        self.fail(f"missing {terminal_status} status")
+                    generator.close()
+
+                self.assertEqual(finish_statuses, [terminal_status])
+
+    def test_tool_logs_redact_target_password_before_file_and_database_events(self):
+        fixture_password = "-".join(("redaction", "fixture"))
+        response = FiniteEventResponse(
+            [
+                {
+                    "type": "message.part.updated",
+                    "properties": {
+                        "sessionID": "session-1",
+                        "part": {
+                            "id": "tool-secret",
+                            "type": "tool",
+                            "tool": "browser-login",
+                            "state": {
+                                "status": "completed",
+                                "title": "browser-login",
+                                "input": {
+                                    "username": "admin",
+                                    "password": fixture_password,
+                                },
+                                "output": "普通文本保持",
+                            },
+                        },
+                    },
+                },
+                {
+                    "type": "session.idle",
+                    "properties": {"sessionID": "session-1"},
+                },
+            ]
+        )
+        database_events = []
+
+        def persist(_run, _step, job_id, text, metadata, **kwargs):
+            database_events.append(
+                {
+                    "job_id": job_id,
+                    "message": text,
+                    "payload": metadata,
+                    "snapshot": kwargs.get("job_log_snapshot"),
+                }
+            )
+
+        def append(_run, _step, event_type, message, payload, **kwargs):
+            database_events.append(
+                {
+                    "event_type": event_type,
+                    "message": message,
+                    "payload": payload,
+                    "job_id": kwargs.get("job_id"),
+                }
+            )
+
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as stack:
+            log_path = Path(directory) / "planner-1.log"
+            for stream_patch in self.stream_patches(response, 3):
+                stack.enter_context(stream_patch)
+            stack.enter_context(
+                patch.object(
+                    app,
+                    "current_context_project",
+                    return_value={"target_system": {"password": fixture_password}},
+                )
+            )
+            stack.enter_context(patch.object(app, "get_job_log_path", return_value=log_path))
+            stack.enter_context(patch.object(app, "update_test_job"))
+            stack.enter_context(patch.object(app, "finish_test_job"))
+            stack.enter_context(
+                patch.object(
+                    app,
+                    "get_test_job",
+                    return_value={"job_id": "planner-1", "status": "running"},
+                )
+            )
+            stack.enter_context(patch.object(app, "is_platform_database_enabled", return_value=False))
+            stack.enter_context(patch.object(app, "agent_raise_if_cancelled"))
+            stack.enter_context(
+                patch.object(app, "persist_agent_stream_batch", side_effect=persist)
+            )
+            stack.enter_context(patch.object(app, "append_agent_event", side_effect=append))
+
+            app.consume_agent_sse_generator(
+                "agent-1",
+                "generate_plans",
+                app.stream_plan_generation(
+                    "模块",
+                    "prompt",
+                    Path(directory) / "plan.md",
+                    setup_targets=[],
+                    completion_required=False,
+                    job_id="planner-1",
+                    agent_stream=True,
+                ),
+                generator_handles_cancellation=True,
+            )
+
+            disk_log = log_path.read_text(encoding="utf-8")
+
+        serialized_events = json.dumps(database_events, ensure_ascii=False)
+        self.assertNotIn(fixture_password, disk_log)
+        self.assertNotIn(fixture_password, serialized_events)
+        self.assertIn("******", disk_log)
+        self.assertIn("******", serialized_events)
+        self.assertIn("普通文本保持", disk_log)
+        self.assertIn("普通文本保持", serialized_events)
+        self.assertTrue(response.closed)
+
     def test_silent_agent_stream_observes_cross_process_database_cancel(self):
         response = BlockingEventResponse()
         app.AGENT_RUN_TASKS.pop("agent-1", None)
@@ -703,6 +1286,111 @@ class OpenCodeStreamLifecycleTests(unittest.TestCase):
         self.assertEqual(finish.call_args.args[:2], ("planner-1", "cancelled"))
         abort.assert_called_with("session-1")
         self.assertTrue(response.closed.is_set())
+
+    def test_fallback_wait_observes_cross_process_database_cancel(self):
+        response = BlockingEventResponse()
+        fallback_started = threading.Event()
+        fallback_release = threading.Event()
+        fallback_finished = threading.Event()
+        run_checks = 0
+        app.AGENT_RUN_TASKS.pop("agent-fallback", None)
+
+        def blocking_fallback(*_args, **_kwargs):
+            fallback_started.set()
+            try:
+                fallback_release.wait(5)
+                return {}
+            finally:
+                fallback_finished.set()
+
+        def get_agent_run(_run_id):
+            nonlocal run_checks
+            run_checks += 1
+            status = "running" if run_checks == 1 else "cancelling"
+            return {"status": status}
+
+        try:
+            with tempfile.TemporaryDirectory() as directory, ExitStack() as stack:
+                target = Path(directory) / "plan.md"
+                for stream_patch in self.stream_patches(response, 3):
+                    stack.enter_context(stream_patch)
+                stack.enter_context(
+                    patch.object(
+                        app,
+                        "opencode_event_stream",
+                        side_effect=RuntimeError("event stream unavailable"),
+                    )
+                )
+                fallback = stack.enter_context(
+                    patch.object(
+                        app,
+                        "send_opencode_prompt_to_session",
+                        side_effect=blocking_fallback,
+                    )
+                )
+                abort = stack.enter_context(patch.object(app, "abort_opencode_session"))
+                stack.enter_context(
+                    patch.object(app, "get_agent_run_row", side_effect=get_agent_run)
+                )
+                stack.enter_context(patch.object(app, "append_agent_event"))
+                stack.enter_context(
+                    patch.object(
+                        app,
+                        "get_job_log_path",
+                        return_value=Path(directory) / "planner-fallback.log",
+                    )
+                )
+                stack.enter_context(patch.object(app, "update_test_job"))
+                finish = stack.enter_context(patch.object(app, "finish_test_job"))
+                stack.enter_context(
+                    patch.object(
+                        app,
+                        "get_test_job",
+                        return_value={
+                            "job_id": "planner-fallback",
+                            "status": "cancelled",
+                        },
+                    )
+                )
+
+                started_at = time.monotonic()
+                try:
+                    with self.assertRaises(app.OpencodeTaskCancelled):
+                        app.consume_agent_sse_generator(
+                            "agent-fallback",
+                            "generate_plans",
+                            app.stream_plan_generation(
+                                "模块",
+                                "prompt",
+                                target,
+                                setup_targets=[],
+                                completion_required=False,
+                                cancel_job_id="planner-fallback",
+                                job_id="planner-fallback",
+                                agent_stream=True,
+                                agent_cancel_check=lambda: app.agent_raise_if_cancelled(
+                                    "agent-fallback"
+                                ),
+                            ),
+                            generator_handles_cancellation=True,
+                        )
+                finally:
+                    fallback_release.set()
+                    self.assertTrue(fallback_finished.wait(1))
+                elapsed = time.monotonic() - started_at
+        finally:
+            fallback_release.set()
+            app.AGENT_RUN_TASKS.pop("agent-fallback", None)
+
+        self.assertTrue(fallback_started.is_set())
+        self.assertLess(elapsed, 1.5)
+        self.assertEqual(finish.call_args.args[:2], ("planner-fallback", "cancelled"))
+        fallback.assert_called_once_with(
+            "session-1",
+            "prompt",
+            default_agent=None,
+        )
+        abort.assert_called_with("session-1")
 
     def test_generator_close_terminalizes_the_job_and_flushes_its_log(self):
         with tempfile.TemporaryDirectory() as directory:
