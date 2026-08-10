@@ -149,6 +149,14 @@ async function fetchStub(url) {
 }
 
 const windowObject = {
+  WaterfallI18n: {
+    t: (key) => (key === "status.notGenerated" ? "Not generated" : key),
+    source: (value) => value,
+    log: (value) => value,
+    getLocale: () => "en",
+    setLocale() {},
+    localizeDom() {},
+  },
   localStorage: {
     getItem: (key) => storage.get(key) ?? null,
     setItem: (key, value) => storage.set(key, String(value)),
@@ -212,6 +220,7 @@ for (const filename of [
   "static/js/features/projects.js",
   "static/js/features/project-settings.js",
   "static/js/features/setup-preparation.js",
+  "static/js/features/agent-progress.js",
   "static/js/features/agent.js",
   "static/app.js",
 ]) {
@@ -221,6 +230,12 @@ for (const filename of [
     { filename },
   );
 }
+
+assert.strictEqual(
+  vm.runInContext("getGenerationStatusInfo({}).label", context),
+  "Not generated",
+  "The empty generation status badge must use the semantic English translation.",
+);
 
 setTimeout(() => {
   for (const endpoint of [

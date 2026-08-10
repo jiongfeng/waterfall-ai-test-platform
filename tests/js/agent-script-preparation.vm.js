@@ -4,6 +4,11 @@ const path = require("path");
 const vm = require("vm");
 
 const appDir = path.resolve(__dirname, "../..");
+const CJK_PATTERN = /[\u3400-\u9fff]/;
+const withoutDynamicLeaves = (html) => String(html || "").replace(
+  /<([a-z][a-z0-9]*)\b(?=[^>]*\bdata-i18n-dynamic(?:\s|=|>))[^>]*>[\s\S]*?<\/\1>/gi,
+  "",
+);
 
 function createClassList(initial = []) {
   const classes = new Set(initial);
@@ -55,7 +60,10 @@ function createElement({ classes = [], dataset = {} } = {}) {
       attributes.set(name, String(value));
     },
     getAttribute(name) {
-      return attributes.get(name) || null;
+      return attributes.has(name) ? attributes.get(name) : null;
+    },
+    removeAttribute(name) {
+      attributes.delete(name);
     },
     addEventListener(type, listener) {
       listeners.set(type, listener);
@@ -179,6 +187,34 @@ const context = {
   console,
 };
 vm.createContext(context);
+for (const filename of ["static/js/i18n/en.js", "static/js/i18n/zh-CN.js"]) {
+  vm.runInContext(fs.readFileSync(path.join(appDir, filename), "utf8"), context);
+}
+let activeLocale = "zh-CN";
+const interpolate = (value, params = {}) => Object.entries(params).reduce(
+  (text, [name, replacement]) => text.replaceAll(`{${name}}`, String(replacement)),
+  value,
+);
+context.window.WaterfallI18n = {
+  t(key, params = {}) {
+    const catalog = context.window.WaterfallTranslations[activeLocale] || {};
+    const fallback = context.window.WaterfallTranslations.en || {};
+    return interpolate(catalog[key] || fallback[key] || key, params);
+  },
+  source(value) {
+    if (activeLocale !== "en") return value;
+    return context.window.WaterfallTranslations.en.source?.[value] || value;
+  },
+  getLocale: () => activeLocale,
+  markDynamic(element, enabled = true) {
+    if (enabled) element?.setAttribute?.("data-i18n-dynamic", "");
+    else element?.removeAttribute?.("data-i18n-dynamic");
+  },
+  markDynamicAttributes(element, enabled = true) {
+    if (enabled) element?.setAttribute?.("data-i18n-dynamic-attributes", "");
+    else element?.removeAttribute?.("data-i18n-dynamic-attributes");
+  },
+};
 vm.runInContext(
   fs.readFileSync(
     path.join(appDir, "static/js/features/agent-script-preparation.js"),
@@ -198,6 +234,9 @@ const waitingItem = {
     content: "test('login', async ({ page }) => {});",
   },
   included_in_suite: false,
+  capabilities: {
+    execute: { enabled: false, reason: "计划" },
+  },
   latest_analysis: {
     summary: "修复后的定位器仍然无法命中登录按钮。",
     recommended_action: "repair",
@@ -261,6 +300,17 @@ const waitingItem = {
       result: { error: "严格模式命中两个按钮" },
       started_at: 1785456015000,
       finished_at: 1785456020000,
+    },
+    {
+      stage_id: "stage-vendor",
+      sequence_no: 4.5,
+      stage_type: "vendor_extension",
+      stage_name: "计划",
+      status: "succeeded",
+      trigger_source: "角色",
+      message: "任务失败",
+      started_at: 1785456020000,
+      finished_at: 1785456020500,
     },
     {
       stage_id: "stage-human",
@@ -328,6 +378,7 @@ const snapshot = {
 };
 let currentSnapshot = snapshot;
 let snapshotInterceptor = null;
+let itemActionMessage = "";
 
 const requests = [];
 async function requestJson(url, options = {}) {
@@ -389,19 +440,29 @@ async function requestJson(url, options = {}) {
       counts: { total: 2, ready: 2, awaiting_human: 0, abandoned: 0, busy: 0, queued: 0 },
       items: currentSnapshot.items.map((item) => (item.item_id === "script-1" ? updatedItem : item)),
     };
-    return { accepted: true, item: updatedItem, should_continue: true };
+    return {
+      accepted: true,
+      item: updatedItem,
+      should_continue: true,
+      ...(itemActionMessage ? { message: itemActionMessage } : {}),
+    };
   }
   throw new Error(`unexpected request: ${url}`);
 }
 
 const notices = [];
+const confirmMessages = [];
+let confirmResult = true;
 const feature = context.window.createAgentScriptPreparationFeature(root, {
   document: documentRef,
   window: context.window,
   runId: "agent-1",
   requestJson,
-  setNotice: (message, type) => notices.push({ message, type }),
-  confirm: () => true,
+  setNotice: (message, type, dynamic) => notices.push({ message, type, dynamic }),
+  confirm: (message) => {
+    confirmMessages.push(message);
+    return confirmResult;
+  },
 });
 
 (async () => {
@@ -450,12 +511,61 @@ const feature = context.window.createAgentScriptPreparationFeature(root, {
     "忽略脚本",
   ].forEach((label) => assert.ok(elements.actionPanel.innerHTML.includes(label), label));
 
+  activeLocale = "en";
+  feature.render();
+  assert.strictEqual(elements.stageTitle.textContent, "Script preparation");
+  assert.ok(elements.stageMeta.innerHTML.includes("data-i18n-dynamic>agent-1</span>"));
+  assert.ok(elements.stageMeta.innerHTML.includes("Script preparation</span>"));
+  assert.strictEqual(elements.stageMeta.getAttribute("data-i18n-dynamic"), null);
+  assert.strictEqual(elements.stageSummary.textContent, snapshot.summary, "API summaries must remain verbatim");
+  assert.strictEqual(elements.stageSummary.getAttribute("data-i18n-dynamic"), "");
+  assert.ok(elements.historyList.innerHTML.includes("Run v1"));
+  assert.ok(elements.historyList.innerHTML.includes("Automatic repair v1 → v2"));
+  assert.ok(elements.historyList.innerHTML.includes('<strong data-i18n-dynamic>计划</strong>'));
+  assert.doesNotMatch(withoutDynamicLeaves(elements.historyList.innerHTML), CJK_PATTERN);
+  assert.doesNotMatch(elements.detailBadges.innerHTML, CJK_PATTERN);
+  assert.ok(elements.detailContent.innerHTML.includes("Recommendation: Repair current candidate v2"));
+  assert.ok(elements.detailContent.innerHTML.includes("Analysis is based on candidate v2"));
+  assert.ok(elements.detailContent.innerHTML.includes('data-i18n-dynamic>修复后的定位器仍然无法命中登录按钮。'));
+  assert.ok(elements.actionPanel.innerHTML.includes("Use recommendation: Repair again"));
+  assert.ok(elements.actionPanel.innerHTML.includes("Repair again supplemental Prompt"));
+  assert.ok(elements.actionPanel.innerHTML.includes('data-i18n-dynamic>优先使用 role 定位并等待按钮可见。'));
+  assert.ok(elements.actionPanel.innerHTML.includes('data-i18n-dynamic-attributes title="计划"'));
+  assert.strictEqual(elements.detailMeta.getAttribute("data-i18n-dynamic"), null);
+  assert.ok(elements.detailMeta.innerHTML.includes("Script preparation</span>"));
+  assert.ok(elements.detailMeta.innerHTML.includes("data-i18n-dynamic>登录模块</span>"));
+
+  feature.selectHistory("stage-vendor");
+  assert.ok(elements.detailContent.innerHTML.includes('data-i18n-dynamic>计划</span>'));
+  assert.ok(elements.detailContent.innerHTML.includes('data-i18n-dynamic>角色</strong>'));
+  assert.ok(elements.detailContent.innerHTML.includes('data-i18n-dynamic>任务失败</p>'));
+  assert.ok(elements.actionPanel.innerHTML.includes('data-i18n-dynamic>角色</strong>'));
+  feature.returnToLatest();
+
+  confirmResult = false;
+  await feature.performItemAction("abandon");
+  assert.ok(confirmMessages.at(-1).startsWith("Ignore “"));
+  assert.ok(confirmMessages.at(-1).endsWith("This script will not be included in the test suite."));
+  feature.toggleBatchMode(true);
+  feature.setSelectedItems(["script-1"]);
+  await feature.performBatchAction("abandon");
+  assert.strictEqual(
+    confirmMessages.at(-1),
+    "Ignore the selected 1 scripts? They will not be included in the test suite.",
+  );
+  assert.doesNotMatch(confirmMessages.at(-1), CJK_PATTERN);
+  confirmResult = true;
+
   feature.openEditor("regenerate");
   assert.strictEqual(elements.originalPrompt.value, "从登录测试计划重新生成完整脚本。");
   assert.strictEqual(elements.supplementalPrompt.value, "保留现有认证准备步骤。");
   assert.strictEqual(elements.detailModal.inert, true);
   assert.strictEqual(elements.detailModal.getAttribute("aria-hidden"), "true");
   assert.strictEqual(elements.editorModal.getAttribute("aria-hidden"), "false");
+  assert.strictEqual(elements.editorMeta.getAttribute("data-i18n-dynamic"), null);
+  assert.ok(elements.editorMeta.innerHTML.includes("Script preparation</span>"));
+  assert.doesNotMatch(elements.editorBaseline.textContent, CJK_PATTERN);
+  assert.doesNotMatch(elements.editorTarget.textContent, CJK_PATTERN);
   elements.originalPrompt.value = "用户尚未提交的 Prompt 草稿";
   elements.supplementalPrompt.value = "用户尚未提交的补充要求";
   feature.render();
@@ -479,6 +589,18 @@ const feature = context.window.createAgentScriptPreparationFeature(root, {
     3,
   );
   assert.ok(notices.some((notice) => notice.type === "success"));
+  assert.doesNotMatch(notices.at(-1).message, CJK_PATTERN);
+  assert.strictEqual(notices.at(-1).dynamic, false);
+
+  itemActionMessage = "用户原始消息：计划";
+  await feature.performItemAction("repair", {
+    original_prompt: "人工更新后的修复 Prompt",
+    supplemental_prompt: "仅匹配可见按钮",
+  });
+  assert.strictEqual(notices.at(-1).message, itemActionMessage);
+  assert.strictEqual(notices.at(-1).dynamic, true);
+  itemActionMessage = "";
+  activeLocale = "zh-CN";
 
   feature.selectHistory("stage-generate");
   const firstSseItem = {
@@ -604,6 +726,7 @@ const feature = context.window.createAgentScriptPreparationFeature(root, {
   snapshotInterceptor = (_url, options) => new Promise((_resolve, reject) => {
     options.signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
   });
+  activeLocale = "en";
   const timedFeature = context.window.createAgentScriptPreparationFeature(root, {
     document: documentRef,
     window: context.window,
@@ -612,8 +735,10 @@ const feature = context.window.createAgentScriptPreparationFeature(root, {
     snapshotTimeoutMs: 1_000,
   });
   await timedFeature.activate();
-  assert.match(timedFeature.getState().snapshotError, /脚本准备进度读取超时/);
-  assert.ok(elements.localNotice.textContent.includes("脚本准备进度暂时无法读取"));
+  assert.match(timedFeature.getState().snapshotError, /Script preparation progress timed out/);
+  assert.ok(elements.localNotice.textContent.includes("Script-preparation progress is temporarily unavailable"));
+  assert.doesNotMatch(elements.localNotice.textContent, CJK_PATTERN);
+  assert.strictEqual(elements.localNotice.getAttribute("data-i18n-dynamic"), "");
   timedFeature.destroy();
   snapshotInterceptor = null;
 

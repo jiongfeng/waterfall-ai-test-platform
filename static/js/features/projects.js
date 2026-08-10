@@ -158,6 +158,7 @@ function renderProjectSelect() {
     option.value = project.project_key;
     option.textContent = project.name;
     option.title = project.playwright_project_root || project.name;
+    window.WaterfallI18n?.markDynamic?.(option);
     elements.projectSelect.appendChild(option);
   });
   elements.projectSelect.value = state.project.currentKey || "";

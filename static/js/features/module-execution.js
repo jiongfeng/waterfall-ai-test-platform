@@ -1097,7 +1097,13 @@ function renderModuleScriptList() {
     checkbox.type = "checkbox";
     checkbox.checked = state.scripts.selectedFiles.has(script.name);
     checkbox.disabled = isBusy;
-    checkbox.setAttribute("aria-label", `选择 ${script.display_name || stripSpecSuffix(script.name)}`);
+    checkbox.setAttribute(
+      "aria-label",
+      `${window.WaterfallI18n?.t?.("action.select") || "Select"} ${
+        script.display_name || stripSpecSuffix(script.name)
+      }`,
+    );
+    window.WaterfallI18n?.markDynamicAttributes?.(checkbox);
     checkbox.addEventListener("change", () => {
       if (checkbox.checked) {
         state.scripts.selectedFiles.add(script.name);
@@ -1115,6 +1121,7 @@ function renderModuleScriptList() {
     nameButton.className = "module-script-name-button";
     nameButton.textContent = script.display_name || stripSpecSuffix(script.name);
     nameButton.title = script.path || script.name;
+    window.WaterfallI18n?.markDynamic?.(nameButton);
     nameButton.addEventListener("click", () => selectScript(state.scripts.selectedModule, script.name));
     nameCell.appendChild(nameButton);
     row.appendChild(nameCell);
@@ -1212,8 +1219,11 @@ function formatModuleRepairDuration(item) {
     return "";
   }
   const finishedAt = item.finished_at || (item.status === "running" ? Date.now() : item.updated_at);
-  const label = item.status === "running" ? "进行时间" : "耗时";
-  return `${label}：${formatRepairDuration(finishedAt - item.started_at)}`;
+  const duration = formatRepairDuration(finishedAt - item.started_at);
+  const key = item.status === "running" ? "duration.elapsed" : "duration.total";
+  const fallback = item.status === "running" ? `进行时间：${duration}` : `耗时：${duration}`;
+  const translated = window.WaterfallI18n?.t?.(key, { duration });
+  return translated && translated !== key ? translated : fallback;
 }
 
 function renderModuleRepairRecord() {
@@ -1280,6 +1290,7 @@ function renderModuleRepairRecord() {
     const title = document.createElement("span");
     title.className = "module-repair-title";
     title.textContent = stripSpecSuffix(filename);
+    window.WaterfallI18n?.markDynamic?.(title);
     const duration = document.createElement("span");
     duration.className = "module-repair-duration";
     duration.textContent = formatModuleRepairDuration(item);

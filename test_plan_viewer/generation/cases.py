@@ -8,7 +8,10 @@ from typing import Callable
 
 from test_plan_viewer.artifacts.naming import (
     get_case_plan_filename_from_title,
+    get_english_case_plan_filename_from_title,
+    plan_filename_collision_key,
 )
+from test_plan_viewer.configuration import normalize_project_language
 
 from .prompts import ABSOLUTE_PLAN_MAX_CASES
 
@@ -28,13 +31,24 @@ class CaseDependencies:
     file_exists: Callable[[Path], bool]
     read_text: Callable[[Path], str]
     write_text: Callable[[Path, str], None]
+    # Preserve the historical Chinese domain behavior for direct callers.
+    # The application composition root supplies the active project language.
+    get_project_language: Callable[[], str] = lambda: "zh-CN"
 
 
-def normalize_case_filename(value, title, index=None):
+def normalize_case_filename(value, title, index=None, *, language="zh-CN"):
     filename = str(value or "").strip()
     title = str(title or "").strip()
     if not filename and not title:
+        if normalize_project_language(language) == "en":
+            raise ValueError("Case is missing title or filename.")
         raise ValueError("用例缺少 title 或 filename。")
+    if normalize_project_language(language) == "en":
+        return get_english_case_plan_filename_from_title(
+            filename,
+            title,
+            index=index,
+        )
     return get_case_plan_filename_from_title(
         filename,
         title,
@@ -42,7 +56,7 @@ def normalize_case_filename(value, title, index=None):
     )
 
 
-def extract_case_index(markdown_text):
+def extract_case_index(markdown_text, *, language="zh-CN"):
     candidates = JSON_FENCE_PATTERN.findall(markdown_text or "")
     stripped = (markdown_text or "").strip()
     if stripped.startswith("{") and stripped.endswith("}"):
@@ -58,6 +72,8 @@ def extract_case_index(markdown_text):
             if isinstance(cases, list):
                 return data
 
+    if normalize_project_language(language) == "en":
+        raise ValueError("No JSON object containing a cases array was found.")
     raise ValueError("未找到包含 cases 数组的 JSON 代码块。")
 
 
@@ -114,29 +130,56 @@ def list_text_items(value):
     return []
 
 
-def case_to_markdown(module_name, source_filename, case):
+def case_to_markdown(
+    module_name,
+    source_filename,
+    case,
+    *,
+    language="zh-CN",
+):
+    language = normalize_project_language(language)
     title = str(case.get("title") or case.get("name") or "").strip()
     if not title:
         title = Path(
-            normalize_case_filename(case.get("filename"), "")
+            normalize_case_filename(
+                case.get("filename"),
+                "",
+                language=language,
+            )
         ).stem
     suite = str(case.get("suite") or module_name).strip()
     description = str(case.get("description") or "").strip()
     preconditions = list_text_items(case.get("preconditions"))
     steps = normalize_case_steps(case.get("steps"))
 
-    lines = [
-        f"# {title}",
-        "",
-        f"模块：{module_name}",
-        f"来源：{source_filename}",
-    ]
-    if suite:
-        lines.append(f"套件：{suite}")
+    if language == "en":
+        lines = [
+            f"# {title}",
+            "",
+            f"Module: {module_name}",
+            f"Source: {source_filename}",
+        ]
+        if suite:
+            lines.append(f"Suite: {suite}")
+        description_heading = "## Description"
+        preconditions_heading = "## Preconditions"
+        missing_step = "1. Add test steps."
+    else:
+        lines = [
+            f"# {title}",
+            "",
+            f"模块：{module_name}",
+            f"来源：{source_filename}",
+        ]
+        if suite:
+            lines.append(f"套件：{suite}")
+        description_heading = "## 说明"
+        preconditions_heading = "## 前置条件"
+        missing_step = "1. 待补充步骤"
     if description:
-        lines.extend(["", "## 说明", "", description])
+        lines.extend(["", description_heading, "", description])
     if preconditions:
-        lines.extend(["", "## 前置条件", ""])
+        lines.extend(["", preconditions_heading, ""])
         lines.extend(f"- {item}" for item in preconditions)
     lines.extend(["", "## Steps", ""])
     if steps:
@@ -146,13 +189,13 @@ def case_to_markdown(module_name, source_filename, case):
                 lines.append(f"   - Expect: {expect}")
             lines.append("")
     else:
-        lines.append("1. 待补充步骤")
+        lines.append(missing_step)
         lines.append("")
 
     return "\n".join(lines).rstrip() + "\n"
 
 
-def normalize_case_index_cases(data):
+def normalize_case_index_cases(data, *, language="zh-CN"):
     if isinstance(data, list):
         cases = data
     elif isinstance(data, dict):
@@ -164,6 +207,8 @@ def normalize_case_index_cases(data):
     else:
         cases = None
     if not isinstance(cases, list) or not cases:
+        if normalize_project_language(language) == "en":
+            raise ValueError("The cases array is empty.")
         raise ValueError("cases 数组为空。")
     return cases
 
@@ -176,7 +221,15 @@ def split_case_index_cases(
     overwrite=False,
     source_plan_file=None,
 ):
+    language = normalize_project_language(
+        dependencies.get_project_language()
+    )
     if len(cases) > ABSOLUTE_PLAN_MAX_CASES:
+        if language == "en":
+            raise ValueError(
+                f"The test plan contains {len(cases)} cases, exceeding the "
+                f"platform limit of {ABSOLUTE_PLAN_MAX_CASES}."
+            )
         raise ValueError(
             f"测试计划包含 {len(cases)} 个用例，"
             f"超过平台绝对上限 {ABSOLUTE_PLAN_MAX_CASES} 个。"
@@ -196,6 +249,7 @@ def split_case_index_cases(
         if source_plan_file
         else source_filename
     )
+    source_key = plan_filename_collision_key(source_name)
 
     # Build and validate the complete write plan before touching any target.
     # A malformed later case must not leave earlier case files behind.
@@ -218,22 +272,43 @@ def split_case_index_cases(
             raw_filename,
             title,
             index=case_index,
+            language=language,
         )
+        raw_filename_key = plan_filename_collision_key(raw_filename)
+        filename_key = plan_filename_collision_key(filename)
         if (
-            raw_filename == source_name
+            raw_filename_key == source_key
             or raw_filename.startswith("_")
-            or filename == source_name
+            or filename_key == source_key
             or filename.startswith("_")
-            or filename in seen
         ):
             skipped.append(
                 {
                     "filename": filename,
-                    "reason": "索引文件、内部文件或重复文件名不会拆分。",
+                    "reason": (
+                        "Index and internal filenames are not split."
+                        if language == "en"
+                        else "索引文件或内部文件不会拆分。"
+                    ),
                 }
             )
             continue
-        seen.add(filename)
+        if filename_key in seen:
+            conflict = {
+                "filename": filename,
+                "reason": (
+                    "Multiple cases resolve to the same filename."
+                    if language == "en"
+                    else "多个用例规范化后使用同一文件名。"
+                ),
+                "reason_code": "duplicate_filename",
+            }
+            conflicts.append(conflict)
+            # Keep the legacy skipped collection populated for callers that
+            # have not adopted the explicit conflicts field yet.
+            skipped.append(conflict)
+            continue
+        seen.add(filename_key)
         target_file = dependencies.get_plan_file(
             module_name,
             filename,
@@ -242,6 +317,7 @@ def split_case_index_cases(
             module_name,
             source_filename,
             {**raw_case, "filename": filename},
+            language=language,
         )
         payload = dependencies.plan_payload(target_file, module_name)
         if dependencies.file_exists(target_file) and not overwrite:
@@ -250,7 +326,11 @@ def split_case_index_cases(
             else:
                 conflict = {
                     "filename": filename,
-                    "reason": "文件已存在。",
+                    "reason": (
+                        "File already exists."
+                        if language == "en"
+                        else "文件已存在。"
+                    ),
                     "reason_code": "content_conflict",
                 }
                 conflicts.append(conflict)
@@ -261,11 +341,15 @@ def split_case_index_cases(
         planned_writes.append((target_file, markdown, payload))
 
     if not planned_writes and not reused and not skipped:
+        if language == "en":
+            raise ValueError(
+                "The cases array does not contain a valid case to split."
+            )
         raise ValueError("cases 数组中没有可拆分的有效用例。")
 
-    # A content conflict makes the entire split unsafe. Returning the complete
-    # plan lets the composition root report a precise failure while ensuring
-    # that no non-conflicting case is written as a partial result.
+    # Any target conflict makes the entire split unsafe. Returning the
+    # complete plan lets the composition root report a precise failure while
+    # ensuring that no non-conflicting case is written as a partial result.
     if conflicts:
         return {
             "created": [],
@@ -296,9 +380,12 @@ def split_case_index_plan(
     dependencies,
     overwrite=False,
 ):
+    language = normalize_project_language(
+        dependencies.get_project_language()
+    )
     markdown_text = dependencies.read_text(source_plan_file)
-    data = extract_case_index(markdown_text)
-    cases = normalize_case_index_cases(data)
+    data = extract_case_index(markdown_text, language=language)
+    cases = normalize_case_index_cases(data, language=language)
     return split_case_index_cases(
         module_name,
         source_plan_file.name,

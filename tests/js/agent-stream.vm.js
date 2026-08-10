@@ -232,6 +232,7 @@ async function fetchStub(url) {
 
 let apiRun = run;
 let runDetailRequests = 0;
+let userContentTranslationAttempts = 0;
 let deferredTailRunId = "";
 let resolveDeferredTail;
 const runPayloads = new Map([[run.run_id, { run, steps }]]);
@@ -279,6 +280,17 @@ let nextTimeoutId = 1;
 const windowListeners = new Map();
 const storage = new Map();
 const windowObject = {
+  WaterfallI18n: {
+    source(value) {
+      if (value === "未生成") userContentTranslationAttempts += 1;
+      return value;
+    },
+    log: (value) => value,
+    platformFailure: (_stepKey, value) => String(value).startsWith("拆分计划失败：多计划拆分检测到已有文件内容冲突；")
+      ? "Plan splitting failed: Existing file-content conflicts were found; no plan files were written, registered, or deleted: old-case.md"
+      : value,
+    getLocale: () => "en",
+  },
   localStorage: {
     getItem: (key) => storage.get(key) ?? null,
     setItem: (key, value) => storage.set(key, String(value)),
@@ -360,7 +372,11 @@ const context = {
 };
 context.globalThis = context;
 vm.createContext(context);
-for (const filename of ["static/js/core/sse.js", "static/js/features/agent.js"]) {
+for (const filename of [
+  "static/js/core/sse.js",
+  "static/js/features/agent-progress.js",
+  "static/js/features/agent.js",
+]) {
   vm.runInContext(fs.readFileSync(path.join(appDir, filename), "utf8"), context, { filename });
 }
 
@@ -430,6 +446,48 @@ async function flushPromises() {
     "the paused refresh must clear a pending fallback render",
   );
   assert.strictEqual(eventSummary.textContent, "已加载 3013 条事件，内存保留 3005 条");
+
+  const progressRun = {
+    ...run,
+    run_id: "run-module-progress",
+    status: "cancelled",
+    current_step: "generate_plans",
+  };
+  const splitCasePlans = Array.from({ length: 11 }, (_, index) => ({
+    module_name: "Product catalog",
+    plan_filename: `case-${index + 1}.md`,
+  }));
+  const progressSteps = [
+    { step_key: "upload_requirement", status: "succeeded", input: {}, output: {}, counts: {} },
+    {
+      step_key: "generate_plans",
+      status: "cancelled",
+      input: { modules: Array.from({ length: 6 }, (_, index) => ({ module_uid: `module-${index + 1}` })) },
+      output: {
+        plans: splitCasePlans,
+        failures: [
+          { module_name: "Login", plan_filename: "user-failure.md", error: "未生成" },
+          {
+            module_name: "Login",
+            plan_filename: "platform-failure.md",
+            error: "拆分计划失败：多计划拆分检测到已有文件内容冲突；未写入、登记或删除任何计划文件：old-case.md",
+          },
+        ],
+        skipped: [],
+      },
+      counts: { modules: 6, generated: 11, failed: 1, skipped: 0 },
+    },
+  ];
+  runPayloads.set(progressRun.run_id, { run: progressRun, steps: progressSteps });
+  eventPayloads.set(progressRun.run_id, []);
+  apiRun = progressRun;
+  await feature.setProject("vm-progress-units");
+  const stepTimeline = elements.get('[data-agent-id="stepTimeline"]');
+  assert.ok(stepTimeline.innerHTML.includes("2 / 6 个模块"), stepTimeline.innerHTML);
+  assert.ok(!stepTimeline.innerHTML.includes("11 / 6"), "case totals must never be divided by module totals");
+  assert.ok(artifactList.innerHTML.includes("未生成"), "third-party failure text must remain verbatim");
+  assert.ok(artifactList.innerHTML.includes("Plan splitting failed:"), "known historical platform failures must localize");
+  assert.strictEqual(userContentTranslationAttempts, 0, "third-party failure messages must not enter source localization");
 
   const terminalSteps = [
     { step_key: "upload_requirement", status: "succeeded", input: {}, output: {}, counts: {} },

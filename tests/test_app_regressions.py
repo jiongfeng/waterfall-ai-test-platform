@@ -1809,8 +1809,14 @@ class PlanCoveragePromptTests(unittest.TestCase):
     def test_frontend_does_not_resplit_server_finalized_multiple_plan(self):
         source = read_platform_javascript()
 
-        self.assertIn("if (!Array.isArray(result.plans) || !result.plans.length)", source)
-        self.assertIn("await splitGeneratedPlanCases(resultModule, resultPlanFilename);", source)
+        self.assertIn("let filenames = generatedPlanFilenames(result);", source)
+        self.assertIn("if (listed.includes(planFilename))", source)
+        self.assertIn(
+            "filenames = generatedPlanFilenames(await splitGeneratedPlanCases(moduleName, planFilename));",
+            source,
+        )
+        self.assertIn("await selectPlan(moduleName, filenames[0], true);", source)
+        self.assertNotIn("await splitGeneratedPlanCases(resultModule, resultPlanFilename);", source)
 
 
 class AgentTaskToolbarTests(unittest.TestCase):

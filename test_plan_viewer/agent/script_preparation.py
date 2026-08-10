@@ -18,6 +18,8 @@ import threading
 import uuid
 from typing import Any, Callable
 
+from test_plan_viewer.agent import localization as agent_localization
+
 
 SCRIPT_PREPARATION_STEP_KEY = "prepare_scripts"
 SCRIPT_PREPARATION_SCHEMA_VERSION = 1
@@ -110,6 +112,7 @@ class ScriptPreparationDependencies:
     is_cancelled_error: Callable[[BaseException], bool]
     make_id: Callable[[str], str] = lambda prefix: f"{prefix}-{uuid.uuid4().hex}"
     waiting_run_status: str = "awaiting_script_action"
+    get_project_language: Callable[[], str] = lambda: "zh-CN"
 
 
 def script_preparation_dependencies_from_resolver(resolver):
@@ -137,6 +140,7 @@ def script_preparation_dependencies_from_resolver(resolver):
         is_cancelled_error=lazy("is_cancelled_error"),
         make_id=lazy("make_id"),
         waiting_run_status=str(resolver("waiting_run_status")),
+        get_project_language=lazy("get_project_language"),
     )
 
 
@@ -1153,7 +1157,10 @@ class ScriptPreparationService:
             state["run_id"],
             SCRIPT_PREPARATION_STEP_KEY,
             "status",
-            "脚本准备状态已更新。",
+            agent_localization.message(
+                self.dependencies.get_project_language(),
+                "script_preparation_updated",
+            ),
             {
                 "artifact_progress": True,
                 "artifact_type": "script",

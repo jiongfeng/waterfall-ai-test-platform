@@ -22,6 +22,7 @@ class AgentStreamConsumerDependencies:
     log_tail_limit: int
     sleep: Callable[[float], Any]
     batcher_factory: Callable[[], AgentOutputBatcher] = AgentOutputBatcher
+    project_copy: Callable[[str, str], str] = lambda _english, chinese: chinese
 
 
 @dataclass
@@ -86,7 +87,12 @@ def consume_agent_sse_generator(
                     dependencies.sleep(0.05)
         if error is not None:
             raise error
-        raise RuntimeError("Agent 输出批次持久化失败。")
+        raise RuntimeError(
+            dependencies.project_copy(
+                "Failed to persist the Agent output batch.",
+                "Agent 输出批次持久化失败。",
+            )
+        )
 
     def persist_batch(state, batch, *, reason=None, job_log_snapshot=None):
         metadata = {
@@ -173,7 +179,10 @@ def consume_agent_sse_generator(
                 run_id,
                 step_key,
                 "error",
-                f"Agent 流终止：{business_text}；剩余输出持久化失败：{flush_text}",
+                dependencies.project_copy(
+                    f"Agent stream terminated: {business_text}; failed to persist remaining output: {flush_text}",
+                    f"Agent 流终止：{business_text}；剩余输出持久化失败：{flush_text}",
+                ),
                 payload,
                 job_id=delta.job_id or tool_log.job_id,
             )
@@ -249,7 +258,11 @@ def consume_agent_sse_generator(
                 run_id,
                 step_key,
                 "status",
-                data.get("error") or f"状态：{data.get('status', '')}",
+                data.get("error")
+                or dependencies.project_copy(
+                    f"Status: {data.get('status', '')}",
+                    f"状态：{data.get('status', '')}",
+                ),
                 data,
                 job_id=data.get("job_id"),
                 asset_id=(data.get("asset") or {}).get("asset_id")
@@ -267,7 +280,11 @@ def consume_agent_sse_generator(
                 run_id,
                 step_key,
                 "status",
-                data.get("error") or f"任务{status}",
+                data.get("error")
+                or dependencies.project_copy(
+                    f"Task {status}",
+                    f"任务{status}",
+                ),
                 data,
                 job_id=data.get("job_id"),
                 asset_id=(data.get("asset") or {}).get("asset_id")
@@ -353,7 +370,13 @@ def consume_agent_sse_generator(
             except Exception:
                 pass
     if generator_handles_cancellation and result.get("status") == "cancelled":
-        raise dependencies.cancelled_error(result.get("error") or "Agent 任务已取消。")
+        raise dependencies.cancelled_error(
+            result.get("error")
+            or dependencies.project_copy(
+                "Agent task cancelled.",
+                "Agent 任务已取消。",
+            )
+        )
     return result
 
 

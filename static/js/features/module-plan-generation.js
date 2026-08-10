@@ -539,7 +539,13 @@ function renderModulePlanList() {
     checkbox.type = "checkbox";
     checkbox.checked = state.plans.selectedPlanFiles.has(plan.filename);
     checkbox.disabled = isBusy;
-    checkbox.setAttribute("aria-label", `选择 ${plan.name || stripMarkdownSuffix(plan.filename)}`);
+    checkbox.setAttribute(
+      "aria-label",
+      `${window.WaterfallI18n?.t?.("action.select") || "Select"} ${
+        plan.name || stripMarkdownSuffix(plan.filename)
+      }`,
+    );
+    window.WaterfallI18n?.markDynamicAttributes?.(checkbox);
     checkbox.addEventListener("change", () => {
       if (checkbox.checked) {
         state.plans.selectedPlanFiles.add(plan.filename);
@@ -557,6 +563,7 @@ function renderModulePlanList() {
     nameButton.className = "module-script-name-button";
     nameButton.textContent = plan.name || stripMarkdownSuffix(plan.filename);
     nameButton.title = plan.path || plan.filename;
+    window.WaterfallI18n?.markDynamic?.(nameButton);
     nameButton.addEventListener("click", () => selectPlan(state.plans.selectedModule, plan.filename));
     nameCell.appendChild(nameButton);
     row.appendChild(nameCell);
@@ -574,6 +581,7 @@ function renderModulePlanList() {
 
     const scriptCell = document.createElement("td");
     scriptCell.textContent = script?.name || getExpectedScriptFilenameForPlan(plan.filename);
+    window.WaterfallI18n?.markDynamic?.(scriptCell);
     if (!script) {
       scriptCell.className = "muted-cell";
     }
@@ -650,6 +658,7 @@ function renderModulePlanScriptBatchRecord() {
     const title = document.createElement("span");
     title.className = "module-repair-title";
     title.textContent = stripMarkdownSuffix(planFilename);
+    window.WaterfallI18n?.markDynamic?.(title);
     const duration = document.createElement("span");
     duration.className = "module-repair-duration";
     duration.textContent = formatModuleRepairDuration(item);

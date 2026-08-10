@@ -13,6 +13,22 @@ const SECTION = {
 // source() for new UI: source() only exists as a safe bridge for old literals.
 const t = (key, params = {}) => window.WaterfallI18n?.t(key, params) || key;
 const sourceText = (value) => window.WaterfallI18n?.source(value) || value;
+const markDynamicContent = (element, enabled = true) => {
+  window.WaterfallI18n?.markDynamic?.(element, enabled);
+  return element;
+};
+const markDynamicAttributes = (element, enabled = true) => {
+  window.WaterfallI18n?.markDynamicAttributes?.(element, enabled);
+  return element;
+};
+const setDynamicText = (element, value) => {
+  markDynamicContent(element);
+  element.textContent = String(value ?? "");
+};
+const setPlatformText = (element, value) => {
+  markDynamicContent(element, false);
+  element.textContent = sourceText(String(value ?? ""));
+};
 
 const MENU_ITEMS = [
   { section: SECTION.REQUIREMENTS, permission: "menu.requirements", label: "需求", title: "需求" },
@@ -1425,7 +1441,7 @@ function renderPlanGenerationModuleOptions(selectedModuleName = "") {
   moduleNames.forEach((moduleName) => {
     const option = document.createElement("option");
     option.value = moduleName;
-    option.textContent = moduleName;
+    setDynamicText(option, moduleName);
     elements.newModuleNameSelect.appendChild(option);
   });
 
@@ -2070,12 +2086,12 @@ const {
   closeScriptGenerationModal,
   submitScriptGeneration,
 } = generationFeature;
-
 const scriptRepairFeature = createScriptRepairFeature({
   state,
   elements,
   SECTION,
   SCRIPT_VIEW_TAB,
+  window,
   getScriptRunPromptFixedTemplate: () => SCRIPT_RUN_PROMPT_FIXED_TEMPLATE,
   getScriptRunPromptNoteDefault: () => SCRIPT_RUN_PROMPT_NOTE_DEFAULT,
   fetch: (...args) => fetch(...args),
@@ -2354,6 +2370,7 @@ function renderPlanList() {
     moduleButton.type = "button";
     moduleButton.className = "tree-module-button";
     moduleButton.title = moduleItem.path || moduleItem.name;
+    markDynamicAttributes(moduleButton);
 
     const isExpanded = query || state.plans.expandedModules.has(moduleItem.name);
     const isSelectedModule = moduleItem.name === state.plans.selectedModule && !state.plans.selectedPlanFile;
@@ -2363,7 +2380,7 @@ function renderPlanList() {
       <span class="tree-module-name"></span>
       <span class="tree-count">${moduleItem.plans.length}</span>
     `;
-    moduleButton.querySelector(".tree-module-name").textContent = moduleItem.name;
+    setDynamicText(moduleButton.querySelector(".tree-module-name"), moduleItem.name);
     moduleButton.addEventListener("click", () => {
       if (moduleItem.name === state.plans.selectedModule && !state.plans.selectedPlanFile) {
         togglePlanModule(moduleItem.name);
@@ -2382,7 +2399,7 @@ function renderPlanList() {
         const planButton = document.createElement("button");
         planButton.type = "button";
         planButton.className = "tree-plan-button";
-        planButton.textContent = plan.name || stripMarkdownSuffix(plan.filename);
+        setDynamicText(planButton, plan.name || stripMarkdownSuffix(plan.filename));
         planButton.title = plan.path || plan.filename;
         planButton.classList.toggle(
           "active",
@@ -2419,6 +2436,7 @@ function renderScriptTree() {
     moduleButton.type = "button";
     moduleButton.className = "tree-module-button";
     moduleButton.title = moduleItem.path || moduleItem.name;
+    markDynamicAttributes(moduleButton);
 
     const isExpanded = query || state.scripts.expandedModules.has(moduleItem.name);
     const isSelectedModule = moduleItem.name === state.scripts.selectedModule && !state.scripts.selectedFile;
@@ -2428,7 +2446,7 @@ function renderScriptTree() {
       <span class="tree-module-name"></span>
       <span class="tree-count">${moduleItem.scripts.length}</span>
     `;
-    moduleButton.querySelector(".tree-module-name").textContent = moduleItem.name;
+    setDynamicText(moduleButton.querySelector(".tree-module-name"), moduleItem.name);
     moduleButton.addEventListener("click", () => toggleScriptModule(moduleItem.name));
 
     group.appendChild(moduleButton);
@@ -2441,7 +2459,7 @@ function renderScriptTree() {
         const scriptButton = document.createElement("button");
         scriptButton.type = "button";
         scriptButton.className = "tree-script-button";
-        scriptButton.textContent = script.display_name || stripSpecSuffix(script.name);
+        setDynamicText(scriptButton, script.display_name || stripSpecSuffix(script.name));
         scriptButton.title = script.path || script.name;
         scriptButton.classList.toggle(
           "active",
@@ -2510,7 +2528,8 @@ function renderAssetInfoPanel() {
       const openButton = document.createElement("button");
       openButton.type = "button";
       openButton.className = "inline-link-button";
-      openButton.textContent = sourcePlan.title || "打开来源计划";
+      if (sourcePlan.title) setDynamicText(openButton, sourcePlan.title);
+      else setPlatformText(openButton, "打开来源计划");
       openButton.addEventListener("click", () => {
         const planFilename = (sourcePlan.current_path || "").split(/[\\/]/).pop() || `${sourcePlan.title}.md`;
         state.activeSection = SECTION.PLANS;
@@ -2593,7 +2612,10 @@ function renderPlanRelatedScripts() {
     const nameButton = document.createElement("button");
     nameButton.type = "button";
     nameButton.className = "module-script-name-button";
-    nameButton.textContent = script.title || stripSpecSuffix((script.current_path || "").split(/[\\/]/).pop() || "");
+    setDynamicText(
+      nameButton,
+      script.title || stripSpecSuffix((script.current_path || "").split(/[\\/]/).pop() || ""),
+    );
     nameButton.addEventListener("click", () => {
       const filename = (script.current_path || "").split(/[\\/]/).pop();
       if (filename) {
@@ -2609,12 +2631,12 @@ function renderPlanRelatedScripts() {
     row.appendChild(statusCell);
 
     const pathCell = document.createElement("td");
-    pathCell.textContent = script.current_path || "";
+    setDynamicText(pathCell, script.current_path || "");
     pathCell.title = script.current_path || "";
     row.appendChild(pathCell);
 
     const jobCell = document.createElement("td");
-    jobCell.textContent = script.source_job_id || "-";
+    setDynamicText(jobCell, script.source_job_id || "-");
     row.appendChild(jobCell);
 
     const actionsCell = document.createElement("td");
@@ -2700,20 +2722,20 @@ function renderPlanGenerationRecord() {
     elements.planRecordTargetPath.textContent = "";
     elements.planRecordJobLogs.textContent = "";
     elements.planRecordJobOutput.classList.add("hidden");
-    renderGenerationDuration(elements.planRecordDuration, null, "生成进行时间", "生成耗时");
+    renderGenerationDuration(elements.planRecordDuration, null);
     return;
   }
 
   elements.planRecordPrompt.value = record.prompt || "";
   elements.planRecordTargetPath.textContent = record.target_path || "";
-  elements.planRecordJobLogs.textContent = record.logs || "";
+  elements.planRecordJobLogs.textContent = window.WaterfallI18n?.log(record.logs || "") || record.logs || "";
   elements.planRecordJobLogs.scrollTop = elements.planRecordJobLogs.scrollHeight;
   elements.planRecordJobOutput.classList.toggle("hidden", !record.logs && record.status === "idle");
   elements.planRecordJobStatus.className = "job-status";
   const coverageMeta = record.coverage_profile
     ? `模板来源：${getCoverageProfile(record.coverage_profile)?.label || "核心回归"}${record.prompt_customized ? " · 已自定义" : ""}`
     : "";
-  renderGenerationDuration(elements.planRecordDuration, record, "生成进行时间", "生成耗时");
+  renderGenerationDuration(elements.planRecordDuration, record);
 
   if (record.status === "succeeded") {
     elements.planRecordJobStatus.textContent = coverageMeta ? `任务成功 · ${coverageMeta}` : "任务成功";
@@ -2743,7 +2765,7 @@ function renderPlanScriptGenerationRecord() {
     elements.planScriptRecordTargetPath.textContent = "";
     elements.planScriptJobLogs.textContent = "";
     elements.planScriptJobOutput.classList.add("hidden");
-    renderGenerationDuration(elements.planScriptDuration, null, "生成进行时间", "生成耗时");
+    renderGenerationDuration(elements.planScriptDuration, null);
     elements.planScriptGenerationSubmit.disabled = true;
     elements.planScriptGenerationSubmit.textContent = "确认生成";
     return;
@@ -2752,11 +2774,11 @@ function renderPlanScriptGenerationRecord() {
   elements.planScriptPromptFixed.value = record.prompt_fixed;
   elements.planScriptPromptNote.value = record.prompt_note;
   elements.planScriptRecordTargetPath.textContent = record.target_path || getDefaultScriptTargetPath(record.module_name);
-  elements.planScriptJobLogs.textContent = record.logs || "";
+  elements.planScriptJobLogs.textContent = window.WaterfallI18n?.log(record.logs || "") || record.logs || "";
   elements.planScriptJobLogs.scrollTop = elements.planScriptJobLogs.scrollHeight;
   elements.planScriptJobOutput.classList.toggle("hidden", !record.logs && record.status === "idle");
   elements.planScriptJobStatus.className = "job-status";
-  renderGenerationDuration(elements.planScriptDuration, record, "生成进行时间", "生成耗时");
+  renderGenerationDuration(elements.planScriptDuration, record);
 
   if (record.status === "succeeded") {
     elements.planScriptJobStatus.textContent = "任务成功";
@@ -2800,7 +2822,7 @@ function getGenerationStatusInfo(recordOrItem) {
   if (recordOrItem?.status === "failed") {
     return { label: "失败", className: "error" };
   }
-  return { label: "未生成", className: "" };
+  return { label: t("status.notGenerated"), className: "" };
 }
 
 function createStatusBadge(info) {
@@ -2981,7 +3003,7 @@ const requirementsFeature = createRequirementsFeature({
   escapeHtml,
   formatTimestampMs,
   isPlainObject,
-  getChinesePlanFilenameFromName,
+  getPlanFilenameForProjectLanguage,
   normalizeRequirementPlanGenerationBatch,
   persistRequirementPlanGenerationBatches,
   normalizeRequirementModule,
@@ -3132,8 +3154,8 @@ function renderContent() {
   elements.viewerArea.classList.toggle("with-tabs", showPlanTabs || showScriptTabs);
 
   if (!getFirstAllowedSection()) {
-    elements.moduleTitle.textContent = "暂无可用菜单";
-    elements.filePath.textContent = "请联系管理员配置角色权限";
+    setPlatformText(elements.moduleTitle, "暂无可用菜单");
+    setPlatformText(elements.filePath, "请联系管理员配置角色权限");
     elements.emptyState.classList.remove("hidden");
     elements.emptyState.querySelector("h3").textContent = "暂无可访问功能";
     elements.emptyState.querySelector("p").textContent = "当前账号没有分配菜单权限。";
@@ -3143,13 +3165,13 @@ function renderContent() {
   if (adminSection) {
     elements.emptyState.classList.add("hidden");
     if (state.activeSection === SECTION.USERS) {
-      elements.moduleTitle.textContent = "用户管理";
-      elements.filePath.textContent = "账号、状态和角色";
+      setPlatformText(elements.moduleTitle, "用户管理");
+      setPlatformText(elements.filePath, "账号、状态和角色");
       renderUserAdminPanel();
       elements.userAdminPanel.classList.remove("hidden");
     } else {
-      elements.moduleTitle.textContent = "角色管理";
-      elements.filePath.textContent = "角色和菜单权限";
+      setPlatformText(elements.moduleTitle, "角色管理");
+      setPlatformText(elements.filePath, "角色和菜单权限");
       renderRoleAdminPanel();
       elements.roleAdminPanel.classList.remove("hidden");
     }
@@ -3158,8 +3180,8 @@ function renderContent() {
 
   if (projectSettingsSection) {
     elements.emptyState.classList.add("hidden");
-    elements.moduleTitle.textContent = "项目配置";
-    elements.filePath.textContent = state.project.current?.playwright_project_root || "";
+    setPlatformText(elements.moduleTitle, "项目配置");
+    setDynamicText(elements.filePath, state.project.current?.playwright_project_root || "");
     renderProjectSettingsPanel();
     elements.projectSettingsPanel.classList.remove("hidden");
     return;
@@ -3167,16 +3189,16 @@ function renderContent() {
 
   if (isAgentSectionActive) {
     elements.emptyState.classList.add("hidden");
-    elements.moduleTitle.textContent = "Agent 自动测试";
-    elements.filePath.textContent = state.project.current?.name || state.project.currentKey || "";
+    setPlatformText(elements.moduleTitle, "Agent 自动测试");
+    setDynamicText(elements.filePath, state.project.current?.name || state.project.currentKey || "");
     elements.agentPanel.classList.remove("hidden");
     return;
   }
 
   if (isRequirementsSection) {
     if (!state.requirements.current) {
-      elements.moduleTitle.textContent = "需求";
-      elements.filePath.textContent = "未选择需求";
+      setPlatformText(elements.moduleTitle, "需求");
+      setPlatformText(elements.filePath, "未选择需求");
       elements.analyzeRequirementButton.disabled = true;
       elements.analyzeRequirementButton.textContent = "解析需求";
       elements.importInventoryButton.disabled = state.requirements.analysisRunning || state.requirements.planGenerationRunning;
@@ -3186,8 +3208,9 @@ function renderContent() {
       return;
     }
     elements.emptyState.classList.add("hidden");
-    elements.moduleTitle.textContent = state.requirements.current.title || "需求";
-    elements.filePath.textContent = state.requirements.current.file_path || "";
+    if (state.requirements.current.title) setDynamicText(elements.moduleTitle, state.requirements.current.title);
+    else setPlatformText(elements.moduleTitle, "需求");
+    setDynamicText(elements.filePath, state.requirements.current.file_path || "");
     renderRequirementsPanel();
     elements.requirementsPanel.classList.remove("hidden");
     return;
@@ -3203,13 +3226,18 @@ function renderContent() {
 
     elements.emptyState.classList.add("hidden");
     if (suite) {
-      elements.moduleTitle.textContent = suite.name;
-      elements.filePath.textContent = `测试集详情 / 脚本数量：${suite.items.length}`;
+      setDynamicText(elements.moduleTitle, suite.name);
+      setPlatformText(
+        elements.filePath,
+        projectLanguage() === "en"
+          ? `Test suite details / Scripts: ${suite.items.length}`
+          : `测试集详情 / 脚本数量：${suite.items.length}`,
+      );
       renderTestSuiteDetail();
       elements.testSuiteDetailPanel.classList.remove("hidden");
     } else {
-      elements.moduleTitle.textContent = "测试集";
-      elements.filePath.textContent = "测试集列表";
+      setPlatformText(elements.moduleTitle, "测试集");
+      setPlatformText(elements.filePath, "测试集列表");
       renderTestSuiteList();
       elements.testSuiteListPanel.classList.remove("hidden");
     }
@@ -3218,8 +3246,8 @@ function renderContent() {
 
   if (!selected) {
     const isPlan = state.activeSection === SECTION.PLANS;
-    elements.moduleTitle.textContent = isPlan ? "请选择模块" : "请选择测试用例";
-    elements.filePath.textContent = "未选择文件";
+    setPlatformText(elements.moduleTitle, isPlan ? "请选择模块" : "请选择测试用例");
+    setPlatformText(elements.filePath, "未选择文件");
     elements.emptyState.classList.remove("hidden");
     elements.emptyState.querySelector("h3").textContent = isPlan ? "暂无测试计划" : "暂无测试脚本";
     elements.emptyState.querySelector("p").textContent = isPlan
@@ -3241,8 +3269,9 @@ function renderContent() {
   if (state.activeSection === SECTION.PLANS) {
     if (!state.plans.selectedPlanFile) {
       const moduleItem = getSelectedPlanModule();
-      elements.moduleTitle.textContent = state.plans.selectedModule || "请选择模块";
-      elements.filePath.textContent = moduleItem?.path || "";
+      if (state.plans.selectedModule) setDynamicText(elements.moduleTitle, state.plans.selectedModule);
+      else setPlatformText(elements.moduleTitle, "请选择模块");
+      setDynamicText(elements.filePath, moduleItem?.path || "");
       elements.preview.innerHTML = "";
       elements.editor.value = "";
       renderModulePlanList();
@@ -3256,10 +3285,11 @@ function renderContent() {
         elements.modulePlanPanel.classList.remove("hidden");
       }
     } else {
-      elements.moduleTitle.textContent = `${state.plans.selectedModule} / ${stripMarkdownSuffix(
-        state.plans.selectedPlanFile,
-      )}`;
-      elements.filePath.textContent = state.plans.filePath || "";
+      setDynamicText(
+        elements.moduleTitle,
+        `${state.plans.selectedModule} / ${stripMarkdownSuffix(state.plans.selectedPlanFile)}`,
+      );
+      setDynamicText(elements.filePath, state.plans.filePath || "");
       elements.preview.innerHTML = state.plans.currentHtml;
       elements.editor.value = state.plans.currentMarkdown;
       renderAssetInfoPanel();
@@ -3279,8 +3309,9 @@ function renderContent() {
   } else {
     const moduleItem = getSelectedScriptModule();
     if (!state.scripts.selectedFile) {
-      elements.moduleTitle.textContent = state.scripts.selectedModule || "请选择模块";
-      elements.filePath.textContent = moduleItem?.path || "";
+      if (state.scripts.selectedModule) setDynamicText(elements.moduleTitle, state.scripts.selectedModule);
+      else setPlatformText(elements.moduleTitle, "请选择模块");
+      setDynamicText(elements.filePath, moduleItem?.path || "");
       elements.scriptCode.textContent = "";
       elements.editor.value = "";
       renderModuleScriptList();
@@ -3294,8 +3325,8 @@ function renderContent() {
         elements.moduleScriptPanel.classList.remove("hidden");
       }
     } else {
-      elements.moduleTitle.textContent = stripSpecSuffix(state.scripts.selectedFile);
-      elements.filePath.textContent = state.scripts.filePath || "";
+      setDynamicText(elements.moduleTitle, stripSpecSuffix(state.scripts.selectedFile));
+      setDynamicText(elements.filePath, state.scripts.filePath || "");
       elements.scriptCode.textContent = state.scripts.currentContent;
       elements.editor.value = state.scripts.currentContent;
       renderAssetInfoPanel();
@@ -4066,5 +4097,4 @@ async function bootstrap() {
   // their source-language copy until they are opened or re-rendered.
   window.WaterfallI18n?.localizeDom();
 }
-
 bootstrap();

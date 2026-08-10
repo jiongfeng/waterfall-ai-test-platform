@@ -81,6 +81,7 @@ const state = {
     basePrompt: "",
   },
   plans: {
+    modules: [],
     selectedModule: "登录",
     selectedPlanFile: "登录.md",
     activeTab: "content",
@@ -121,6 +122,10 @@ const timerHost = {
   },
 };
 const persistence = { plan: [], script: [] };
+const splitRequests = [];
+const selectedPlans = [];
+const selectedModules = [];
+let loadPlanModulesCalls = 0;
 const getPlanRecordKey = (
   moduleName = state.plans.selectedModule,
   planFilename = state.plans.selectedPlanFile,
@@ -142,7 +147,22 @@ const feature = context.window.createGenerationFeature({
   getScriptPromptFixedTemplate: () =>
     "Generate specs/<module>/<test-plan-file> to a candidate script",
   getScriptPromptNoteDefault: () => "Additional guidance",
-  window: { confirm: () => true },
+  window: {
+    confirm: () => true,
+    WaterfallI18n: {
+      log: (value) => value,
+      t: (key, params = {}) => {
+        const messages = {
+          "generation.elapsed": "Generation elapsed: {duration}",
+          "generation.duration": "Generation time: {duration}",
+        };
+        return Object.entries(params).reduce(
+          (text, [name, value]) => text.replaceAll(`{${name}}`, String(value)),
+          messages[key] || key,
+        );
+      },
+    },
+  },
   fetch: async () => {
     throw new Error("Focused generation VM paths must not issue fetch");
   },
@@ -173,7 +193,10 @@ const feature = context.window.createGenerationFeature({
   persistPlanScriptGenerationRecords: (key) => persistence.script.push(key),
   replaceAllText: (value, search, replacement) =>
     String(value).split(search).join(replacement),
-  requestJson: async () => ({}),
+  requestJson: async (url) => {
+    splitRequests.push(url);
+    return { created: [{ filename: "legacy-split.md" }], reused: [] };
+  },
   encodePathPart: encodeURIComponent,
   getProjectRequestHeaders: (headers) => headers,
   parseSseBlock: context.window.parseSseBlock,
@@ -182,9 +205,11 @@ const feature = context.window.createGenerationFeature({
   renderContent: () => {},
   renderSideList: () => {},
   renderPlanGenerationRecord: () => {},
-  loadPlanModules: async () => {},
-  selectPlan: async () => {},
-  selectPlanModule: async () => {},
+  loadPlanModules: async () => {
+    loadPlanModulesCalls += 1;
+  },
+  selectPlan: async (...args) => selectedPlans.push(args),
+  selectPlanModule: async (...args) => selectedModules.push(args),
   confirmDiscardEdit: () => true,
   escapeHtml: String,
 });
@@ -210,7 +235,7 @@ assert.deepStrictEqual(persistence.plan, [planKey]);
 feature.startPlanGenerationDurationTimer();
 const planTimerId = state.generation.durationTimer;
 assert.ok(activeTimers.has(planTimerId));
-assert.ok(elements.planRecordDuration.textContent.includes("生成进行时间"));
+assert.ok(elements.planRecordDuration.textContent.startsWith("Generation elapsed: "));
 feature.stopPlanGenerationDurationTimer();
 assert.strictEqual(state.generation.durationTimer, null);
 assert.ok(clearedTimers.includes(planTimerId));
@@ -255,6 +280,20 @@ planResult = feature.handlePlanStreamEvent(
   "登录.md",
 );
 planResult = feature.handlePlanStreamEvent(
+  {
+    event: "status",
+    data: {
+      status: "succeeded",
+      plans: [{ plan_filename: "login-happy-path.md" }],
+      split: { created: [{ filename: "login-happy-path.md" }] },
+      deleted_source: { plan_filename: "login-case-index.md" },
+    },
+  },
+  planResult,
+  "登录",
+  "登录.md",
+);
+planResult = feature.handlePlanStreamEvent(
   { event: "done", data: { ok: true, plan_filename: "登录.md" } },
   planResult,
   "登录",
@@ -262,6 +301,11 @@ planResult = feature.handlePlanStreamEvent(
 );
 assert.strictEqual(planResult.status, "succeeded");
 assert.strictEqual(planResult.logs, "开始生成\n增量内容");
+assert.deepStrictEqual(
+  JSON.parse(JSON.stringify(planResult.plans)),
+  [{ plan_filename: "login-happy-path.md" }],
+  "The terminal event must retain split files from the succeeded status payload.",
+);
 assert.strictEqual(state.plans.generationRecords[planKey].status, "succeeded");
 
 const failedPlan = feature.handlePlanStreamEvent(
@@ -314,6 +358,42 @@ function streamResponse(chunks) {
 }
 
 (async () => {
+  await feature.openPlanGenerationResult(
+    {
+      plans: [
+        { plan_filename: "login-happy-path.md" },
+        { plan_filename: "login-invalid-password.md" },
+      ],
+    },
+    "Login",
+    "login-case-index.md",
+    "multiple",
+  );
+  assert.strictEqual(splitRequests.length, 0, "A finalized stream payload must not be split twice.");
+  assert.deepStrictEqual(selectedPlans.at(-1), ["Login", "login-happy-path.md", true]);
+
+  await feature.openPlanGenerationResult(
+    { split: { reused: [{ filename: "historical-login.md" }] } },
+    "Login",
+    "login-case-index.md",
+    "multiple",
+  );
+  assert.strictEqual(splitRequests.length, 0, "Historical nested split payloads remain compatible.");
+  assert.deepStrictEqual(selectedPlans.at(-1), ["Login", "historical-login.md", true]);
+
+  state.plans.modules = [{ name: "Login", plans: [{ filename: "server-split.md" }] }];
+  await feature.openPlanGenerationResult({}, "Login", "missing-index.md", "multiple");
+  assert.strictEqual(splitRequests.length, 0, "A missing finalized source is not posted for a second split.");
+  assert.deepStrictEqual(selectedPlans.at(-1), ["Login", "server-split.md", true]);
+
+  state.plans.modules = [{ name: "Login", plans: [{ filename: "legacy-index.md" }] }];
+  await feature.openPlanGenerationResult({}, "Login", "legacy-index.md", "multiple");
+  assert.strictEqual(splitRequests.length, 1, "A legacy unsplit response uses the split endpoint once.");
+  assert.ok(splitRequests[0].endsWith("/legacy-index.md/split-cases"));
+  assert.deepStrictEqual(selectedPlans.at(-1), ["Login", "legacy-split.md", true]);
+  assert.strictEqual(selectedModules.length, 0);
+  assert.strictEqual(loadPlanModulesCalls, 5);
+
   const streamed = await feature.readPlanGenerationStream(
     streamResponse([
       'event: log\ndata: {"message":"分',

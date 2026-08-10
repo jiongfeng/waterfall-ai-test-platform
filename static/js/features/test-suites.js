@@ -184,6 +184,7 @@ function renderTestSuiteList() {
     nameButton.type = "button";
     nameButton.className = "test-suite-name-button";
     nameButton.textContent = suite.name;
+    window.WaterfallI18n?.markDynamic?.(nameButton);
     nameButton.addEventListener("click", () => selectTestSuite(suite.id));
     nameCell.appendChild(nameButton);
     row.appendChild(nameCell);
@@ -432,7 +433,10 @@ function renderTestSuiteProgressModal(suite) {
   const logs = record?.logs || "";
   const progress = counts.total ? Math.round((counts.completed / counts.total) * 100) : 0;
 
-  elements.testSuiteProgressTitle.textContent = `执行测试集：${record?.suite_name || suite.name}`;
+  elements.testSuiteProgressTitle.textContent = `${
+    window.WaterfallI18n?.t?.("testSuite.runLabel") || "Run test suite:"
+  } ${record?.suite_name || suite.name}`;
+  window.WaterfallI18n?.markDynamic?.(elements.testSuiteProgressTitle);
   elements.testSuiteProgressStatus.textContent = getTestSuiteProgressStatusText(record, counts);
   elements.testSuiteProgressLog.textContent = logs || window.WaterfallI18n?.source("等待执行输出...") || "等待执行输出...";
   elements.testSuiteProgressCompleted.textContent = `${counts.completed} / ${counts.total || 0}`;
@@ -572,6 +576,7 @@ function renderExecutionResultPanel(record, view, options = {}) {
     const scriptName = result.script_name || stripSpecSuffix(result.filename);
     nameCell.textContent = scriptName || result.filename || "-";
     nameCell.title = [result.module_name, result.filename].filter(Boolean).join("/");
+    window.WaterfallI18n?.markDynamic?.(nameCell);
     row.appendChild(nameCell);
 
     const statusCell = document.createElement("td");
@@ -581,6 +586,7 @@ function renderExecutionResultPanel(record, view, options = {}) {
     status.textContent = statusInfo.label;
     if (result.error_message) {
       status.title = result.error_message;
+      window.WaterfallI18n?.markDynamicAttributes?.(status);
     }
     statusCell.appendChild(status);
     row.appendChild(statusCell);
@@ -668,9 +674,17 @@ function openTestSuiteExecutionVideo(result) {
   const title = result.script_name || stripSpecSuffix(result.filename) || "脚本执行视频";
   state.testSuiteVideoModal.video = video;
   state.testSuiteVideoModal.title = title;
-  elements.testSuiteVideoModalTitle.textContent = title;
+  window.WaterfallI18n?.markDynamic?.(
+    elements.testSuiteVideoModalTitle,
+    Boolean(result.script_name || stripSpecSuffix(result.filename)),
+  );
+  elements.testSuiteVideoModalTitle.textContent =
+    result.script_name || stripSpecSuffix(result.filename)
+      ? title
+      : window.WaterfallI18n?.source?.(title) || title;
   elements.testSuiteExecutionVideo.src = video.url;
   elements.testSuiteExecutionVideoPath.textContent = video.path || video.relative_path || "";
+  window.WaterfallI18n?.markDynamic?.(elements.testSuiteExecutionVideoPath);
   elements.testSuiteVideoModal.classList.remove("hidden");
   elements.testSuiteExecutionVideo.load();
   const playPromise = elements.testSuiteExecutionVideo.play();
@@ -716,8 +730,11 @@ function renderTestSuiteDetail() {
     button.className = "test-suite-module-button";
     button.classList.toggle("active", moduleItem.name === activeModule.name);
     button.title = moduleItem.label;
+    window.WaterfallI18n?.markDynamicAttributes?.(button, moduleItem.name !== TEST_SUITE_ALL_MODULE);
     button.innerHTML = "<span></span><span></span>";
-    button.querySelector("span:first-child").textContent = moduleItem.label;
+    const moduleLabel = button.querySelector("span:first-child");
+    moduleLabel.textContent = moduleItem.label;
+    window.WaterfallI18n?.markDynamic?.(moduleLabel, moduleItem.name !== TEST_SUITE_ALL_MODULE);
     button.querySelector("span:last-child").textContent = moduleItem.count;
     button.addEventListener("click", () => {
       state.testSuites.selectedModule = moduleItem.name;
@@ -730,11 +747,13 @@ function renderTestSuiteDetail() {
   elements.openAddSuiteScriptsButton.disabled = isBusy;
   elements.executeTestSuiteButton.disabled = !suite.items.length || isBusy;
   elements.executeTestSuiteButton.textContent = state.testSuiteExecution.isRunning ? "执行中" : "执行";
+  const dynamicDetailTitle = !isExecutionTab && activeModule.name !== TEST_SUITE_ALL_MODULE;
+  window.WaterfallI18n?.markDynamic?.(elements.testSuiteDetailTitle, dynamicDetailTitle);
   elements.testSuiteDetailTitle.textContent = isExecutionTab
-    ? "执行记录"
+    ? window.WaterfallI18n?.source?.("执行记录") || "执行记录"
     : activeModule.name === TEST_SUITE_ALL_MODULE
-      ? "全部脚本"
-      : `${activeModule.label} 脚本`;
+      ? window.WaterfallI18n?.source?.("全部脚本") || "全部脚本"
+      : `${activeModule.label} ${window.WaterfallI18n?.getLocale?.() === "en" ? "scripts" : "脚本"}`;
   elements.testSuiteDetailSummary.textContent = isExecutionTab
     ? state.testSuites.executionHistory.isLoading
       ? "正在加载执行记录"
@@ -767,10 +786,12 @@ function renderTestSuiteDetail() {
     const nameCell = document.createElement("td");
     nameCell.textContent = item.display_name || stripSpecSuffix(item.filename);
     nameCell.title = item.path || item.filename;
+    window.WaterfallI18n?.markDynamic?.(nameCell);
     row.appendChild(nameCell);
 
     const moduleCell = document.createElement("td");
     moduleCell.textContent = item.module_name;
+    window.WaterfallI18n?.markDynamic?.(moduleCell);
     row.appendChild(moduleCell);
 
     const actionsCell = document.createElement("td");
@@ -1112,8 +1133,11 @@ function renderSuiteScriptModal() {
     button.className = "test-suite-module-button";
     button.classList.toggle("active", moduleItem.name === state.testSuites.addModalModule);
     button.title = moduleItem.label;
+    window.WaterfallI18n?.markDynamicAttributes?.(button, moduleItem.name !== TEST_SUITE_ALL_MODULE);
     button.innerHTML = "<span></span><span></span>";
-    button.querySelector("span:first-child").textContent = moduleItem.label;
+    const moduleLabel = button.querySelector("span:first-child");
+    moduleLabel.textContent = moduleItem.label;
+    window.WaterfallI18n?.markDynamic?.(moduleLabel, moduleItem.name !== TEST_SUITE_ALL_MODULE);
     button.querySelector("span:last-child").textContent = moduleItem.count;
     button.addEventListener("click", () => {
       state.testSuites.addModalModule = moduleItem.name;
@@ -1124,8 +1148,12 @@ function renderSuiteScriptModal() {
 
   const activeModule = moduleOptions.find((moduleItem) => moduleItem.name === state.testSuites.addModalModule);
   const entries = getSuiteAvailableEntries();
+  const dynamicPickerTitle = activeModule?.name !== TEST_SUITE_ALL_MODULE;
+  window.WaterfallI18n?.markDynamic?.(elements.suiteScriptPickerTitle, dynamicPickerTitle);
   elements.suiteScriptPickerTitle.textContent =
-    activeModule?.name === TEST_SUITE_ALL_MODULE ? "全部脚本" : `${activeModule?.label || ""} 脚本`;
+    activeModule?.name === TEST_SUITE_ALL_MODULE
+      ? window.WaterfallI18n?.source?.("全部脚本") || "全部脚本"
+      : `${activeModule?.label || ""} ${window.WaterfallI18n?.getLocale?.() === "en" ? "scripts" : "脚本"}`;
   elements.suiteScriptSelectionCount.textContent = `已选择 ${state.testSuites.selectedScriptKeys.size} 条`;
   elements.suiteScriptModalSubmit.disabled = state.testSuites.selectedScriptKeys.size === 0;
   elements.suiteAvailableScriptList.replaceChildren();
@@ -1149,6 +1177,7 @@ function renderSuiteScriptModal() {
     const option = document.createElement("label");
     option.className = `suite-script-option ${isAdded ? "disabled" : ""}`.trim();
     option.title = entry.path || entry.filename;
+    window.WaterfallI18n?.markDynamicAttributes?.(option);
 
     const checkbox = document.createElement("input");
     checkbox.type = "checkbox";
@@ -1166,10 +1195,12 @@ function renderSuiteScriptModal() {
     const title = document.createElement("span");
     title.className = "suite-script-option-title";
     title.textContent = entry.display_name || stripSpecSuffix(entry.filename);
+    window.WaterfallI18n?.markDynamic?.(title);
 
     const moduleName = document.createElement("span");
     moduleName.className = "suite-script-option-module";
     moduleName.textContent = isAdded ? "已添加" : entry.module_name;
+    window.WaterfallI18n?.markDynamic?.(moduleName, !isAdded);
 
     option.append(checkbox, title, moduleName);
     elements.suiteAvailableScriptList.appendChild(option);

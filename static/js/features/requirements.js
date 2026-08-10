@@ -18,7 +18,7 @@ function createRequirementsFeature(deps) {
     escapeHtml,
     formatTimestampMs,
     isPlainObject,
-    getChinesePlanFilenameFromName,
+    getPlanFilenameForProjectLanguage,
     normalizeRequirementPlanGenerationBatch,
     persistRequirementPlanGenerationBatches,
     normalizeRequirementModule,
@@ -43,6 +43,12 @@ function createRequirementsFeature(deps) {
     setLoading,
     normalizeRequirement,
   } = deps;
+
+const localizeRequirementLog = (value) => window.WaterfallI18n?.log(value) || value;
+const requirementText = (key, params, fallback) => {
+  const translated = window.WaterfallI18n?.t?.(key, params);
+  return translated && translated !== key ? translated : fallback;
+};
 
 function switchRequirementViewTab(nextTab) {
   if (
@@ -84,13 +90,17 @@ function renderRequirementList() {
     button.className = "module-item";
     button.classList.toggle("active", requirement.requirement_uid === state.requirements.selectedUid);
     button.title = requirement.file_path || requirement.filename || requirement.title;
+    window.WaterfallI18n?.markDynamicAttributes?.(button);
     button.innerHTML = `
       <span class="requirement-list-title"></span>
-      <span class="requirement-list-meta">${requirement.module_count || 0} 个候选 · ${escapeHtml(
-        formatTimestampMs(requirement.updated_at),
-      )}</span>
+      <span class="requirement-list-meta">${escapeHtml(requirementText("requirements.candidateMeta", {
+        count: requirement.module_count || 0,
+        timestamp: formatTimestampMs(requirement.updated_at),
+      }, `${requirement.module_count || 0} 个候选 · ${formatTimestampMs(requirement.updated_at)}`))}</span>
     `;
-    button.querySelector(".requirement-list-title").textContent = requirement.title;
+    const title = button.querySelector(".requirement-list-title");
+    window.WaterfallI18n?.markDynamic?.(title);
+    title.textContent = requirement.title;
     button.addEventListener("click", () => selectRequirement(requirement.requirement_uid));
     elements.moduleList.appendChild(button);
   });
@@ -154,7 +164,7 @@ function getRequirementModulePlanTargetPath(moduleItem) {
   if (!moduleItem?.module_name) {
     return "";
   }
-  return `specs/${moduleItem.module_name}/${getChinesePlanFilenameFromName(
+  return `specs/${moduleItem.module_name}/${getPlanFilenameForProjectLanguage(
     moduleItem.plan_name,
     moduleItem.module_name,
     moduleItem.module_name || "测试计划",
@@ -441,6 +451,11 @@ function handleRequirementBatchPlanGenerationEvent({ event, data }, previousResu
       prompt: data.job?.prompt || previousResult.prompt || "",
       requirement_module: updated || previousResult.requirement_module,
       generated_plan: updated?.generated_plan || previousResult.generated_plan || null,
+      plans: Array.isArray(data.plans) ? data.plans : previousResult.plans,
+      created: Array.isArray(data.created) ? data.created : previousResult.created,
+      reused: Array.isArray(data.reused) ? data.reused : previousResult.reused,
+      split: data.split || previousResult.split,
+      deleted_source: data.deleted_source || previousResult.deleted_source,
     };
     setRequirementPlanGenerationBatchItem(requirementUid, moduleUid, {
       status: nextResult.status,
@@ -716,10 +731,10 @@ function renderRequirementsPanel() {
   const activeTab = Object.values(REQUIREMENT_VIEW_TAB).includes(state.requirements.activeTab)
     ? state.requirements.activeTab
     : REQUIREMENT_VIEW_TAB.PREVIEW;
+  window.WaterfallI18n?.markDynamic?.(elements.requirementMeta);
   elements.requirementMeta.textContent = `${requirement.filename || "-"} · ${formatTimestampMs(requirement.updated_at)}`;
   elements.requirementDownloadLink.href = `/api/requirements/${encodePathPart(requirement.requirement_uid)}/download`;
   elements.requirementPreview.innerHTML = state.requirements.html || "";
-  elements.requirementModuleSummary.textContent = `共 ${state.requirements.modules.length} 个`;
   elements.requirementPreviewTab.classList.toggle("active", activeTab === REQUIREMENT_VIEW_TAB.PREVIEW);
   elements.requirementPreviewTab.setAttribute(
     "aria-selected",
@@ -752,7 +767,7 @@ function renderRequirementsPanel() {
 
   const hasAnalysisLogs = Boolean(state.requirements.analysisLogs || state.requirements.analysisStatus);
   elements.requirementAnalysisOutput.classList.toggle("hidden", !hasAnalysisLogs);
-  elements.requirementAnalysisLogs.textContent = state.requirements.analysisLogs || "";
+  elements.requirementAnalysisLogs.textContent = localizeRequirementLog(state.requirements.analysisLogs || "");
   elements.requirementAnalysisLogs.scrollTop = elements.requirementAnalysisLogs.scrollHeight;
   elements.requirementAnalysisStatus.className = "job-status";
   if (state.requirements.analysisStatus === "succeeded") {
@@ -768,6 +783,20 @@ function renderRequirementsPanel() {
   renderRequirementModules();
   renderRequirementPlanGenerationBatchRecord();
   renderRequirementModuleDetailModal();
+}
+
+function renderRequirementModuleCounts() {
+  const moduleCount = state.requirements.modules.length;
+  const selectedCount = state.requirements.selectedModuleUids.size;
+  if (elements.requirementModuleSummary) {
+    elements.requirementModuleSummary.textContent = requirementText("requirements.moduleTabCount", { count: moduleCount }, `共 ${moduleCount} 个`);
+  }
+  if (elements.requirementModuleListSummary) {
+    elements.requirementModuleListSummary.textContent = requirementText("requirements.candidateModuleCount", { count: moduleCount }, `共 ${moduleCount} 个候选模块`);
+  }
+  if (elements.requirementModuleSelectionCount) {
+    elements.requirementModuleSelectionCount.textContent = requirementText("requirements.selectedModuleCount", { count: selectedCount }, `已选择 ${selectedCount} 个`);
+  }
 }
 
 function renderRequirementModules() {
@@ -786,12 +815,11 @@ function renderRequirementModules() {
       elements.requirementModuleBulkDelete &&
       elements.requirementModuleBulkGenerate,
   );
+  renderRequirementModuleCounts();
 
   if (hasBulkToolbar) {
-    elements.requirementModuleListSummary.textContent = `共 ${modules.length} 个候选模块`;
     elements.requirementModuleActions.classList.toggle("hidden", isBulkMode);
     elements.requirementModuleBulkActions.classList.toggle("hidden", !isBulkMode);
-    elements.requirementModuleSelectionCount.textContent = `已选择 ${selectedCount} 个`;
     elements.requirementModuleBulkToggle.disabled = !modules.length || isBusy;
     elements.requirementModuleBulkCancel.disabled =
       state.requirements.bulkDeletingModules || state.requirements.planGenerationRunning;
@@ -889,12 +917,14 @@ function renderRequirementModuleRow(moduleItem, { isBulkMode = false, isBusy = f
   const confidenceBadge =
     moduleItem.confidence === null ? "" : `<span class="status-badge">置信度 ${(moduleItem.confidence * 100).toFixed(0)}%</span>`;
   const generatedSummary = generatedPlan.plan_filename
-    ? `<span class="requirement-module-plan-path">${escapeHtml(generatedPlan.module_name || moduleItem.module_name)}/${escapeHtml(
+    ? `<span class="requirement-module-plan-path" data-i18n-dynamic>${escapeHtml(generatedPlan.module_name || moduleItem.module_name)}/${escapeHtml(
         generatedPlan.plan_filename,
       )}</span>`
     : "";
   const logSummary = logs
-    ? `<div class="requirement-module-row-log ${moduleItem.generation_status === "failed" ? "error" : ""}">${escapeHtml(
+    ? `<div class="requirement-module-row-log ${moduleItem.generation_status === "failed" ? "error" : ""}" ${
+        moduleItem.generation_error ? "data-i18n-dynamic" : ""
+      }>${escapeHtml(
         moduleItem.generation_error || (moduleItem.generation_status === "succeeded" ? "生成完成" : "生成中"),
       )}</div>`
     : "";
@@ -905,20 +935,21 @@ function renderRequirementModuleRow(moduleItem, { isBulkMode = false, isBusy = f
         <input
           type="checkbox"
           data-action="select-module"
-          aria-label="选择 ${escapeHtml(moduleItem.module_name)}"
+          data-i18n-dynamic-attributes
+          aria-label="${window.WaterfallI18n?.t?.("action.select") || "Select"} ${escapeHtml(moduleItem.module_name)}"
           ${checked ? "checked" : ""}
           ${isBusy ? "disabled" : ""}
         />
       </td>
       <td>
-        <button class="module-name-button" type="button" data-action="open-detail">${escapeHtml(moduleItem.module_name)}</button>
+        <button class="module-name-button" type="button" data-action="open-detail" data-i18n-dynamic>${escapeHtml(moduleItem.module_name)}</button>
         <div class="requirement-module-row-meta">
           <span class="status-badge ${escapeHtml(statusInfo.className)}">${escapeHtml(statusInfo.label)}</span>
           ${confidenceBadge}
           ${moduleItem.write_risk ? '<span class="status-badge error">写库风险</span>' : ""}
           ${moduleItem.baseline_required ? '<span class="status-badge running">需要基线</span>' : ""}
         </div>
-        ${moduleItem.business_goal ? `<p>${escapeHtml(moduleItem.business_goal)}</p>` : ""}
+        ${moduleItem.business_goal ? `<p data-i18n-dynamic>${escapeHtml(moduleItem.business_goal)}</p>` : ""}
         ${generatedSummary}
         ${logSummary}
       </td>
@@ -965,10 +996,16 @@ function renderRequirementPlanGenerationBatchRecord() {
   elements.requirementPlanGenerationBatchHeader.classList.toggle("hidden", !hasBatch);
   elements.requirementPlanGenerationBatchSummary.textContent =
     batch?.status === "running" || isRunningBatch
-      ? `批量生成计划进行中：成功 ${statusCounts.succeeded || 0}，失败 ${statusCounts.failed || 0}，进行中 ${
-          statusCounts.running || 0
-        }，排队 ${statusCounts.queued || 0}`
-      : `批量生成计划记录：成功 ${statusCounts.succeeded || 0}，失败 ${statusCounts.failed || 0}`;
+      ? requirementText("requirements.batchRunningSummary", {
+          succeeded: statusCounts.succeeded || 0,
+          failed: statusCounts.failed || 0,
+          running: statusCounts.running || 0,
+          queued: statusCounts.queued || 0,
+        }, `批量生成计划进行中：成功 ${statusCounts.succeeded || 0}，失败 ${statusCounts.failed || 0}，进行中 ${statusCounts.running || 0}，排队 ${statusCounts.queued || 0}`)
+      : requirementText("requirements.batchRecordSummary", {
+          succeeded: statusCounts.succeeded || 0,
+          failed: statusCounts.failed || 0,
+        }, `批量生成计划记录：成功 ${statusCounts.succeeded || 0}，失败 ${statusCounts.failed || 0}`);
 
   elements.requirementPlanGenerationBatchList.replaceChildren();
   if (!hasBatch) {
@@ -993,6 +1030,7 @@ function renderRequirementPlanGenerationBatchRecord() {
 
     const title = document.createElement("span");
     title.className = "module-repair-title";
+    window.WaterfallI18n?.markDynamic?.(title);
     title.textContent = item.module_name || moduleUid;
     const duration = document.createElement("span");
     duration.className = "module-repair-duration";
@@ -1018,7 +1056,7 @@ function renderRequirementPlanGenerationBatchRecord() {
       logLabel.textContent = "生成日志";
       const logPre = document.createElement("pre");
       logPre.className = "requirement-plan-batch-log";
-      logPre.textContent = item.logs || item.error || "暂无实时输出。";
+      logPre.textContent = localizeRequirementLog(item.logs || item.error || "暂无实时输出。");
 
       output.append(promptLabel, promptPre, logLabel, logPre);
       wrapper.appendChild(output);
@@ -1080,7 +1118,12 @@ function renderRequirementModuleDetailModal() {
   const isGenerating = state.requirements.generatingModuleUid === moduleItem.module_uid;
   const disableActions = isGenerating || isAnyScriptJobRunning();
 
+  window.WaterfallI18n?.markDynamic?.(elements.requirementModuleDetailTitle);
   elements.requirementModuleDetailTitle.textContent = moduleItem.module_name;
+  window.WaterfallI18n?.markDynamic?.(
+    elements.requirementModuleDetailSubtitle,
+    Boolean(moduleItem.business_goal),
+  );
   elements.requirementModuleDetailSubtitle.textContent = moduleItem.business_goal || "未填写业务目标";
   elements.requirementModuleDetailBody.innerHTML = `
     <div class="requirement-module-detail-editor" data-module-uid="${escapeHtml(moduleItem.module_uid)}">
@@ -1120,19 +1163,22 @@ function renderRequirementModuleDetailModal() {
         <button class="secondary-button" type="button" data-action="reset-prompt">重置为中立基础语句</button>
       </div>
       <div class="requirement-module-meta">
-        <div><strong>关联需求</strong><span>${escapeHtml(formatRequirementList(moduleItem.requirement_refs) || "-")}</span></div>
-        <div><strong>匹配 inventory</strong><span>${escapeHtml(inventorySummary)}</span></div>
-        <div><strong>不确定点</strong><span>${escapeHtml(questions)}</span></div>
+        <div><strong>关联需求</strong><span data-i18n-dynamic>${escapeHtml(formatRequirementList(moduleItem.requirement_refs) || "-")}</span></div>
+        <div><strong>匹配 inventory</strong><span data-i18n-dynamic>${escapeHtml(inventorySummary)}</span></div>
+        <div><strong>不确定点</strong><span data-i18n-dynamic>${escapeHtml(questions)}</span></div>
         ${
           moduleItem.generated_plans.length
             ? `<div><strong>生成计划</strong><span>${moduleItem.generated_plans
                 .map((item, index) => {
                   const profile = getCoverageProfile(item.coverage_profile);
-                  return `<button class="inline-link-button" type="button" data-action="open-generated-plan" data-plan-index="${index}">${escapeHtml(
+                  const templateLabel = window.WaterfallI18n?.t?.("common.templateSource") || "Template source:";
+                  const profileLabel = window.WaterfallI18n?.source?.(profile?.label || "核心回归") || profile?.label || "核心回归";
+                  const customizedLabel = item.prompt_customized
+                    ? ` · ${window.WaterfallI18n?.t?.("common.customized") || "Customized"}`
+                    : "";
+                  return `<button class="inline-link-button" type="button" data-action="open-generated-plan" data-plan-index="${index}"><span data-i18n-dynamic>${escapeHtml(
                     item.module_name || moduleItem.module_name,
-                  )}/${escapeHtml(item.plan_filename || "")} · 模板来源：${escapeHtml(profile?.label || "核心回归")}${
-                    item.prompt_customized ? " · 已自定义" : ""
-                  }</button>`;
+                  )}/${escapeHtml(item.plan_filename || "")}</span> · ${templateLabel} ${escapeHtml(profileLabel)}${customizedLabel}</button>`;
                 })
                 .join("<br>")}</span></div>`
             : ""
@@ -1693,6 +1739,8 @@ return {
   getRequirementModuleFormPayload,
   handleRequirementAnalysisEvent,
   handleRequirementPlanStreamEvent,
+  requirementText,
+  renderRequirementModuleCounts,
 };
 }
 

@@ -20,6 +20,7 @@ from urllib import request as urlrequest
 from flask import Response, g, has_request_context, jsonify, render_template, request, send_file, session, stream_with_context
 from test_plan_viewer.agent import diagnostics as agent_diagnostics
 from test_plan_viewer.agent import failure_handling as agent_failure_handling
+from test_plan_viewer.agent import localization as agent_localization
 from test_plan_viewer.agent import script_preparation as agent_script_preparation
 from test_plan_viewer.agent import stream_consumer as agent_stream_consumer
 from test_plan_viewer.agent.output_buffer import AgentOutputBatcher
@@ -971,6 +972,7 @@ def _generation_case_dependencies():
             encoding="utf-8",
             newline="",
         ),
+        get_project_language=lambda: agent_project_language(),
     )
 
 
@@ -1066,12 +1068,17 @@ def build_script_run_prompt(prompt, module_name, filename, script_file):
     )
 
 
-def normalize_case_filename(value, title, index=None):
-    return generation_cases.normalize_case_filename(value, title, index=index)
+def normalize_case_filename(value, title, index=None, *, language="zh-CN"):
+    return generation_cases.normalize_case_filename(
+        value,
+        title,
+        index=index,
+        language=language,
+    )
 
 
 def extract_case_index(markdown_text):
-    return generation_cases.extract_case_index(markdown_text)
+    return generation_cases.extract_case_index(markdown_text, language=agent_project_language())
 
 
 def normalize_case_steps(value):
@@ -1087,7 +1094,7 @@ def case_to_markdown(module_name, source_filename, case):
 
 
 def normalize_case_index_cases(data):
-    return generation_cases.normalize_case_index_cases(data)
+    return generation_cases.normalize_case_index_cases(data, language=agent_project_language())
 
 
 def validate_multiple_plan_artifact(path):
@@ -1095,34 +1102,40 @@ def validate_multiple_plan_artifact(path):
 
     source_path = Path(path)
     if not source_path.exists() or not source_path.is_file() or source_path.stat().st_size <= 0:
-        raise ValueError("计划文件不存在或为空。")
+        raise ValueError(agent_message("plan_missing"))
     content = source_path.read_text(encoding="utf-8")
     payload = extract_case_index(content)
     cases = normalize_case_index_cases(payload)
     if len(cases) > generation_prompts.ABSOLUTE_PLAN_MAX_CASES:
-        raise ValueError(
-            f"测试计划包含 {len(cases)} 个用例，超过平台绝对上限 "
-            f"{generation_prompts.ABSOLUTE_PLAN_MAX_CASES} 个。"
-        )
+        raise ValueError(agent_message("plan_too_many", count=len(cases), limit=generation_prompts.ABSOLUTE_PLAN_MAX_CASES))
     filenames = []
+    filename_keys = set()
+    source_key = artifact_naming.plan_filename_collision_key(source_path.name)
+    language = agent_project_language()
     for index, case in enumerate(cases, start=1):
         if not isinstance(case, dict):
-            raise ValueError(f"第 {index} 个用例不是对象。")
+            raise ValueError(agent_message("case_not_object", index=index))
         raw_filename = str(case.get("filename") or "").strip()
-        if raw_filename:
-            validate_plan_filename(raw_filename)
         title = str(case.get("title") or case.get("name") or "").strip()
-        filename = normalize_case_filename(raw_filename, title, index=index)
+        filename = normalize_case_filename(
+            raw_filename,
+            title,
+            index=index,
+            language=language,
+        )
         validate_plan_filename(filename)
+        raw_filename_key = artifact_naming.plan_filename_collision_key(raw_filename)
+        filename_key = artifact_naming.plan_filename_collision_key(filename)
         if (
-            raw_filename == source_path.name
+            raw_filename_key == source_key
             or raw_filename.startswith("_")
-            or filename == source_path.name
+            or filename_key == source_key
             or filename.startswith("_")
-            or filename in filenames
+            or filename_key in filename_keys
         ):
-            raise ValueError(f"用例文件名不安全或重复：{filename}")
+            raise ValueError(agent_message("case_filename_invalid", filename=filename))
         filenames.append(filename)
+        filename_keys.add(filename_key)
     return {"payload": payload, "cases": cases, "filenames": filenames}
 
 
@@ -1159,13 +1172,13 @@ def call_markdown_plan_splitter(module_name, source_plan_file, parent_job_id=Non
     job_id = f"plan-split-{uuid.uuid4().hex}"
     create_test_job("agent_review", job_id=job_id, status="running", prompt=prompt)
     if parent_job_id:
-        append_test_job_log(parent_job_id, f"索引计划无法直接拆分，正在调用模型读取普通 Markdown 并抽取 cases：{source_plan_file}\n")
+        append_test_job_log(parent_job_id, f"{agent_message('split_fallback', path=source_plan_file)}\n")
     if run_id and step_key:
         append_agent_event(
             run_id,
             step_key,
             "status",
-            f"正在将普通 Markdown 拆成单用例计划：{source_plan_file.name}",
+            agent_message("splitting_markdown", filename=source_plan_file.name),
             {"job_id": job_id, "source": str(source_plan_file)},
             job_id=job_id,
         )
@@ -1175,7 +1188,7 @@ def call_markdown_plan_splitter(module_name, source_plan_file, parent_job_id=Non
         output_text = collect_opencode_response_text(response)
         append_test_job_log(job_id, output_text[-JOB_LOG_TAIL_LIMIT:])
         if parent_job_id:
-            append_test_job_log(parent_job_id, f"模型拆分 JSON 已返回，开始生成单用例计划。拆分 job：{job_id}\n")
+            append_test_job_log(parent_job_id, f"{agent_message('split_json_returned', job_id=job_id)}\n")
         parsed = extract_json_object_from_text(output_text)
         cases = normalize_case_index_cases(parsed)
         finish_test_job(job_id, "succeeded")
@@ -1184,16 +1197,24 @@ def call_markdown_plan_splitter(module_name, source_plan_file, parent_job_id=Non
                 run_id,
                 step_key,
                 "status",
-                f"普通 Markdown 拆分完成，抽取 {len(cases)} 个用例。",
+                agent_message("split_completed", count=len(cases)),
                 {"job_id": job_id, "case_count": len(cases)},
                 job_id=job_id,
             )
         return {"job_id": job_id, "cases": cases}
     except Exception as exc:
-        append_test_job_log(job_id, f"普通 Markdown 拆分失败：{exc}\n")
-        finish_test_job(job_id, "failed", error=str(exc))
+        failure_message = agent_message("split_failed", error=exc)
+        append_test_job_log(job_id, f"{failure_message}\n")
+        finish_test_job(job_id, "failed", error=failure_message)
         if run_id and step_key:
-            append_agent_event(run_id, step_key, "error", f"普通 Markdown 拆分失败：{exc}", {"error": str(exc)}, job_id=job_id)
+            append_agent_event(
+                run_id,
+                step_key,
+                "error",
+                failure_message,
+                {"error": failure_message},
+                job_id=job_id,
+            )
         raise
     finally:
         if run_id and step_key:
@@ -1206,10 +1227,17 @@ def split_or_repair_multiple_plan(module_name, source_plan_file, overwrite=False
         result["repair_used"] = False
         return result
     except Exception as split_error:
+        retry_message = agent_message("split_retry", error=split_error)
         if job_id:
-            append_test_job_log(job_id, f"索引 JSON 拆分失败，尝试模型拆分普通 Markdown：{split_error}\n")
+            append_test_job_log(job_id, f"{retry_message}\n")
         if run_id and step_key:
-            append_agent_event(run_id, step_key, "log", f"索引 JSON 拆分失败，尝试模型拆分普通 Markdown：{split_error}", {"error": str(split_error)})
+            append_agent_event(
+                run_id,
+                step_key,
+                "log",
+                retry_message,
+                {"error": str(split_error)},
+            )
         repair = call_markdown_plan_splitter(
             module_name,
             source_plan_file,
@@ -1272,14 +1300,7 @@ def finalize_multiple_plan_files(
     )
     conflicts = split_result.get("conflicts") or []
     if conflicts:
-        conflict_names = ", ".join(
-            str(item.get("filename") or "未知文件")
-            for item in conflicts
-        )
-        error = (
-            "多计划拆分检测到已有文件内容冲突；未写入、登记或删除任何计划文件："
-            f"{conflict_names}"
-        )
+        error = agent_localization.plan_conflict_error(agent_project_language(), conflicts)
         if job_id:
             append_test_job_log(job_id, f"{error}\n")
         raise RuntimeError(error)
@@ -1340,7 +1361,7 @@ def finalize_multiple_plan_files(
         f"delete intermediate multiple plan: {module_name}/{source_plan_file.name}",
     )
     if job_id and delete_result:
-        append_test_job_log(job_id, f"已删除多计划中间 Markdown：{source_plan_file.name}\n")
+        append_test_job_log(job_id, f"{agent_message('multiple_source_deleted', filename=source_plan_file.name)}\n")
     deleted_source_asset = (delete_result or {}).get("asset") if isinstance(delete_result, dict) else None
 
     return {
@@ -2147,6 +2168,29 @@ def get_current_project_language():
         except RuntimeError:
             return "en"
     return normalize_project_language(project.get("language"))
+
+
+def project_copy(english, chinese):
+    """Return first-party UI copy in the captured project's language."""
+    return agent_localization.select(agent_project_language(), english, chinese)
+
+
+def agent_project_language():
+    context_project = current_context_project()
+    if context_project:
+        return normalize_project_language(context_project.get("language"))
+    if not has_request_context():
+        # Pure helpers and legacy callers have no project identity to resolve.
+        # Agent workers bind their project explicitly before generating copy.
+        return "zh-CN"
+    try:
+        return get_current_project_language()
+    except Exception:
+        return "zh-CN"
+
+
+def agent_message(key, **values):
+    return agent_localization.message(agent_project_language(), key, **values)
 
 
 @app.after_request
@@ -4539,7 +4583,7 @@ def validate_agent_step_key(step_key):
 
 
 def agent_step_name(step_key):
-    return dict(AGENT_STEP_ORDER).get(step_key, step_key)
+    return agent_localization.step_name(agent_project_language(), step_key)
 
 
 def serialize_agent_run(row):
@@ -5672,7 +5716,8 @@ def create_agent_run_record(requirement, created_by, plan_generation=None):
                     now_ms,
                 ),
             )
-            for step_key, step_name in AGENT_STEP_ORDER:
+            for step_key, _step_name in AGENT_STEP_ORDER:
+                step_name = agent_step_name(step_key)
                 cursor.execute(
                     f"""
                     INSERT INTO {steps_table}
@@ -5683,7 +5728,13 @@ def create_agent_run_record(requirement, created_by, plan_generation=None):
                     (project_id, run_id, step_key, step_name, now_ms, now_ms),
                 )
         connection.commit()
-    append_agent_event(run_id, "upload_requirement", "status", "Agent 任务已创建。", {"status": "queued"})
+    append_agent_event(
+        run_id,
+        "upload_requirement",
+        "status",
+        agent_message("task_created"),
+        {"status": "queued"},
+    )
     return get_agent_run_row(run_id)
 
 
@@ -5704,9 +5755,10 @@ def ensure_agent_run_step_rows(run_id):
                 (project_id, run_id),
             )
             existing = {row.get("step_key") for row in cursor.fetchall()}
-            for step_key, step_name in AGENT_STEP_ORDER:
+            for step_key, _step_name in AGENT_STEP_ORDER:
                 if step_key in existing:
                     continue
+                step_name = agent_step_name(step_key)
                 cursor.execute(
                     f"""
                     INSERT INTO {table}
@@ -6185,7 +6237,7 @@ def reset_agent_run_for_resume_record(run_id, from_step):
         run_id,
         from_step,
         "status",
-        f"Agent 任务已从步骤恢复：{agent_step_name(from_step)}。",
+        agent_message("task_resumed", step=agent_step_name(from_step)),
         {"from_step": from_step},
     )
     return get_agent_run_row(run_id)
@@ -6228,6 +6280,7 @@ def insert_agent_event_row(
 
 
 def append_agent_event(run_id, step_key, event_type, message="", payload=None, job_id=None, asset_id=None, test_run_id=None):
+    message = agent_localization.event_message(agent_project_language(), message)
     config = require_platform_database()
     table = get_agent_run_events_table(config)
     project_id = get_current_project_id()
@@ -7277,7 +7330,7 @@ def stream_requirement_analysis(requirement):
     try:
         update_test_job(job_id, fetch=False, status="running", started_at=current_time_ms())
         yield emit_status("running")
-        yield emit_log("需求解析任务已创建，正在调用 OpenCode。")
+        yield emit_log(agent_message("analysis_created"))
         response = send_opencode_prompt(full_prompt, default_agent="requirement-analyst")
         output_text = collect_opencode_response_text(response)
         append_test_job_log(job_id, output_text[-JOB_LOG_TAIL_LIMIT:])
@@ -7288,14 +7341,23 @@ def stream_requirement_analysis(requirement):
         serialized_modules = [serialize_requirement_module(item) for item in saved_modules]
         finish_test_job(job_id, "succeeded")
         yield emit_status("succeeded", extra={"modules": serialized_modules})
-        yield emit_log(f"需求解析完成，生成候选模块 {len(serialized_modules)} 个。")
+        yield emit_log(agent_message("analysis_completed", count=len(serialized_modules)))
         yield sse_payload("done", {"ok": True, "modules": serialized_modules, "job_id": job_id})
     except Exception as exc:
-        append_test_job_log(job_id, f"需求解析失败：{exc}\n")
-        finish_test_job(job_id, "failed", error=str(exc))
-        yield emit_status("failed", str(exc))
-        yield emit_log(f"需求解析失败：{exc}")
-        yield sse_payload("done", {"ok": False, "status": "failed", "error": str(exc), "job_id": job_id})
+        failure_message = agent_message("analysis_failed", error=exc)
+        append_test_job_log(job_id, f"{failure_message}\n")
+        finish_test_job(job_id, "failed", error=failure_message)
+        yield emit_status("failed", failure_message)
+        yield emit_log(failure_message)
+        yield sse_payload(
+            "done",
+            {
+                "ok": False,
+                "status": "failed",
+                "error": failure_message,
+                "job_id": job_id,
+            },
+        )
 
 
 def agent_register_task(run_id):
@@ -7399,7 +7461,9 @@ def agent_is_cancelled(run_id, *, force=False):
 
 def agent_raise_if_cancelled(run_id, *, force=False):
     if agent_is_cancelled(run_id, force=force):
-        raise OpencodeTaskCancelled("Agent 任务已取消。")
+        raise OpencodeTaskCancelled(
+            agent_message("task_cancelled")
+        )
 
 
 @contextmanager
@@ -7468,7 +7532,14 @@ def agent_start_step(run_id, step_key, input_data=None):
     agent_raise_if_cancelled(run_id)
     update_agent_run(run_id, status="running", current_step=step_key)
     update_agent_step(run_id, step_key, status="running", input_data=input_data, error="", started=True)
-    append_agent_event(run_id, step_key, "status", f"{agent_step_name(step_key)}开始。", {"status": "running"})
+    step_name = agent_step_name(step_key)
+    append_agent_event(
+        run_id,
+        step_key,
+        "status",
+        agent_message("step_started", step=step_name),
+        {"status": "running"},
+    )
 
 
 def agent_finish_step(run_id, step_key, output_data=None, counts=None):
@@ -7485,7 +7556,7 @@ def agent_finish_step(run_id, step_key, output_data=None, counts=None):
         run_id,
         step_key,
         "status",
-        f"{agent_step_name(step_key)}完成。",
+        agent_message("step_completed", step=agent_step_name(step_key)),
         {"status": "succeeded", "counts": counts or {}},
     )
 
@@ -7541,7 +7612,13 @@ def append_agent_artifact_progress(
 
 def agent_fail_step(run_id, step_key, error):
     update_agent_step(run_id, step_key, status="failed", error=str(error), finished=True)
-    append_agent_event(run_id, step_key, "error", f"{agent_step_name(step_key)}失败：{error}", {"error": str(error)})
+    append_agent_event(
+        run_id,
+        step_key,
+        "error",
+        agent_message("step_failed", step=agent_step_name(step_key), error=error),
+        {"error": str(error)},
+    )
 
 
 def parse_sse_text_blocks(text):
@@ -7593,6 +7670,7 @@ def consume_agent_sse_generator(
         log_tail_limit=JOB_LOG_TAIL_LIMIT,
         sleep=time.sleep,
         batcher_factory=AgentOutputBatcher,
+        project_copy=project_copy,
     )
     return agent_stream_consumer.consume_agent_sse_generator(
         run_id,
@@ -7705,31 +7783,7 @@ def ensure_plan_markdown_splitter_agent():
     project_root = get_project_root()
     prompt_dir = project_root / ".opencode" / "prompts"
     prompt_file = prompt_dir / "plan-markdown-splitter.md"
-    prompt_source = """You are a read-only test-plan splitter for the Waterfall AI test automation platform.
-
-You convert an already generated Markdown test plan into structured JSON.
-Return only valid JSON. Do not wrap JSON in Markdown fences.
-Do not create, edit, delete, move files, run commands, or use browser tools.
-
-The only accepted top-level shape is:
-{
-  "cases": [
-    {
-      "title": "中文单用例标题",
-      "filename": "中文单用例标题.md",
-      "suite": "module or suite name",
-      "description": "optional short description",
-      "preconditions": ["optional precondition"],
-      "steps": [
-        {"text": "action", "expect": ["expected result"]}
-      ]
-    }
-  ]
-}
-
-Each case must represent exactly one test case.
-Every title and filename must use a Chinese business name. Filename stems must contain Chinese characters and must not contain English letters.
-"""
+    prompt_source = agent_localization.splitter_prompt(agent_project_language())
     prompt_changed = write_text_if_changed(prompt_file, prompt_source)
 
     opencode_file = project_root / "opencode.json"
@@ -7760,12 +7814,19 @@ def call_agent_json_agent(run_id, step_key, title, payload, agent_name, ensure_a
     prompt = (
         f"@{agent_name}\n"
         f"{title}\n\n"
-        "请只输出 JSON。输入如下：\n"
+        f"{project_copy('Return JSON only. Input:', '请只输出 JSON。输入如下：')}\n"
         f"{json.dumps(payload, ensure_ascii=False, indent=2)}\n"
     )
     create_test_job("agent_review", job_id=job_id, status="running", prompt=prompt)
     agent_set_current_job(run_id, job_id)
-    append_agent_event(run_id, step_key, "status", f"正在调用 {agent_name}。", {"job_id": job_id}, job_id=job_id)
+    append_agent_event(
+        run_id,
+        step_key,
+        "status",
+        agent_message("calling_agent", agent=agent_name),
+        {"job_id": job_id},
+        job_id=job_id,
+    )
     try:
         response = send_opencode_prompt(prompt, default_agent=agent_name)
         text = collect_opencode_response_text(response)
@@ -7774,13 +7835,28 @@ def call_agent_json_agent(run_id, step_key, title, payload, agent_name, ensure_a
         parsed = extract_json_object_from_text(text)
         persisted_parsed = result_redactor(parsed) if result_redactor else parsed
         finish_test_job(job_id, "succeeded")
-        append_agent_event(run_id, step_key, "decision", "模型已返回结构化结果。", persisted_parsed, job_id=job_id)
+        append_agent_event(
+            run_id,
+            step_key,
+            "decision",
+            agent_message("model_structured"),
+            persisted_parsed,
+            job_id=job_id,
+        )
         return persisted_parsed
     except Exception as exc:
         safe_error = result_redactor(str(exc)) if result_redactor else str(exc)
-        append_test_job_log(job_id, f"模型调用失败：{safe_error}\n")
+        failure_message = agent_message("model_failed", error=safe_error)
+        append_test_job_log(job_id, f"{failure_message}\n")
         finish_test_job(job_id, "failed", error=str(safe_error))
-        append_agent_event(run_id, step_key, "error", f"模型调用失败：{safe_error}", {"error": safe_error}, job_id=job_id)
+        append_agent_event(
+            run_id,
+            step_key,
+            "error",
+            failure_message,
+            {"error": safe_error},
+            job_id=job_id,
+        )
         raise
     finally:
         agent_set_current_job(run_id, "")
@@ -7813,7 +7889,7 @@ def normalize_reviewer_decisions(parsed, collection_keys):
     else:
         items = None
     if not isinstance(items, list):
-        raise ValueError("reviewer JSON 必须是单条 decision 或包含 decisions 数组。")
+        raise ValueError(agent_message("reviewer_invalid"))
 
     decisions = []
     for item in items:
@@ -7834,7 +7910,14 @@ def agent_analyze_requirement(run_id, requirement):
     full_prompt = build_requirement_analysis_prompt(requirement, markdown_text)
     create_test_job("requirement_analysis", job_id=job_id, status="running", prompt=full_prompt)
     agent_set_current_job(run_id, job_id)
-    append_agent_event(run_id, step_key, "status", "正在调用 requirement-analyst。", {"job_id": job_id}, job_id=job_id)
+    append_agent_event(
+        run_id,
+        step_key,
+        "status",
+        agent_message("calling_agent", agent="requirement-analyst"),
+        {"job_id": job_id},
+        job_id=job_id,
+    )
     try:
         response = send_opencode_prompt(full_prompt, default_agent="requirement-analyst")
         output_text = collect_opencode_response_text(response)
@@ -7847,9 +7930,10 @@ def agent_analyze_requirement(run_id, requirement):
         agent_finish_step(run_id, step_key, {"modules": serialized, "job_id": job_id}, counts)
         return serialized
     except Exception as exc:
-        append_test_job_log(job_id, f"需求解析失败：{exc}\n")
-        finish_test_job(job_id, "failed", error=str(exc))
-        raise
+        failure_message = agent_message("analysis_failed", error=exc)
+        append_test_job_log(job_id, f"{failure_message}\n")
+        finish_test_job(job_id, "failed", error=failure_message)
+        raise RuntimeError(failure_message) from exc
     finally:
         agent_set_current_job(run_id, "")
 
@@ -7866,19 +7950,36 @@ def agent_review_modules(run_id, requirement, modules):
             "or test-count limits. Return decisions with module_uid, action, reason, and optional fields for update."
         ),
     }
-    decisions = normalize_reviewer_decisions(call_agent_reviewer(run_id, step_key, "审查需求候选模块。", payload), ["modules"])
+    decisions = normalize_reviewer_decisions(
+        call_agent_reviewer(
+            run_id,
+            step_key,
+            agent_message("review_modules"),
+            payload,
+        ),
+        ["modules"],
+    )
     decisions_by_uid = {str(item.get("module_uid") or ""): item for item in decisions}
     kept = []
     counts = {"generated": len(modules), "kept": 0, "updated": 0, "deleted": 0}
     for module_item in modules:
         module_uid = module_item.get("module_uid")
-        decision = decisions_by_uid.get(module_uid) or {"action": "keep", "reason": "reviewer 未返回该模块，默认保留。"}
+        decision = decisions_by_uid.get(module_uid) or {
+            "action": "keep",
+            "reason": agent_message("reviewer_missing"),
+        }
         action = decision.get("action")
         reason = decision.get("reason") or ""
         if action == "delete":
             delete_requirement_module(requirement["id"], module_uid)
             counts["deleted"] += 1
-            append_agent_event(run_id, step_key, "decision", f"删除模块：{module_item.get('module_name')}。{reason}", decision)
+            append_agent_event(
+                run_id,
+                step_key,
+                "decision",
+                agent_message("module_deleted", module=module_item.get("module_name"), reason=reason),
+                decision,
+            )
             continue
         if action == "update":
             payload_update = {
@@ -7895,10 +7996,22 @@ def agent_review_modules(run_id, requirement, modules):
             updated = update_requirement_module(requirement["id"], module_uid, payload_update)
             module_item = serialize_requirement_module(updated)
             counts["updated"] += 1
-            append_agent_event(run_id, step_key, "decision", f"修改模块：{module_item.get('module_name')}。{reason}", decision)
+            append_agent_event(
+                run_id,
+                step_key,
+                "decision",
+                agent_message("module_updated", module=module_item.get("module_name"), reason=reason),
+                decision,
+            )
         else:
             update_requirement_module(requirement["id"], module_uid, {"status": "confirmed"})
-            append_agent_event(run_id, step_key, "decision", f"保留模块：{module_item.get('module_name')}。{reason}", decision)
+            append_agent_event(
+                run_id,
+                step_key,
+                "decision",
+                agent_message("module_kept", module=module_item.get("module_name"), reason=reason),
+                decision,
+            )
         kept.append(module_item)
     counts["kept"] = len(kept)
     agent_finish_step(run_id, step_key, {"modules": kept, "decisions": decisions}, counts)
@@ -8010,7 +8123,7 @@ def agent_generate_plan_for_module(
         run_id,
         step_key,
         "running",
-        f"正在生成计划：{module_name}。",
+        agent_message("generating_plan", module=module_name),
         artifact_type="plan",
         module_uid=module_item.get("module_uid"),
         module_name=module_name,
@@ -8101,8 +8214,8 @@ def agent_generate_plan_for_module(
                 setup_targets=build_setup_targets(),
                 setup_parent_run_id=run_id,
                 success_payload_factory=finalize_payload,
-                session_title=f"Agent 生成测试计划：{module_name}",
-                success_message=f"Agent 已生成测试计划：{target_file}",
+                session_title=agent_message("agent_plan_title", module=module_name),
+                success_message=agent_message("agent_plan_success", target=target_file),
                 cancel_job_id=job_id,
                 job_id=job_id,
                 agent_stream=True,
@@ -8135,7 +8248,7 @@ def agent_generate_plan_for_module(
         run_id,
         step_key,
         "running",
-        f"源计划已生成，正在拆分：{module_name}/{plan_filename}。",
+        agent_message("source_plan_splitting", target=f"{module_name}/{plan_filename}"),
         artifact_type="plan",
         module_uid=module_item.get("module_uid"),
         module_name=module_name,
@@ -8159,9 +8272,10 @@ def agent_generate_plan_for_module(
         )
     except Exception as exc:
         finish_test_job(job_id, "failed", error=str(exc))
-        append_agent_event(run_id, step_key, "error", f"拆分计划失败：{exc}", {"error": str(exc)})
+        failure_message = agent_message("split_plan_failed", error=exc)
+        append_agent_event(run_id, step_key, "error", failure_message, {"error": failure_message})
         raise AgentItemFailure(
-            f"拆分计划失败：{exc}",
+            failure_message,
             job_id=job_id,
             error_type="artifact",
             partial_artifacts=[str(target_file)] if target_file.exists() else [],
@@ -8260,7 +8374,6 @@ def agent_generate_plans(run_id, requirement, modules, resume_output=None):
     generated_plans = merge_agent_plans(previous_plans, [])
     failures = [item for item in previous_failures if isinstance(item, dict)]
     skipped = list(previous_skipped)
-
     def progress_output():
         return {"plans": generated_plans, "failures": failures, "skipped": skipped}
 
@@ -8268,9 +8381,9 @@ def agent_generate_plans(run_id, requirement, modules, resume_output=None):
         return {"generated": len(generated_plans), "failed": len(failures), "skipped": len(skipped), "modules": len(modules)}
 
     queue_message = (
-        f"计划增量恢复队列已准备，保留 {len(generated_plans)} 个已有计划，仅重试 {len(retry_modules)} 个失败模块。"
+        agent_message("plan_resume_queue", plans=len(generated_plans), modules=len(retry_modules))
         if previous_failures
-        else f"计划生成队列已准备，共 {len(modules)} 个模块。"
+        else agent_message("plan_queue", count=len(modules))
     )
     append_agent_artifact_progress(
         run_id,
@@ -8376,7 +8489,7 @@ def agent_generate_plans(run_id, requirement, modules, resume_output=None):
                 run_id,
                 step_key,
                 "succeeded",
-                f"计划生成完成：{module_item.get('module_name')}，生成 {len(plans)} 个计划。",
+                agent_message("plan_completed", module=module_item.get("module_name"), count=len(plans)),
                 artifact_type="plan",
                 output_data=progress_output(),
                 counts=progress_counts(),
@@ -8434,7 +8547,7 @@ def agent_generate_plans(run_id, requirement, modules, resume_output=None):
                 run_id,
                 step_key,
                 "failed",
-                f"模块计划生成失败：{module_item.get('module_name')}，{exc}",
+                agent_message("module_plan_failed", module=module_item.get("module_name"), error=exc),
                 artifact_type="plan",
                 output_data=progress_output(),
                 counts=progress_counts(),
@@ -8447,7 +8560,7 @@ def agent_generate_plans(run_id, requirement, modules, resume_output=None):
             )
     counts = progress_counts()
     if failures:
-        raise RuntimeError(f"仍有 {len(failures)} 个模块计划生成失败：{failures[0]['error']}")
+        raise RuntimeError(agent_message("plans_still_failed", count=len(failures), error=failures[0]["error"]))
     agent_finish_step(run_id, step_key, progress_output(), counts)
     return generated_plans
 
@@ -8492,8 +8605,7 @@ def agent_generate_script_for_plan(
     plan_asset = sync_plan_asset(module_name, plan_file, change_source="manual", message=f"agent sync plan: {module_name}/{plan_filename}")
     job_id = f"generator-{uuid.uuid4().hex}"
     prompt = str(original_prompt or build_agent_script_generation_prompt(plan)).strip()
-    if str(supplemental_prompt or "").strip():
-        prompt += f"\n\n本次重新生成补充要求：\n{str(supplemental_prompt).strip()}"
+    prompt = agent_localization.append_supplemental_prompt(agent_project_language(), prompt, supplemental_prompt, "generation")
     create_test_job("generator", job_id=job_id, status="queued", source_asset_id=plan_asset.get("asset_id") if plan_asset else None, prompt=prompt)
     candidate_file = get_script_generation_candidate_file(module_name, plan_filename, job_id)
     candidate_file.parent.mkdir(parents=True, exist_ok=True)
@@ -8553,8 +8665,8 @@ def agent_generate_script_for_plan(
                 target_file,
                 completion_check=has_generated_script_output,
                 target_label=str(target_file),
-                session_title=f"Agent 生成测试脚本：{module_name}/{Path(plan_filename).stem}",
-                success_message=f"Agent 已生成测试脚本：{target_file}",
+                session_title=agent_message("script_generation_title", target=f"{module_name}/{Path(plan_filename).stem}"),
+                success_message=agent_message("script_generation_success", target=target_file),
                 default_agent="playwright-test-generator",
                 setup_targets=build_setup_targets(
                     module_name=module_name,
@@ -8611,7 +8723,7 @@ def agent_generate_scripts(run_id, plans):
         run_id,
         step_key,
         "queued",
-        f"脚本生成队列已准备，共 {len(plans)} 个计划。",
+        agent_message("script_generation_queue", count=len(plans)),
         artifact_type="script",
         input_data=step_input,
         output_data=progress_output(),
@@ -8988,8 +9100,7 @@ def agent_repair_script(
     if not script_file.exists():
         raise FileNotFoundError(f"测试脚本不存在：{script_file}")
     prompt = str(original_prompt or build_agent_script_repair_prompt(script, failure)).strip()
-    if str(supplemental_prompt or "").strip():
-        prompt += f"\n\n本次重新修复补充要求：\n{str(supplemental_prompt).strip()}"
+    prompt = agent_localization.append_supplemental_prompt(agent_project_language(), prompt, supplemental_prompt, "repair")
     script_asset = sync_script_asset(module_name, script_file, change_source="manual", message=f"agent sync script: {module_name}/{filename}")
     job_id = f"healer-{uuid.uuid4().hex}"
     create_test_job("healer", job_id=job_id, status="queued", target_asset_id=script_asset.get("asset_id") if script_asset else None, prompt=prompt)
@@ -9030,8 +9141,8 @@ def agent_repair_script(
                 completion_check=lambda: False,
                 completion_required=False,
                 target_label=str(script_file),
-                session_title=f"Agent 修复测试脚本：{filename}",
-                success_message=f"Agent 已完成脚本修复：{script_file}",
+                session_title=agent_message("script_repair_title", target=filename),
+                success_message=agent_message("script_repair_success", target=script_file),
                 success_payload_factory=finalize_payload,
                 default_agent="playwright-test-healer",
                 setup_targets=build_setup_targets(
@@ -9084,7 +9195,7 @@ def agent_repair_scripts(run_id, scripts):
         run_id,
         step_key,
         "queued",
-        f"脚本修复队列已准备，共 {len(scripts)} 个脚本。",
+        agent_message("script_repair_queue", count=len(scripts)),
         artifact_type="script",
         input_data=step_input,
         output_data=progress_output(),
@@ -9278,7 +9389,7 @@ def analyze_agent_script_preparation_failure(run_id, step_key, payload):
     return call_agent_failure_analyst(
         run_id,
         step_key,
-        "分析脚本准备失败，并在重新生成或重新修复之间给出唯一建议与补充 Prompt。",
+        agent_message("failure_analysis_instruction"),
         payload,
     )
 
@@ -9305,6 +9416,7 @@ def resolve_agent_script_preparation_dependency(name):
         "is_cancelled_error": lambda error: isinstance(error, OpencodeTaskCancelled),
         "make_id": lambda prefix: f"{prefix}-{uuid.uuid4().hex}",
         "waiting_run_status": "awaiting_script_action",
+        "get_project_language": agent_project_language,
     }
     return dependencies[name]
 
@@ -9343,7 +9455,7 @@ def agent_create_suite(run_id, requirement, scripts):
     suite = add_test_suite_items_in_mysql(suite["id"], items)
     update_agent_run(run_id, suite_uid=suite.get("id"))
     counts = {"scripts": len(items), "suite_count": 1}
-    append_agent_event(run_id, step_key, "decision", f"已创建测试集：{suite.get('name')}，脚本 {len(items)} 条。", {"suite": suite})
+    append_agent_event(run_id, step_key, "decision", agent_message("suite_created", name=suite.get("name"), count=len(items)), {"suite": suite})
     agent_finish_step(run_id, step_key, {"suite": suite}, counts)
     return suite
 
@@ -12358,7 +12470,10 @@ def stream_plan_generation(
         else None
     )
     plan_completion_probe = (
-        PlanCompletionProbe(target_file)
+        PlanCompletionProbe(
+            target_file,
+            language=agent_project_language(),
+        )
         if completion_check is None
         and completion_required
         and validate_plan_completion
@@ -12366,8 +12481,8 @@ def stream_plan_generation(
     )
     completion_enabled = completion_check is not None or plan_completion_probe is not None
     target_label = target_label or str(target_file)
-    session_title = session_title or f"生成测试计划：{module_name}"
-    success_message = success_message or f"任务成功，文件已生成：{target_label}"
+    session_title = session_title or agent_message("generate_plan_title", module=module_name)
+    success_message = success_message or agent_message("task_success_file", target=target_label)
     register_opencode_task(cancel_job_id, target_label)
     if job_id:
         update_test_job(job_id, fetch=False, status="running", started_at=current_time_ms())
@@ -12437,9 +12552,9 @@ def stream_plan_generation(
         if "video" in success_payload:
             video_info = success_payload.get("video")
             if video_info:
-                success_logs.append(f"已找到执行视频：{video_info.get('path', '')}")
+                success_logs.append(agent_message("video_found", path=video_info.get("path", "")))
             else:
-                success_logs.append(success_payload.get("video_error") or "未找到本次执行视频。")
+                success_logs.append(success_payload.get("video_error") or agent_message("video_missing"))
         success_logs.append(success_message)
         if job_id:
             for message in success_logs:
@@ -12568,7 +12683,7 @@ def stream_plan_generation(
                 },
             )
         if job_id:
-            terminal_message = str(error) if status == "cancelled" else f"任务失败：{error}"
+            terminal_message = str(error) if status == "cancelled" else agent_message("task_failed", error=error)
             append_test_job_log(
                 job_id,
                 f"{terminal_message}\n",
@@ -12612,7 +12727,7 @@ def stream_plan_generation(
                     yield None, None
                     continue
                 if item.kind == "error":
-                    raise item.error or RuntimeError("OpenCode 事件流读取失败。")
+                    raise item.error or RuntimeError(agent_message("event_stream_read_failed"))
                 if item.kind == "eof":
                     return
                 yield item.event, item.data
@@ -12644,10 +12759,10 @@ def stream_plan_generation(
             now = time.monotonic()
             if now - last_notice >= 10:
                 last_notice = now
-                yield from emit_log("OpenCode 仍在执行，正在等待任务完成。")
+                yield from emit_log(agent_message("opencode_waiting"))
             time.sleep(0.5)
 
-        raise RuntimeError(f"等待 OpenCode 任务完成超时（已等待 {format_timeout_seconds(timeout_seconds)}）。")
+        raise RuntimeError(agent_message("opencode_wait_timeout", duration=format_timeout_seconds(timeout_seconds)))
 
     def abort_active_session():
         if session_id:
@@ -12667,7 +12782,7 @@ def stream_plan_generation(
             return
 
         abort_active_session()
-        raise OpencodeTaskCancelled("任务已取消。")
+        raise OpencodeTaskCancelled(agent_message("task_cancelled_generic"))
 
     def send_fallback_prompt_with_cancellation(timeout_seconds):
         result = []
@@ -12693,9 +12808,7 @@ def stream_plan_generation(
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 abort_active_session()
-                raise RuntimeError(
-                    f"OpenCode 等待模式超时（已等待 {format_timeout_seconds(timeout_seconds)}）。"
-                )
+                raise RuntimeError(agent_message("opencode_fallback_timeout", duration=format_timeout_seconds(timeout_seconds)))
             completed.wait(min(0.1, remaining))
 
         raise_if_cancelled()
@@ -12716,7 +12829,7 @@ def stream_plan_generation(
         if len(value) <= limit:
             return value
         omitted = len(value) - limit
-        return f"{value[:limit]}\n...[已截断 {omitted} 个字符]"
+        return f"{value[:limit]}\n{agent_message('truncated', count=omitted)}"
 
     def compact_json(value, limit=6000):
         if value in (None, ""):
@@ -12753,13 +12866,13 @@ def stream_plan_generation(
         text = compact_json(value)
         if not text:
             return ""
-        return f"工具输入：{title}\n{text}"
+        return f"{agent_message('tool_input', title=title)}\n{text}"
 
     def tool_metadata_message(title, value):
         text = compact_json(value)
         if not text or text == "{}":
             return ""
-        return f"工具元数据：{title}\n{text}"
+        return f"{agent_message('tool_metadata', title=title)}\n{text}"
 
     def tool_attachments_message(title, attachments):
         if not attachments:
@@ -12774,7 +12887,7 @@ def stream_plan_generation(
             lines.append(" ".join(part for part in [str(label), f"({mime})" if mime else "", str(detail)] if part))
         if not lines:
             return ""
-        return f"工具附件：{title}\n" + "\n".join(lines)
+        return f"{agent_message('tool_attachments', title=title)}\n" + "\n".join(lines)
 
     def tool_content_text(content):
         if not isinstance(content, list):
@@ -12790,7 +12903,7 @@ def stream_plan_generation(
                 label = item.get("name") or item.get("mime") or "file"
                 uri = item.get("uri") or item.get("url") or ""
                 mime = item.get("mime") or ""
-                lines.append(" ".join(part for part in [f"[文件] {label}", f"({mime})" if mime else "", uri] if part))
+                lines.append(" ".join(part for part in [agent_message("file_tag", label=label), f"({mime})" if mime else "", uri] if part))
         return trim_log_value("\n".join(lines))
 
     def emit_tool_part_logs(part):
@@ -12802,17 +12915,18 @@ def stream_plan_generation(
 
         status_key = (identity, "status", state_status, title)
         if state_status == "completed":
-            yield from emit_once(seen_tool_states, status_key, f"工具完成：{title}")
+            yield from emit_once(seen_tool_states, status_key, agent_message("tool_completed", title=title))
         elif state_status == "error":
+            detail = project_copy(f": {state.get('error', '')}", f"，{state.get('error', '')}") if state.get("error") else ""
             yield from emit_once(
                 seen_tool_states,
                 status_key,
-                f"工具失败：{title}，{state.get('error', '')}".rstrip("，"),
+                agent_message("tool_failed", title=title, detail=detail),
             )
         elif state_status == "running":
-            yield from emit_once(seen_tool_states, status_key, f"正在执行工具：{title}")
+            yield from emit_once(seen_tool_states, status_key, agent_message("tool_running", title=title))
         elif state_status == "pending":
-            yield from emit_once(seen_tool_states, status_key, f"工具等待执行：{title}")
+            yield from emit_once(seen_tool_states, status_key, agent_message("tool_pending", title=title))
 
         input_message = tool_input_message(title, state.get("input"))
         if input_message:
@@ -12829,7 +12943,7 @@ def stream_plan_generation(
                 yield from emit_once(
                     seen_tool_outputs,
                     (identity, "output", fingerprint(output_text)),
-                    f"工具输出：{title}\n{output_text}",
+                    f"{agent_message('tool_output', title=title)}\n{output_text}",
                 )
             attachments_message = tool_attachments_message(title, state.get("attachments"))
             if attachments_message:
@@ -12843,7 +12957,7 @@ def stream_plan_generation(
             yield from emit_once(
                 seen_tool_outputs,
                 (identity, "error", fingerprint(error_text)),
-                f"工具错误：{title}\n{error_text}",
+                f"{agent_message('tool_error', title=title)}\n{error_text}",
             )
 
     def emit_next_tool_logs(event_type, properties):
@@ -12851,7 +12965,7 @@ def stream_plan_generation(
         title = properties.get("tool") or properties.get("name") or call_id
 
         if event_type == "session.next.tool.input.started":
-            yield from emit_once(seen_tool_states, (call_id, event_type, title), f"工具输入开始：{title}")
+            yield from emit_once(seen_tool_states, (call_id, event_type, title), agent_message("tool_input_started", title=title))
             return
 
         if event_type == "session.next.tool.input.delta":
@@ -12861,7 +12975,7 @@ def stream_plan_generation(
                 yield from emit_once(
                     seen_tool_inputs,
                     (call_id, event_type, len(next_tool_input_buffers[call_id]), fingerprint(delta)),
-                    f"工具输入增量：{title}\n{trim_log_value(delta, 4000)}",
+                    f"{agent_message('tool_input_delta', title=title)}\n{trim_log_value(delta, 4000)}",
                 )
             return
 
@@ -12872,12 +12986,13 @@ def stream_plan_generation(
             yield from emit_once(
                 seen_tool_inputs,
                 (call_id, event_type, fingerprint(text)),
-                f"工具输入完成：{title}\n{trim_log_value(text, 6000)}" if text else f"工具输入完成：{title}",
+                f"{agent_message('tool_input_completed', title=title)}\n{trim_log_value(text, 6000)}"
+                if text else agent_message("tool_input_completed", title=title),
             )
             return
 
         if event_type == "session.next.tool.called":
-            yield from emit_once(seen_tool_states, (call_id, event_type, title), f"正在执行工具：{title}")
+            yield from emit_once(seen_tool_states, (call_id, event_type, title), agent_message("tool_running", title=title))
             input_message = tool_input_message(title, properties.get("input"))
             if input_message:
                 yield from emit_once(seen_tool_inputs, (call_id, "called-input", fingerprint(input_message)), input_message)
@@ -12890,38 +13005,38 @@ def stream_plan_generation(
                 yield from emit_once(
                     seen_tool_outputs,
                     (call_id, event_type, "content", fingerprint(content_text)),
-                    f"工具进度：{title}\n{content_text}",
+                    f"{agent_message('tool_progress', title=title)}\n{content_text}",
                 )
             if structured_text and structured_text != "{}":
                 yield from emit_once(
                     seen_tool_metadata,
                     (call_id, event_type, "structured", fingerprint(structured_text)),
-                    f"工具进度数据：{title}\n{structured_text}",
+                    f"{agent_message('tool_progress_data', title=title)}\n{structured_text}",
                 )
             return
 
         if event_type == "session.next.tool.success":
-            yield from emit_once(seen_tool_states, (call_id, event_type, title), f"工具完成：{title}")
+            yield from emit_once(seen_tool_states, (call_id, event_type, title), agent_message("tool_completed", title=title))
             content_text = tool_content_text(properties.get("content"))
             if content_text:
                 yield from emit_once(
                     seen_tool_outputs,
                     (call_id, "success-content", fingerprint(content_text)),
-                    f"工具输出：{title}\n{content_text}",
+                    f"{agent_message('tool_output', title=title)}\n{content_text}",
                 )
             structured_text = compact_json(properties.get("structured"))
             if structured_text and structured_text != "{}":
                 yield from emit_once(
                     seen_tool_metadata,
                     (call_id, "success-structured", fingerprint(structured_text)),
-                    f"工具结构化结果：{title}\n{structured_text}",
+                    f"{agent_message('tool_structured', title=title)}\n{structured_text}",
                 )
             result_text = compact_json(properties.get("result"))
             if result_text and result_text != "{}":
                 yield from emit_once(
                     seen_tool_outputs,
                     (call_id, "success-result", fingerprint(result_text)),
-                    f"工具原始结果：{title}\n{result_text}",
+                    f"{agent_message('tool_raw_result', title=title)}\n{result_text}",
                 )
             return
 
@@ -12931,17 +13046,18 @@ def stream_plan_generation(
                 message = error.get("message") or compact_json(error)
             else:
                 message = str(error)
+            detail = project_copy(f": {message}", f"，{message}") if message else ""
             yield from emit_once(
                 seen_tool_states,
                 (call_id, event_type, title, fingerprint(message)),
-                f"工具失败：{title}，{message}".rstrip("，"),
+                agent_message("tool_failed", title=title, detail=detail),
             )
             result_text = compact_json(properties.get("result"))
             if result_text and result_text != "{}":
                 yield from emit_once(
                     seen_tool_outputs,
                     (call_id, "failed-result", fingerprint(result_text)),
-                    f"工具失败结果：{title}\n{result_text}",
+                    f"{agent_message('tool_failed_result', title=title)}\n{result_text}",
                 )
 
     try:
@@ -12962,7 +13078,7 @@ def stream_plan_generation(
             raise_if_cancelled()
             yield from emit_log(message)
         raise_if_cancelled()
-        yield from emit_log(f"任务已创建，目标位置：{target_label}")
+        yield from emit_log(agent_message("task_created_target", target=target_label))
         session = opencode_request(
             "/session",
             build_opencode_session_payload(session_title, full_prompt, default_agent=default_agent),
@@ -12971,11 +13087,11 @@ def stream_plan_generation(
         )
         session_id = session.get("id")
         if not session_id:
-            raise RuntimeError(f"OpenCode 未返回 session id: {session}")
+            raise RuntimeError(agent_message("session_missing", session=session))
 
         if set_opencode_task_session(cancel_job_id, session_id):
             raise_if_cancelled()
-        yield from emit_log(f"OpenCode session 已创建：{session_id}")
+        yield from emit_log(agent_message("session_created", session_id=session_id))
         opencode_timeout = get_opencode_task_timeout_seconds()
 
         try:
@@ -12983,7 +13099,7 @@ def stream_plan_generation(
             event_response = opencode_event_stream(timeout=opencode_timeout)
         except Exception as exc:
             raise_if_cancelled()
-            yield from emit_log(f"OpenCode 事件流不可用，改用等待模式：{exc}")
+            yield from emit_log(agent_message("event_stream_fallback", error=exc))
             response = send_fallback_prompt_with_cancellation(opencode_timeout)
             raise_if_cancelled()
             summary = summarize_opencode_response(response)
@@ -12991,14 +13107,14 @@ def stream_plan_generation(
                 yield from emit_delta(summary)
             yield from flush_delta("fallback")
             if completion_required and not wait_for_stable_completion():
-                raise RuntimeError(f"OpenCode 已返回，但未生成目标内容：{target_label}")
+                raise RuntimeError(agent_message("target_missing_after_return", target=target_label))
             yield from emit_success_result()
             return
 
         with event_response:
             worker = threading.Thread(target=prompt_worker, daemon=True)
             worker.start()
-            yield from emit_log("已提交到 OpenCode，正在接收实时输出。")
+            yield from emit_log(agent_message("submitted"))
 
             deadline = time.monotonic() + opencode_timeout
             is_idle = False
@@ -13009,7 +13125,7 @@ def stream_plan_generation(
 
                 now = time.monotonic()
                 if now > deadline:
-                    raise RuntimeError(f"OpenCode 实时输出超时（已等待 {format_timeout_seconds(opencode_timeout)}）。")
+                    raise RuntimeError(agent_message("realtime_timeout", duration=format_timeout_seconds(opencode_timeout)))
 
                 due_batch = output_batcher.flush_due()
                 if due_batch is not None:
@@ -13026,9 +13142,9 @@ def stream_plan_generation(
                                 "case_count": len(plan_completion_probe.cases),
                             },
                         )
-                        yield from emit_log("源计划已生成并通过校验，正在拆分单用例计划。")
+                        yield from emit_log(agent_message("source_ready"))
                     else:
-                        yield from emit_log("已检测到目标内容生成，停止等待 OpenCode 后续事件。")
+                        yield from emit_log(agent_message("target_detected"))
                     if session_id:
                         try:
                             abort_opencode_session(session_id)
@@ -13112,13 +13228,13 @@ def stream_plan_generation(
                     if part_type == "patch":
                         files = part.get("files") or []
                         if files:
-                            yield from emit_log(f"生成补丁：{', '.join(files)}")
+                            yield from emit_log(agent_message("patch_generated", files=", ".join(files)))
                         continue
 
                 if event_type == "file.edited":
                     file_path = properties.get("file")
                     if file_path:
-                        yield from emit_log(f"文件已编辑：{file_path}")
+                        yield from emit_log(agent_message("file_edited", path=file_path))
                     continue
 
                 if event_type == "session.diff":
@@ -13126,19 +13242,20 @@ def stream_plan_generation(
                         file_path = item.get("file") if isinstance(item, dict) else None
                         if file_path and file_path not in seen_diff_files:
                             seen_diff_files.add(file_path)
-                            yield from emit_log(f"检测到文件变更：{file_path}")
+                            yield from emit_log(agent_message("file_changed", path=file_path))
                     continue
 
                 if event_type == "session.status":
                     status = properties.get("status") or {}
                     if status.get("type") == "retry":
-                        yield from emit_log(f"OpenCode 正在重试：{status.get('message', '')}".rstrip("："))
+                        detail = project_copy(f": {status.get('message')}", f"：{status.get('message')}") if status.get("message") else ""
+                        yield from emit_log(agent_message("opencode_retrying", detail=detail))
                     continue
 
                 if event_type == "session.error":
                     error_info = properties.get("error") or {}
                     message = error_info.get("data", {}).get("message") or error_info.get("name") or error_info
-                    raise RuntimeError(f"OpenCode 执行失败：{format_opencode_execution_error(message)}")
+                    raise RuntimeError(agent_message("opencode_execution_failed", error=format_opencode_execution_error(message)))
 
                 if event_type == "session.idle":
                     is_idle = True
@@ -13150,7 +13267,7 @@ def stream_plan_generation(
                 raise prompt_error[0]
 
             if not is_idle:
-                yield from emit_log("OpenCode 事件流已结束，改用状态检查等待任务完成。")
+                yield from emit_log(agent_message("event_stream_ended"))
                 yield from wait_for_idle(deadline, opencode_timeout)
 
         messages = opencode_request(
@@ -13166,7 +13283,7 @@ def stream_plan_generation(
         yield from flush_delta("stream-finished")
 
         if completion_required and not wait_for_stable_completion():
-            raise RuntimeError(f"OpenCode 已结束，但未生成目标内容：{target_label}")
+            raise RuntimeError(agent_message("target_missing_after_end", target=target_label))
 
         yield from emit_success_result()
     except OpencodeTaskCancelled as exc:
@@ -13188,7 +13305,7 @@ def stream_plan_generation(
             except Exception:
                 pass
         if job_id and job_log_writer is not None and not terminalized:
-            disconnect_error = "流式连接已关闭，任务已取消。"
+            disconnect_error = agent_message("stream_closed")
             try:
                 job_log_writer.append(f"{disconnect_error}\n")
                 finish_test_job(
@@ -13210,7 +13327,7 @@ def stream_plan_generation(
         if terminal_delta:
             yield terminal_delta
         yield emit_status("failed", str(exc))
-        yield from emit_log(f"任务失败：{exc}", persist=False)
+        yield from emit_log(agent_message("task_failed", error=exc), persist=False)
         done_payload = {"ok": False, "error": str(exc), "status": "failed"}
         if job_id:
             done_payload["job_id"] = job_id
@@ -14610,8 +14727,8 @@ def generate_project_seed():
                     target_file,
                     completion_check=has_seed_output,
                     target_label=str(target_file),
-                    session_title="生成 Seed 登录脚本",
-                    success_message=f"Seed 脚本已生成：{target_file}",
+                    session_title=agent_message("seed_generation_title"),
+                    success_message=agent_message("seed_generation_success", target=target_file),
                     default_agent="playwright-test-generator",
                     setup_targets=build_setup_targets(
                         module_name=SEED_MODULE_NAME,
@@ -14895,8 +15012,8 @@ def generate_requirement_module_plan_stream(requirement_uid, module_uid):
                     default_agent="playwright-test-planner",
                     setup_targets=build_setup_targets(),
                     success_payload_factory=finalize_requirement_plan_payload,
-                    session_title=f"从需求生成测试计划：{module_name}",
-                    success_message=f"候选模块测试计划已生成：{target_file}",
+                    session_title=agent_message("requirement_plan_title", module=module_name),
+                    success_message=agent_message("requirement_plan_success", target=target_file),
                     job_id=job_id,
                     validate_plan_completion=generation_mode == PLAN_GENERATION_MODE_MULTIPLE,
                 )
@@ -15479,8 +15596,8 @@ def create_script_generation_stream():
                 target_file,
                 completion_check=has_generated_script_output,
                 target_label=str(target_file),
-                session_title=f"生成测试脚本：{module_name}/{Path(plan_filename).stem}",
-                success_message=f"任务成功，测试脚本已提交到：{target_file}",
+                session_title=agent_message("manual_script_generation_title", target=f"{module_name}/{Path(plan_filename).stem}"),
+                success_message=agent_message("manual_script_generation_success", target=target_file),
                 default_agent="playwright-test-generator",
                 setup_targets=build_setup_targets(
                     module_name=module_name,
@@ -15558,8 +15675,8 @@ def create_script_run_stream():
                 completion_check=lambda: False,
                 completion_required=False,
                 target_label=str(script_file),
-                session_title=f"修复测试脚本：{filename}",
-                success_message=f"任务结束，测试脚本已修复：{script_file}",
+                session_title=agent_message("manual_script_repair_title", target=filename),
+                success_message=agent_message("manual_script_repair_success", target=script_file),
                 success_payload_factory=finalize_healer_payload,
                 default_agent="playwright-test-healer",
                 setup_targets=build_setup_targets(

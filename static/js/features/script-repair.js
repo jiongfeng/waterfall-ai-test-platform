@@ -4,6 +4,7 @@ function createScriptRepairFeature(deps) {
     elements,
     SECTION,
     SCRIPT_VIEW_TAB,
+    window,
     getScriptRunPromptFixedTemplate,
     getScriptRunPromptNoteDefault,
     fetch,
@@ -69,8 +70,11 @@ function renderScriptRunDuration(record = null) {
 
   const isRunning = record.status === "running" && state.scriptRun.isRunning;
   const finishedAt = record.finished_at || (isRunning ? Date.now() : record.updated_at);
-  const label = isRunning ? "修复进行时间" : "修复耗时";
-  elements.scriptRunDuration.textContent = `${label}：${formatRepairDuration(finishedAt - record.started_at)}`;
+  const duration = formatRepairDuration(finishedAt - record.started_at);
+  const key = isRunning ? "repair.elapsed" : "repair.duration";
+  const fallback = isRunning ? `修复进行时间：${duration}` : `修复耗时：${duration}`;
+  const translated = window.WaterfallI18n?.t?.(key, { duration });
+  elements.scriptRunDuration.textContent = translated && translated !== key ? translated : fallback;
   elements.scriptRunDuration.classList.remove("hidden");
 }
 
