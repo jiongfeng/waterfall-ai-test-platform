@@ -1651,6 +1651,7 @@ def _project_repository_dependencies():
         serialize_project_row=serialize_project_row,
         parse_plan_generation_config=parse_plan_generation_config,
         current_time_ms=current_time_ms,
+        platform_table_sql=platform_table_sql,
     )
 
 
@@ -1720,6 +1721,12 @@ def _project_service_dependencies():
                 )
             )
         ),
+        update_project_metadata=lambda config, project_key, metadata: project_repository.update_project_metadata(
+            config, project_key, metadata, _project_repository_dependencies()
+        ),
+        delete_project_data=lambda config, project_key: project_repository.delete_project_data(
+            config, project_key, _project_repository_dependencies()
+        ),
         update_project_language=(
             lambda config, project_key, language: (
                 project_repository.update_project_language(
@@ -1755,6 +1762,17 @@ def _project_web_services():
             lambda: get_project_workspace_root_text()
         ),
         create_project=lambda payload: create_project_in_mysql(payload),
+        update_project=lambda project_key, payload: update_project_in_mysql(project_key, payload),
+        delete_project=lambda project_key, confirmation_name, current_project_key: delete_project_in_mysql(
+            project_key, confirmation_name, current_project_key
+        ),
+        get_config_project_keys=(
+            lambda: {
+                project.get("project_key")
+                for project in get_config_projects()
+                if project.get("project_key")
+            }
+        ),
         parse_target_system_config=(
             lambda value: parse_target_system_config(value)
         ),
@@ -2129,6 +2147,14 @@ def assert_project_key_available(config, project_key):
 
 def create_project_in_mysql(payload):
     return _project_service().create_project(payload)
+
+
+def update_project_in_mysql(project_key, payload):
+    return _project_service().update_project(project_key, payload)
+
+
+def delete_project_in_mysql(project_key, confirmation_name, current_project_key):
+    return _project_service().delete_project(project_key, confirmation_name, current_project_key)
 
 
 def get_project_by_key(project_key=None):

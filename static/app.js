@@ -533,6 +533,12 @@ const state = {
     workspaceRoot: "",
     isExporting: false,
     isImporting: false,
+    isCreating: false,
+    isUpdating: false,
+    isDeleting: false,
+    manageView: "list",
+    editingKey: "",
+    deletingKey: "",
   },
   requirements: {
     items: [],
@@ -871,9 +877,7 @@ const elements = {
   usersNav: document.getElementById("usersNav"),
   rolesNav: document.getElementById("rolesNav"),
   projectSelect: document.getElementById("projectSelect"),
-  createProjectButton: document.getElementById("createProjectButton"),
-  exportProjectButton: document.getElementById("exportProjectButton"),
-  importProjectButton: document.getElementById("importProjectButton"),
+  manageProjectButton: document.getElementById("manageProjectButton"),
   languageMenuControl: document.getElementById("languageMenuControl"),
   languageMenuButton: document.getElementById("languageMenuButton"),
   languageMenu: document.getElementById("languageMenu"),
@@ -1121,27 +1125,6 @@ const elements = {
   scriptPromptNote: document.getElementById("scriptPromptNote"),
   scriptJobStatus: document.getElementById("scriptJobStatus"),
   scriptJobLogs: document.getElementById("scriptJobLogs"),
-  projectCreateModal: document.getElementById("projectCreateModal"),
-  projectCreateClose: document.getElementById("projectCreateClose"),
-  projectCreateCancel: document.getElementById("projectCreateCancel"),
-  projectCreateSubmit: document.getElementById("projectCreateSubmit"),
-  projectCreateWorkspaceHint: document.getElementById("projectCreateWorkspaceHint"),
-  newProjectKey: document.getElementById("newProjectKey"),
-  newProjectName: document.getElementById("newProjectName"),
-  newProjectSpecsDir: document.getElementById("newProjectSpecsDir"),
-  newProjectTestsDir: document.getElementById("newProjectTestsDir"),
-  newProjectDescription: document.getElementById("newProjectDescription"),
-  projectImportModal: document.getElementById("projectImportModal"),
-  projectImportClose: document.getElementById("projectImportClose"),
-  projectImportCancel: document.getElementById("projectImportCancel"),
-  projectImportSubmit: document.getElementById("projectImportSubmit"),
-  projectImportWorkspaceHint: document.getElementById("projectImportWorkspaceHint"),
-  projectImportFile: document.getElementById("projectImportFile"),
-  importProjectKey: document.getElementById("importProjectKey"),
-  importProjectName: document.getElementById("importProjectName"),
-  importProjectSpecsDir: document.getElementById("importProjectSpecsDir"),
-  importProjectTestsDir: document.getElementById("importProjectTestsDir"),
-  importProjectDescription: document.getElementById("importProjectDescription"),
   scriptRunSubmit: document.getElementById("scriptRunSubmit"),
   scriptRunPromptFixed: document.getElementById("scriptRunPromptFixed"),
   scriptRunPromptNote: document.getElementById("scriptRunPromptNote"),
@@ -1168,6 +1151,7 @@ const elements = {
   suiteScriptPickerTitle: document.getElementById("suiteScriptPickerTitle"),
   suiteScriptSelectionCount: document.getElementById("suiteScriptSelectionCount"),
 };
+Object.assign(elements, window.getProjectManagementElements(document));
 
 function projectLanguage() {
   return state.project.current?.language === "zh-CN" ? "zh-CN" : "en";
@@ -1888,21 +1872,16 @@ const projectsFeature = createProjectsFeature({
   renderSideList,
   renderContent,
   setNotice,
+  escapeHtml,
 });
 const {
   normalizeProject,
   resetProjectScopedState,
   renderProjectSelect,
   loadProjects,
-  openProjectCreateModal,
-  closeProjectCreateModal,
-  submitProjectCreate,
-  openProjectImportModal,
-  closeProjectImportModal,
-  exportCurrentProject,
-  submitProjectImport,
   switchProject,
 } = projectsFeature;
+projectsFeature.bindProjectManagementEvents();
 
 
 function isPlainObject(value) {
@@ -3824,10 +3803,6 @@ elements.agentNav.addEventListener("click", () => switchSection(SECTION.AGENT));
 elements.projectSettingsNav.addEventListener("click", () => switchSection(SECTION.PROJECT_SETTINGS));
 elements.usersNav.addEventListener("click", () => switchSection(SECTION.USERS));
 elements.rolesNav.addEventListener("click", () => switchSection(SECTION.ROLES));
-elements.projectSelect.addEventListener("change", () => switchProject(elements.projectSelect.value));
-elements.createProjectButton.addEventListener("click", openProjectCreateModal);
-elements.exportProjectButton.addEventListener("click", exportCurrentProject);
-elements.importProjectButton.addEventListener("click", openProjectImportModal);
 elements.languageMenuButton.addEventListener("click", () => {
   if (!state.auth.isAdmin) return;
   const opening = elements.languageMenu.classList.contains("hidden");
@@ -3899,39 +3874,6 @@ elements.requirementBatchPromptReset.addEventListener("click", resetRequirementB
 elements.scriptGenerationClose.addEventListener("click", closeScriptGenerationModal);
 elements.scriptGenerationCancel.addEventListener("click", closeScriptGenerationModal);
 elements.scriptGenerationSubmit.addEventListener("click", submitScriptGeneration);
-elements.projectCreateClose.addEventListener("click", closeProjectCreateModal);
-elements.projectCreateCancel.addEventListener("click", closeProjectCreateModal);
-elements.projectCreateSubmit.addEventListener("click", submitProjectCreate);
-elements.projectImportClose.addEventListener("click", closeProjectImportModal);
-elements.projectImportCancel.addEventListener("click", closeProjectImportModal);
-elements.projectImportSubmit.addEventListener("click", submitProjectImport);
-[
-  elements.newProjectKey,
-  elements.newProjectName,
-  elements.newProjectSpecsDir,
-  elements.newProjectTestsDir,
-  elements.newProjectDescription,
-].forEach((input) => input.addEventListener("input", () => input.setCustomValidity("")));
-[
-  elements.projectImportFile,
-  elements.importProjectKey,
-  elements.importProjectName,
-  elements.importProjectSpecsDir,
-  elements.importProjectTestsDir,
-  elements.importProjectDescription,
-].forEach((input) => input.addEventListener("input", () => input.setCustomValidity("")));
-elements.newProjectDescription.addEventListener("keydown", (event) => {
-  if (event.key === "Enter") {
-    event.preventDefault();
-    submitProjectCreate();
-  }
-});
-elements.importProjectDescription.addEventListener("keydown", (event) => {
-  if (event.key === "Enter") {
-    event.preventDefault();
-    submitProjectImport();
-  }
-});
 elements.planScriptGenerationSubmit.addEventListener("click", submitScriptGeneration);
 elements.planScriptPromptFixed.addEventListener("input", updatePlanScriptGenerationPromptFromInputs);
 elements.planScriptPromptNote.addEventListener("input", updatePlanScriptGenerationPromptFromInputs);

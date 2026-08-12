@@ -27,6 +27,51 @@ class ProjectRepositoryDependencies:
     serialize_project_row: Callable
     parse_plan_generation_config: Callable
     current_time_ms: Callable
+    platform_table_sql: Callable = lambda _config, name: f"`{name}`"
+
+
+PROJECT_SCOPED_TABLES_DELETE_ORDER = (
+    "agent_item_retry_flows",
+    "agent_run_attempts",
+    "agent_run_events",
+    "agent_run_steps",
+    "agent_runs",
+    "requirement_module_plans",
+    "requirement_modules",
+    "requirements",
+    "setup_runs",
+    "setup_bindings",
+    "setup_scripts",
+    "test_suite_items",
+    "test_suites",
+    "test_run_artifacts",
+    "test_run_results",
+    "test_runs",
+    "job_artifacts",
+    "test_jobs",
+    "platform_jobs",
+    "platform_records",
+    "page_inventory",
+)
+
+PROJECT_ACTIVE_STATUS_TABLES = {
+    "platform_jobs": ("queued", "running", "cancelling"),
+    "test_jobs": ("queued", "running", "cancelling"),
+    "test_runs": ("queued", "running", "cancelling"),
+    "setup_runs": ("queued", "running", "cancelling"),
+    "agent_runs": (
+        "queued",
+        "running",
+        "cancelling",
+        "awaiting_script_action",
+    ),
+    "agent_item_retry_flows": (
+        "queued",
+        "running",
+        "finalizing",
+        "cancelling",
+    ),
+}
 
 
 def seed_platform_projects(cursor, config, dependencies):
@@ -326,6 +371,159 @@ def update_project_settings(
             )
         connection.commit()
     return updated_project
+
+
+def update_project_metadata(
+    config,
+    project_key,
+    metadata,
+    dependencies,
+):
+    """Update the user-editable name and description for one project."""
+
+    projects_table = dependencies.get_platform_projects_table(config)
+    now_ms = dependencies.current_time_ms()
+    with dependencies.platform_mysql_connection(config) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                f"""
+                UPDATE {projects_table}
+                SET name = %s, description = %s, updated_at = %s
+                WHERE project_key = %s AND status = %s
+                """,
+                (
+                    metadata["name"],
+                    metadata["description"],
+                    now_ms,
+                    project_key,
+                    PROJECT_STATUS_ACTIVE,
+                ),
+            )
+            if cursor.rowcount == 0:
+                raise ValueError(f"项目不存在或已禁用：{project_key}")
+            cursor.execute(
+                f"SELECT * FROM {projects_table} "
+                "WHERE project_key = %s LIMIT 1",
+                (project_key,),
+            )
+            updated_project = dependencies.serialize_project_row(
+                cursor.fetchone()
+            )
+        connection.commit()
+    return updated_project
+
+
+def _assert_project_has_no_active_work(
+    cursor,
+    config,
+    project_id,
+    dependencies,
+):
+    for table_name, statuses in PROJECT_ACTIVE_STATUS_TABLES.items():
+        placeholders = ", ".join("%s" for _status in statuses)
+        cursor.execute(
+            f"SELECT COUNT(*) AS total FROM "
+            f"{dependencies.platform_table_sql(config, table_name)} "
+            f"WHERE project_id = %s AND status IN ({placeholders})",
+            (project_id, *statuses),
+        )
+        if int((cursor.fetchone() or {}).get("total") or 0) > 0:
+            raise ValueError("项目仍有运行中或待处理的任务，暂不能删除。")
+
+
+def delete_project_data(config, project_key, dependencies):
+    """Permanently delete one project and every project-scoped DB row."""
+
+    projects_table = dependencies.get_platform_projects_table(config)
+    assets_table = dependencies.platform_table_sql(config, "test_assets")
+    revisions_table = dependencies.platform_table_sql(
+        config,
+        "test_asset_revisions",
+    )
+    deleted_counts = {}
+
+    with dependencies.platform_mysql_connection(config) as connection:
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    f"SELECT * FROM {projects_table} "
+                    "WHERE project_key = %s AND status = %s "
+                    "LIMIT 1 FOR UPDATE",
+                    (project_key, PROJECT_STATUS_ACTIVE),
+                )
+                project_row = cursor.fetchone()
+                if not project_row:
+                    raise ValueError(
+                        f"项目不存在或已禁用：{project_key}"
+                    )
+                if bool(project_row.get("is_default")):
+                    raise ValueError("默认项目不能删除。")
+
+                cursor.execute(
+                    f"SELECT COUNT(*) AS total FROM {projects_table} "
+                    "WHERE status = %s",
+                    (PROJECT_STATUS_ACTIVE,),
+                )
+                if int((cursor.fetchone() or {}).get("total") or 0) <= 1:
+                    raise ValueError("至少需要保留一个有效项目。")
+
+                project_id = int(project_row["project_id"])
+                _assert_project_has_no_active_work(
+                    cursor,
+                    config,
+                    project_id,
+                    dependencies,
+                )
+
+                cursor.execute(
+                    f"""
+                    DELETE FROM {revisions_table}
+                    WHERE asset_id IN (
+                      SELECT asset_id FROM {assets_table}
+                      WHERE project_id = %s
+                    )
+                    """,
+                    (project_id,),
+                )
+                deleted_counts["test_asset_revisions"] = cursor.rowcount
+
+                for table_name in PROJECT_SCOPED_TABLES_DELETE_ORDER:
+                    cursor.execute(
+                        "DELETE FROM "
+                        f"{dependencies.platform_table_sql(config, table_name)} "
+                        "WHERE project_id = %s",
+                        (project_id,),
+                    )
+                    deleted_counts[table_name] = cursor.rowcount
+
+                cursor.execute(
+                    f"DELETE FROM {assets_table} WHERE project_id = %s",
+                    (project_id,),
+                )
+                deleted_counts["test_assets"] = cursor.rowcount
+                cursor.execute(
+                    f"DELETE FROM {projects_table} "
+                    "WHERE project_id = %s AND is_default = 0",
+                    (project_id,),
+                )
+                if cursor.rowcount != 1:
+                    raise RuntimeError("项目主记录删除失败。")
+                deleted_counts["platform_projects"] = cursor.rowcount
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+
+    return {
+        "project_id": int(project_row["project_id"]),
+        "project_key": project_row["project_key"],
+        "name": project_row.get("name") or project_row["project_key"],
+        "deleted_records": sum(
+            max(int(value or 0), 0)
+            for value in deleted_counts.values()
+        ),
+        "deleted_counts": deleted_counts,
+    }
 
 
 def update_project_language(config, project_key, language, dependencies):

@@ -91,6 +91,8 @@ def make_service_dependencies(workspace_root, **overrides):
         "get_project_by_key": Mock(),
         "get_current_project": lambda: {"project_id": None},
         "update_project_settings": Mock(),
+        "update_project_metadata": Mock(),
+        "delete_project_data": Mock(),
         "remove_tree": shutil.rmtree,
         "uuid_hex": lambda: "fixed",
     }

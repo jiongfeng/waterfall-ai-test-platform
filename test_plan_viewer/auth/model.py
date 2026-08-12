@@ -123,6 +123,8 @@ AUTH_API_PERMISSION_POLICY = _build_api_permission_policy(
         ("menu.projectSettings",),
         (
             ("projects.create_project", "POST"),
+            ("projects.update_project", "PATCH"),
+            ("projects.delete_project", "DELETE"),
             ("projects.get_project_settings", "GET"),
             ("projects.save_project_settings", "PUT"),
             ("project_archive.export_project", "GET"),

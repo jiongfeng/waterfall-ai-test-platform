@@ -25,14 +25,24 @@ class ProjectWebServices:
     can_manage_project_language: Callable
     serialize_coverage_profiles: Callable
     get_seed_script_relative_path: Callable
+    update_project: Callable = lambda _project_key, _payload: {}
+    delete_project: Callable = (
+        lambda _project_key, _confirmation_name, _current_project_key: {}
+    )
+    get_config_project_keys: Callable = lambda: set()
 
 
 def list_projects_response(services):
     try:
+        config_project_keys = set(services.get_config_project_keys())
         projects = [
             services.serialize_project(project)
             for project in services.list_projects()
         ]
+        for project in projects:
+            project["is_system"] = (
+                project.get("project_key") in config_project_keys
+            )
         default_project = next(
             (
                 project
@@ -78,6 +88,59 @@ def create_project_response(services):
         return jsonify({"error": str(exc)}), status
     except Exception as exc:
         return jsonify({"error": f"创建项目失败：{exc}"}), 500
+
+
+def update_project_response(services, project_key):
+    payload = request.get_json(silent=True) or {}
+    try:
+        project = services.update_project(project_key, payload)
+        return jsonify(
+            {
+                "project": services.serialize_project(project),
+                "error": None,
+            }
+        )
+    except ValueError as exc:
+        message = str(exc)
+        status = 404 if "不存在或已禁用" in message else 409 if "系统项目" in message else 400
+        return jsonify({"error": message}), status
+    except Exception as exc:
+        return jsonify({"error": f"修改项目失败：{exc}"}), 500
+
+
+def delete_project_response(services, project_key):
+    payload = request.get_json(silent=True) or {}
+    current_project_key = str(
+        request.headers.get("X-Project-Key") or ""
+    ).strip()
+    if not current_project_key:
+        return jsonify({"error": "缺少当前项目标识。"}), 400
+    try:
+        result = services.delete_project(
+            project_key,
+            payload.get("confirmation_name"),
+            current_project_key,
+        )
+        return jsonify({"deleted": result, "error": None})
+    except ValueError as exc:
+        message = str(exc)
+        if "不存在或已禁用" in message:
+            status = 404
+        elif any(
+            marker in message
+            for marker in (
+                "不能删除",
+                "不能删除，请先切换",
+                "至少需要保留",
+                "暂不能删除",
+            )
+        ):
+            status = 409
+        else:
+            status = 400
+        return jsonify({"error": message}), status
+    except Exception as exc:
+        return jsonify({"error": f"删除项目失败：{exc}"}), 500
 
 
 def get_project_settings_response(services):
@@ -210,6 +273,24 @@ def create_projects_blueprint(services):
         view_func=lambda: create_project_response(services),
         methods=["POST"],
         endpoint="create_project",
+    )
+    blueprint.add_url_rule(
+        "/api/projects/<project_key>",
+        view_func=lambda project_key: update_project_response(
+            services,
+            project_key,
+        ),
+        methods=["PATCH"],
+        endpoint="update_project",
+    )
+    blueprint.add_url_rule(
+        "/api/projects/<project_key>",
+        view_func=lambda project_key: delete_project_response(
+            services,
+            project_key,
+        ),
+        methods=["DELETE"],
+        endpoint="delete_project",
     )
     blueprint.add_url_rule(
         "/api/project-settings",

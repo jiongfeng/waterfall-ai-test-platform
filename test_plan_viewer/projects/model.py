@@ -53,6 +53,28 @@ def normalize_create_project_payload(
     }
 
 
+def normalize_update_project_payload(payload):
+    """Validate the editable project metadata contract."""
+
+    if not isinstance(payload, dict):
+        raise ValueError("Request body must be an object.")
+
+    name = str(payload.get("name") or "").strip()
+    if not name:
+        raise ValueError("项目名称不能为空。")
+    if len(name) > 128:
+        raise ValueError("项目名称不能超过 128 个字符。")
+
+    description = str(payload.get("description") or "").strip()
+    if len(description) > 512:
+        raise ValueError("项目描述不能超过 512 个字符。")
+
+    return {
+        "name": name,
+        "description": description,
+    }
+
+
 def serialize_project(
     project,
     include_sensitive=False,
@@ -89,6 +111,7 @@ def serialize_project(
         ),
         "status": project.get("status") or PROJECT_STATUS_ACTIVE,
         "is_default": bool(project.get("is_default")),
+        "is_system": bool(project.get("is_system")),
     }
 
 

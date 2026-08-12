@@ -13,6 +13,7 @@ window.WaterfallTranslations["zh-CN"] = {
   "action.uploadRequirement": "上传需求",
   "action.refresh": "刷新列表",
   "action.select": "选择",
+  "projectManagement.summary": "显示 {shown} 个，共 {total} 个项目",
   "common.templateSource": "模板来源：",
   "common.customized": "已自定义",
   "testSuite.runLabel": "执行测试集：",

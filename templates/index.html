@@ -7,6 +7,7 @@
     <meta name="description" content="Waterfall AI — Agent-driven test automation platform" />
     <title>Waterfall AI — Agent-driven test automation platform</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/features/projects.css') }}" />
     <link rel="stylesheet" href="{{ url_for('static', filename='css/features/agent.css') }}" />
     <link rel="stylesheet" href="{{ url_for('static', filename='css/features/agent-script-preparation.css', v=5) }}" />
   </head>
@@ -22,9 +23,7 @@
           <span class="topbar-label">当前项目</span>
           <div class="project-picker">
             <select class="project-select" id="projectSelect" title="当前项目" aria-label="当前项目"></select>
-            <button class="secondary-button compact-button" id="createProjectButton" type="button">新增项目</button>
-            <button class="secondary-button compact-button hidden" id="exportProjectButton" type="button">导出项目</button>
-            <button class="secondary-button compact-button hidden" id="importProjectButton" type="button">导入项目</button>
+            <button class="secondary-button compact-button hidden" id="manageProjectButton" type="button">管理项目</button>
           </div>
         </div>
 

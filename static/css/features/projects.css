@@ -1,0 +1,247 @@
+.project-manage-modal {
+  width: min(900px, 100%);
+  min-height: min(620px, 88vh);
+}
+
+.project-manage-header {
+  align-items: center;
+}
+
+.project-manage-heading {
+  min-width: 0;
+  flex: 1;
+}
+
+.project-manage-back {
+  flex: 0 0 auto;
+}
+
+.project-manage-feedback {
+  margin: 14px 22px 0;
+  border: 1px solid #bbf7d0;
+  border-radius: 6px;
+  background: #f0fdf4;
+  color: #166534;
+  padding: 9px 12px;
+  font-size: 13px;
+}
+
+.project-manage-feedback.error {
+  border-color: #fecaca;
+  background: #fef2f2;
+  color: var(--danger);
+}
+
+.project-manage-body {
+  gap: 0;
+}
+
+.project-manage-view {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.project-manage-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.project-search-field {
+  flex: 1;
+  max-width: 340px;
+}
+
+.project-search-field input {
+  width: 100%;
+  height: 34px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  outline: none;
+  padding: 0 11px;
+  font-size: 13px;
+}
+
+.project-search-field input:focus {
+  border-color: rgba(37, 99, 235, 0.75);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.14);
+}
+
+.project-manage-create-actions,
+.project-row-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 7px;
+}
+
+.project-manage-summary {
+  margin: -6px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.project-table-wrap {
+  position: relative;
+  min-height: 250px;
+  flex: 1;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: #ffffff;
+}
+
+.project-table {
+  width: 100%;
+  min-width: 700px;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.project-table th,
+.project-table td {
+  border-bottom: 1px solid var(--border);
+  padding: 10px 12px;
+  text-align: left;
+  vertical-align: middle;
+}
+
+.project-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #f4f7fb;
+  color: #334155;
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.project-table th:nth-child(2),
+.project-table td:nth-child(2) {
+  width: 190px;
+}
+
+.project-table th:last-child,
+.project-table td:last-child {
+  width: 230px;
+  text-align: right;
+}
+
+.project-table tbody tr:hover {
+  background: #f8fbff;
+}
+
+.project-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.project-name-cell {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.project-name-line {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.project-name-line strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-name-cell small {
+  max-width: 360px;
+  overflow: hidden;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-key-code {
+  color: #475569;
+  font-family: Consolas, "Cascadia Code", "Microsoft YaHei", monospace;
+  font-size: 12px;
+}
+
+.project-row-actions .secondary-button {
+  min-width: auto;
+  height: 28px;
+  padding: 0 9px;
+}
+
+.project-manage-empty {
+  display: flex;
+  min-height: 220px;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.project-directory-grid {
+  grid-template-columns: repeat(2, minmax(180px, 1fr));
+}
+
+.project-delete-backdrop {
+  z-index: 30;
+}
+
+.project-delete-modal {
+  min-height: auto;
+}
+
+.project-delete-warning {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border: 1px solid #fecaca;
+  border-radius: 6px;
+  background: #fef2f2;
+  color: #7f1d1d;
+  padding: 12px;
+}
+
+.project-delete-warning span {
+  font-family: Consolas, "Cascadia Code", "Microsoft YaHei", monospace;
+  font-size: 12px;
+}
+
+@media (max-width: 820px) {
+  .project-manage-modal {
+    min-height: 0;
+  }
+
+  .project-manage-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .project-search-field {
+    max-width: none;
+  }
+
+  .project-manage-create-actions {
+    justify-content: flex-start;
+  }
+
+  .project-manage-header {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .project-manage-heading {
+    order: -1;
+    flex-basis: calc(100% - 54px);
+  }
+}
