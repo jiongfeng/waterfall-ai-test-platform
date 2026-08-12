@@ -3911,6 +3911,7 @@ def list_recent_script_results(script_asset_id, limit=20):
     ensure_platform_database_schema(config)
     results_table = get_test_run_results_table(config)
     runs_table = get_test_runs_table(config)
+    artifacts_table = get_test_run_artifacts_table(config)
     project_id = get_current_project_id()
     with platform_mysql_connection(config) as connection:
         with connection.cursor() as cursor:
@@ -3925,7 +3926,55 @@ def list_recent_script_results(script_asset_id, limit=20):
                 """,
                 (project_id, script_asset_id, int(limit)),
             )
-            return cursor.fetchall()
+            result_rows = cursor.fetchall()
+            run_ids = list(dict.fromkeys(row.get("run_id") for row in result_rows if row.get("run_id")))
+            if not run_ids:
+                return result_rows
+
+            placeholders = ",".join(["%s"] * len(run_ids))
+            cursor.execute(
+                f"""
+                SELECT *
+                FROM {artifacts_table}
+                WHERE project_id = %s
+                  AND run_id IN ({placeholders})
+                  AND artifact_type IN ('html_report', 'json_report', 'video')
+                ORDER BY run_id ASC,
+                         CASE WHEN result_id IS NULL THEN 0 ELSE 1 END,
+                         created_at ASC,
+                         artifact_id ASC
+                """,
+                (project_id, *run_ids),
+            )
+            artifact_rows = cursor.fetchall()
+
+    reports_by_run = {}
+    json_reports_by_run = {}
+    videos_by_result = {}
+    for artifact in artifact_rows:
+        payload = serialize_run_artifact_payload(artifact)
+        if not payload:
+            continue
+        artifact_type = artifact.get("artifact_type")
+        if artifact_type == "html_report":
+            reports_by_run.setdefault(artifact.get("run_id"), payload)
+        elif artifact_type == "json_report" and artifact.get("path"):
+            json_reports_by_run.setdefault(artifact.get("run_id"), artifact["path"])
+        elif artifact_type == "video" and artifact.get("result_id"):
+            videos_by_result.setdefault(int(artifact["result_id"]), payload)
+
+    recovered_videos = collect_test_suite_execution_video_fallbacks(result_rows, json_reports_by_run)
+    for result_id, video in recovered_videos.items():
+        videos_by_result.setdefault(result_id, video)
+
+    return [
+        {
+            **row,
+            "report": reports_by_run.get(row.get("run_id")),
+            "video": videos_by_result.get(int(row["result_id"])) if row.get("result_id") else None,
+        }
+        for row in result_rows
+    ]
 
 
 def serialize_run_result(result):
@@ -3955,6 +4004,8 @@ def serialize_run_result(result):
         "finished_at": result.get("finished_at"),
         "created_at": result.get("created_at"),
         "updated_at": result.get("updated_at"),
+        "report": result.get("report"),
+        "video": result.get("video"),
     }
 
 

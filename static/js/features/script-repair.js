@@ -245,6 +245,8 @@ function setScriptRunRecord(moduleName, filename, result) {
 
   state.scripts.runRecords[key] = {
     status: result.status || previous.status || "succeeded",
+    run_id: result.run_id || previous.run_id || "",
+    result_id: Number(result.result_id) || previous.result_id || null,
     command: result.command || previous.command || "",
     logs: hasLogs ? result.logs : hasOutput ? result.output : previous.logs || "",
     returncode: hasReturncode ? result.returncode : previous.returncode,
@@ -330,6 +332,8 @@ function handleScriptExecutionStreamEvent({ event, data }, previousResult, modul
       ...previousResult,
       status: data.status || previousResult.status,
       command: data.command || previousResult.command,
+      run_id: data.run_id || previousResult.run_id,
+      result_id: data.result_id || previousResult.result_id,
       target_path: data.target_path || previousResult.target_path,
       error: data.error || previousResult.error,
       returncode: Object.prototype.hasOwnProperty.call(data, "returncode") ? data.returncode : previousResult.returncode,
@@ -370,6 +374,8 @@ function handleScriptExecutionStreamEvent({ event, data }, previousResult, modul
       status,
       error: data.error || previousResult.error,
       returncode: Object.prototype.hasOwnProperty.call(data, "returncode") ? data.returncode : previousResult.returncode,
+      run_id: data.run_id || previousResult.run_id,
+      result_id: data.result_id || previousResult.result_id,
       output: data.output || previousResult.logs || "",
       logs: previousResult.logs || data.output || "",
       video: Object.prototype.hasOwnProperty.call(data, "video") ? data.video : previousResult.video,
@@ -404,6 +410,7 @@ async function executeSelectedScript() {
 
   state.scriptExecution.isRunning = true;
   state.scripts.activeTab = SCRIPT_VIEW_TAB.EXECUTION;
+  state.scripts.selectedExecutionRunId = "";
   persistViewState();
   setScriptRunRecord(moduleName, filename, {
     status: "running",

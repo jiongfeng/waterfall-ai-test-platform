@@ -25,6 +25,7 @@ function createElement() {
     scrollTop: 0,
     scrollHeight: 0,
     children: [],
+    listeners: {},
     classList: {
       add: (...names) => names.forEach((name) => classes.add(name)),
       remove: (...names) => names.forEach((name) => classes.delete(name)),
@@ -48,7 +49,9 @@ function createElement() {
     replaceChildren(...children) {
       this.children = children;
     },
-    addEventListener() {},
+    addEventListener(name, listener) {
+      (this.listeners[name] ||= []).push(listener);
+    },
     setAttribute(name, value) {
       this[name] = String(value);
     },
@@ -80,6 +83,7 @@ const state = {
     runRecords: {},
     repairRecords: {},
     recentResults: [],
+    selectedExecutionRunId: "",
   },
   generation: { isRunning: false },
   scriptGeneration: { isRunning: false },
@@ -115,6 +119,20 @@ const elements = {
   moduleBulkDelete: createElement(),
   moduleSelectAll: createElement(),
   moduleScriptTableBody: createElement(),
+  executionHistoryPanel: createElement(),
+  executionHistorySummary: createElement(),
+  executionHistoryTableBody: createElement(),
+  executionEmpty: createElement(),
+  executionLogPanel: createElement(),
+  executionLogStatus: createElement(),
+  executionLog: createElement(),
+  executionReportWrap: createElement(),
+  executionReportFrame: createElement(),
+  executionReportLink: createElement(),
+  executionReportPath: createElement(),
+  executionVideoWrap: createElement(),
+  executionVideo: createElement(),
+  executionVideoPath: createElement(),
 };
 
 let nextTimerId = 40;
@@ -315,6 +333,48 @@ assert.strictEqual(
   "passed",
 );
 assert.ok(modulePersistence.execution.length >= 3);
+
+state.activeSection = "scripts";
+state.scripts.activeTab = "execution";
+state.scripts.selectedFile = "登录成功.spec.ts";
+state.scripts.selectedExecutionRunId = "run-new";
+state.scripts.recentResults = [
+  {
+    result_id: 2,
+    run_id: "run-new",
+    status: "succeeded",
+    execution_mode: "batch",
+    command: "npx playwright test newest",
+    stdout_tail: "newest output",
+    report: { url: "/reports/new", path: "reports/new" },
+    video: { url: "/videos/new", path: "videos/new" },
+    finished_at: 200,
+  },
+  {
+    result_id: 1,
+    run_id: "run-old",
+    status: "failed",
+    execution_mode: "serial_per_file",
+    command: "npx playwright test old",
+    stdout_tail: "old output",
+    report: { url: "/reports/old", path: "reports/old" },
+    video: { url: "/videos/old", path: "videos/old" },
+    finished_at: 100,
+  },
+];
+feature.renderExecutionHistory();
+feature.renderExecutionRecord();
+assert.strictEqual(elements.executionHistoryTableBody.children.length, 2);
+assert.ok(elements.executionHistoryTableBody.children[0].className.includes("selected"));
+elements.executionHistoryTableBody.children[1].listeners.click[0]();
+assert.strictEqual(state.scripts.selectedExecutionRunId, "run-old");
+assert.ok(elements.executionHistoryTableBody.children[1].className.includes("selected"));
+assert.strictEqual(elements.executionReportFrame.src, "/reports/old");
+assert.strictEqual(elements.executionVideo.src, "/videos/old");
+assert.ok(elements.executionLog.textContent.includes("old output"));
+state.activeSection = "other";
+state.scripts.activeTab = "script";
+state.scripts.selectedFile = null;
 
 let repairResult = { status: "running", logs: "" };
 repairResult = feature.handleModuleRepairStreamEvent(

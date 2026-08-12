@@ -702,6 +702,7 @@ const state = {
     revisions: [],
     sourcePlan: null,
     recentResults: [],
+    selectedExecutionRunId: "",
     activeTab: initialViewState.scriptActiveTab || SCRIPT_VIEW_TAB.SCRIPT,
     runRecords: loadScriptRunRecordsFromStorage(),
     repairRecords: loadScriptRepairRecordsFromStorage(),
@@ -1602,6 +1603,7 @@ function normalizeRunResult(result) {
     run_type: typeof result.run_type === "string" ? result.run_type : "",
     execution_mode: typeof result.execution_mode === "string" ? result.execution_mode : "",
     database_reset_mode: typeof result.database_reset_mode === "string" ? result.database_reset_mode : "",
+    command: typeof result.command === "string" ? result.command : "",
     script_revision_id: Number(result.script_revision_id) || null,
     plan_revision_id: Number(result.plan_revision_id) || null,
     status: typeof result.status === "string" ? result.status : "",
@@ -1610,7 +1612,19 @@ function normalizeRunResult(result) {
     started_at: Number(result.started_at) || null,
     finished_at: Number(result.finished_at) || null,
     updated_at: Number(result.updated_at) || null,
+    report: normalizeTestSuiteExecutionArtifact(result.report),
+    video: normalizeTestSuiteExecutionArtifact(result.video),
   };
+}
+
+function updateRecentScriptResults(items, { selectLatest = false } = {}) {
+  const results = normalizeRunResultList(items);
+  const selectedRunId = state.scripts.selectedExecutionRunId;
+  const selectionStillExists = results.some((result) => result.run_id === selectedRunId);
+  state.scripts.recentResults = results;
+  if (selectLatest || !selectionStillExists) {
+    state.scripts.selectedExecutionRunId = results[0]?.run_id || "";
+  }
 }
 
 function normalizeAssetList(items) {
@@ -3576,6 +3590,7 @@ async function loadScriptTree() {
       state.scripts.revisions = [];
       state.scripts.sourcePlan = null;
       state.scripts.recentResults = [];
+      state.scripts.selectedExecutionRunId = "";
       renderSideList();
       renderContent();
       setNotice("没有找到符合 tests/<模块名>/*.spec.ts 规则的测试脚本。");
@@ -3601,6 +3616,7 @@ async function loadScriptTree() {
     state.scripts.revisions = [];
     state.scripts.sourcePlan = null;
     state.scripts.recentResults = [];
+    state.scripts.selectedExecutionRunId = "";
     renderSideList();
     renderContent();
     setNotice(error.message, "error");
@@ -3638,6 +3654,7 @@ function selectScriptModule(moduleName, skipConfirm = false, { preserveTab = fal
   state.scripts.revisions = [];
   state.scripts.sourcePlan = null;
   state.scripts.recentResults = [];
+  state.scripts.selectedExecutionRunId = "";
   state.scripts.selectedFiles.clear();
   state.scripts.bulkSelectionMode = false;
   state.scripts.activeTab = preserveTab ? state.scripts.activeTab : SCRIPT_VIEW_TAB.SCRIPT;
@@ -3660,6 +3677,7 @@ async function selectScript(moduleName, filename, skipConfirm = false) {
   state.scripts.expandedModules.add(moduleName);
   state.scripts.bulkSelectionMode = false;
   state.scripts.selectedFiles.clear();
+  state.scripts.selectedExecutionRunId = "";
   state.scripts.activeTab = sameSelection ? state.scripts.activeTab : SCRIPT_VIEW_TAB.SCRIPT;
   state.isEditing = false;
   persistViewState();
@@ -3676,7 +3694,7 @@ async function selectScript(moduleName, filename, skipConfirm = false) {
     state.scripts.asset = normalizeAsset(data.asset);
     state.scripts.revisions = normalizeRevisionList(data.revisions);
     state.scripts.sourcePlan = normalizeAsset(data.source_plan);
-    state.scripts.recentResults = normalizeRunResultList(data.recent_results);
+    updateRecentScriptResults(data.recent_results, { selectLatest: true });
     renderContent();
   } catch (error) {
     state.scripts.currentContent = "";
@@ -3685,6 +3703,7 @@ async function selectScript(moduleName, filename, skipConfirm = false) {
     state.scripts.revisions = [];
     state.scripts.sourcePlan = null;
     state.scripts.recentResults = [];
+    state.scripts.selectedExecutionRunId = "";
     renderContent();
     setNotice(error.message, "error");
   } finally {
@@ -3703,7 +3722,7 @@ async function refreshScriptMetadata(moduleName = state.scripts.selectedModule, 
     state.scripts.asset = normalizeAsset(data.asset);
     state.scripts.revisions = normalizeRevisionList(data.revisions);
     state.scripts.sourcePlan = normalizeAsset(data.source_plan);
-    state.scripts.recentResults = normalizeRunResultList(data.recent_results);
+    updateRecentScriptResults(data.recent_results);
   }
 }
 
@@ -3752,7 +3771,7 @@ async function saveCurrentItem() {
       state.scripts.asset = normalizeAsset(data.asset);
       state.scripts.revisions = normalizeRevisionList(data.revisions);
       state.scripts.sourcePlan = normalizeAsset(data.source_plan);
-      state.scripts.recentResults = normalizeRunResultList(data.recent_results);
+      updateRecentScriptResults(data.recent_results);
     }
 
     state.isEditing = false;

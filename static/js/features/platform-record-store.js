@@ -93,6 +93,8 @@ function createPlatformRecordStore(deps = {}) {
 
     return {
       status: record.status === "running" ? "failed" : record.status || "succeeded",
+      run_id: typeof record.run_id === "string" ? record.run_id : "",
+      result_id: Number(record.result_id) || null,
       command: typeof record.command === "string" ? record.command : "",
       logs: normalizeLogs(record),
       returncode: Object.prototype.hasOwnProperty.call(record, "returncode") ? record.returncode : undefined,

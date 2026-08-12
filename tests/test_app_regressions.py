@@ -819,6 +819,85 @@ class SetupScriptRegressionTests(unittest.TestCase):
         self.assertEqual(update_run.call_args.kwargs["completed_files"], 0)
 
 
+class ScriptExecutionHistoryArtifactTests(unittest.TestCase):
+    def test_recent_script_results_include_their_report_and_video(self):
+        result_rows = [
+            {
+                "result_id": 17,
+                "run_id": "run-history",
+                "script_asset_id": 3,
+                "status": "failed",
+                "execution_mode": "batch_once",
+                "command": "npx playwright test tests/模块/脚本.spec.ts",
+                "stdout_tail": "historical output",
+            }
+        ]
+        artifact_rows = [
+            {
+                "artifact_id": 21,
+                "run_id": "run-history",
+                "result_id": None,
+                "artifact_type": "html_report",
+                "path": "/project/playwright-report/run-history/index.html",
+                "relative_path": "playwright-report/run-history/index.html",
+                "url": "/api/playwright-reports/playwright-report/run-history/index.html",
+            },
+            {
+                "artifact_id": 22,
+                "run_id": "run-history",
+                "result_id": 17,
+                "artifact_type": "video",
+                "path": "/project/test-results/run-history/video.webm",
+                "relative_path": "test-results/run-history/video.webm",
+                "url": "/api/run-videos/test-results/run-history/video.webm",
+            },
+        ]
+
+        class Cursor:
+            def __init__(self):
+                self.result_sets = [result_rows, artifact_rows]
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def execute(self, *_args):
+                return None
+
+            def fetchall(self):
+                return self.result_sets.pop(0)
+
+        class Connection:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def cursor(self):
+                return Cursor()
+
+        with (
+            patch.object(app, "get_platform_database_config", return_value={"enabled": True}),
+            patch.object(app, "ensure_platform_database_schema"),
+            patch.object(app, "get_test_run_results_table", return_value="test_run_results"),
+            patch.object(app, "get_test_runs_table", return_value="test_runs"),
+            patch.object(app, "get_test_run_artifacts_table", return_value="test_run_artifacts"),
+            patch.object(app, "get_current_project_id", return_value=9),
+            patch.object(app, "get_project_root", return_value=Path("/project")),
+            patch.object(app, "platform_mysql_connection", return_value=Connection()),
+        ):
+            results = app.list_recent_script_results(3)
+
+        serialized = app.serialize_run_result(results[0])
+        self.assertEqual(serialized["run_id"], "run-history")
+        self.assertEqual(serialized["command"], result_rows[0]["command"])
+        self.assertEqual(serialized["report"]["artifact_id"], 21)
+        self.assertEqual(serialized["video"]["artifact_id"], 22)
+
+
 class MergedReportTraceTests(unittest.TestCase):
     def test_blob_inputs_are_outside_html_report_output(self):
         with tempfile.TemporaryDirectory() as directory:

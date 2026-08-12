@@ -1108,6 +1108,19 @@ button:disabled {
   margin-bottom: 18px;
 }
 
+.execution-history-row {
+  cursor: pointer;
+}
+
+.execution-history-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.execution-history-row.selected td {
+  background: #eaf2ff;
+}
+
 .admin-form-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(180px, 1fr));
