@@ -5513,7 +5513,7 @@ def _agent_diagnostic_dependencies():
             *args,
             **kwargs,
         ),
-        get_requirement_by_uid=lambda value: get_requirement_by_uid(value),
+        get_requirement_by_uid=lambda value: get_requirement_by_uid(value, True),
         read_requirement_markdown=lambda value: read_requirement_markdown(value),
         get_plan_target_path=lambda *args, **kwargs: get_plan_target_path(
             *args,
@@ -6747,6 +6747,9 @@ def _requirement_repository_dependencies():
         get_requirement_modules_table=lambda config: (
             get_requirement_modules_table(config)
         ),
+        get_agent_runs_table=lambda config: get_agent_runs_table(
+            config
+        ),
         get_current_project_id=lambda: get_current_project_id(),
         platform_mysql_connection=lambda config: (
             platform_mysql_connection(config)
@@ -6926,9 +6929,10 @@ def read_requirement_markdown(row):
     return _requirement_storage().read_markdown(row)
 
 
-def get_requirement_by_uid(requirement_uid):
+def get_requirement_by_uid(requirement_uid, include_deleted=False):
     return _requirement_repository().get_requirement(
-        requirement_uid
+        requirement_uid,
+        include_deleted=include_deleted,
     )
 
 
@@ -6952,9 +6956,10 @@ def create_requirement_from_upload(file_storage, title=None):
 
 
 def delete_requirement_by_uid(requirement_uid):
-    return _requirement_repository().delete_requirement(
-        requirement_uid
-    )
+    with AGENT_PROJECT_OPERATION_LOCK:
+        return _requirement_repository().delete_requirement(
+            requirement_uid
+        )
 
 
 def build_planner_prompt_from_requirement_module(
@@ -9700,7 +9705,7 @@ def run_agent_script_preparation_continue_workflow(run_id, project, author):
             language = load_json_column(run.get("summary_json"), {}).get("language")
             if language:
                 PROJECT_CONTEXT.project = {**project, "language": normalize_project_language(language)}
-            requirement = get_requirement_by_uid(run.get("requirement_uid"))
+            requirement = get_requirement_by_uid(run.get("requirement_uid"), True)
             if not requirement:
                 raise RuntimeError("需求不存在。")
             modules = require_agent_step_list_output(run_id, "review_modules", "modules")
@@ -9737,7 +9742,7 @@ def run_agent_resume_workflow(run_id, project, author, from_step, resume_context
             language = load_json_column(run.get("summary_json"), {}).get("language")
             if language:
                 PROJECT_CONTEXT.project = {**project, "language": normalize_project_language(language)}
-            requirement = get_requirement_by_uid(run.get("requirement_uid"))
+            requirement = get_requirement_by_uid(run.get("requirement_uid"), True)
             if not requirement:
                 raise RuntimeError("需求不存在。")
             append_agent_event(

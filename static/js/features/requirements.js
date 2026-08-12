@@ -734,6 +734,16 @@ function renderRequirementsPanel() {
   window.WaterfallI18n?.markDynamic?.(elements.requirementMeta);
   elements.requirementMeta.textContent = `${requirement.filename || "-"} · ${formatTimestampMs(requirement.updated_at)}`;
   elements.requirementDownloadLink.href = `/api/requirements/${encodePathPart(requirement.requirement_uid)}/download`;
+  elements.requirementDeleteButton.disabled =
+    state.requirements.isDeleting ||
+    state.requirements.analysisRunning ||
+    state.requirements.planGenerationRunning ||
+    state.requirements.bulkDeletingModules ||
+    isAnyScriptJobRunning();
+  elements.requirementDeleteButton.textContent =
+    window.WaterfallI18n?.source?.(
+      state.requirements.isDeleting ? "删除中" : "删除",
+    ) || (state.requirements.isDeleting ? "删除中" : "删除");
   elements.requirementPreview.innerHTML = state.requirements.html || "";
   elements.requirementPreviewTab.classList.toggle("active", activeTab === REQUIREMENT_VIEW_TAB.PREVIEW);
   elements.requirementPreviewTab.setAttribute(
@@ -1100,6 +1110,111 @@ function closeRequirementModuleDetail() {
   state.requirements.detailModuleUid = "";
   elements.requirementModuleDetailModal.classList.add("hidden");
   elements.requirementModuleDetailBody.innerHTML = "";
+}
+
+function updateRequirementDeleteSubmitState() {
+  const requirement = state.requirements.current;
+  const isSelectedRequirement = Boolean(
+    requirement &&
+      requirement.requirement_uid === state.requirements.deletingUid,
+  );
+  elements.requirementDeleteSubmit.disabled =
+    !isSelectedRequirement ||
+    state.requirements.isDeleting ||
+    elements.requirementDeleteConfirmation.value.trim() !==
+      String(requirement?.title || "").trim();
+}
+
+function openRequirementDeleteModal() {
+  const requirement = state.requirements.current;
+  if (!requirement || state.requirements.isDeleting) {
+    return;
+  }
+  state.requirements.deletingUid = requirement.requirement_uid;
+  elements.requirementDeleteName.textContent = requirement.title;
+  elements.requirementDeleteConfirmation.value = "";
+  elements.requirementDeleteConfirmation.setCustomValidity("");
+  updateRequirementDeleteSubmitState();
+  elements.requirementDeleteModal.classList.remove("hidden");
+  window.WaterfallI18n?.markDynamic?.(
+    elements.requirementDeleteName,
+  );
+  window.WaterfallI18n?.localizeDom?.(
+    elements.requirementDeleteModal,
+  );
+  window.requestAnimationFrame(() =>
+    elements.requirementDeleteConfirmation.focus(),
+  );
+}
+
+function closeRequirementDeleteModal() {
+  if (state.requirements.isDeleting) {
+    return;
+  }
+  elements.requirementDeleteModal.classList.add("hidden");
+  elements.requirementDeleteConfirmation.value = "";
+  elements.requirementDeleteConfirmation.setCustomValidity("");
+  state.requirements.deletingUid = "";
+  elements.requirementDeleteButton.focus();
+}
+
+async function submitRequirementDelete() {
+  const requirement = state.requirements.current;
+  if (
+    !requirement ||
+    state.requirements.isDeleting ||
+    requirement.requirement_uid !== state.requirements.deletingUid
+  ) {
+    return;
+  }
+  const confirmationName =
+    elements.requirementDeleteConfirmation.value.trim();
+  if (confirmationName !== String(requirement.title || "").trim()) {
+    elements.requirementDeleteConfirmation.setCustomValidity(
+      window.WaterfallI18n?.source?.("输入的需求名称不匹配。") ||
+        "输入的需求名称不匹配。",
+    );
+    elements.requirementDeleteConfirmation.reportValidity();
+    return;
+  }
+
+  state.requirements.isDeleting = true;
+  updateRequirementDeleteSubmitState();
+  renderContent();
+  try {
+    await requestJson(
+      `/api/requirements/${encodePathPart(requirement.requirement_uid)}`,
+      {
+        method: "DELETE",
+        body: JSON.stringify({
+          confirmation_name: confirmationName,
+        }),
+      },
+    );
+    elements.requirementDeleteModal.classList.add("hidden");
+    elements.requirementDeleteConfirmation.value = "";
+    state.requirements.deletingUid = "";
+    await loadRequirements();
+    setNotice(
+      window.WaterfallI18n?.source?.(
+        "需求已删除，已生成的计划、脚本、测试集和执行记录已保留。",
+      ) || "需求已删除，已生成的计划、脚本、测试集和执行记录已保留。",
+      "success",
+    );
+  } catch (error) {
+    const rawMessage =
+      error.message ||
+      "需求删除失败。";
+    const message =
+      window.WaterfallI18n?.source?.(rawMessage) || rawMessage;
+    elements.requirementDeleteConfirmation.setCustomValidity(message);
+    elements.requirementDeleteConfirmation.reportValidity();
+    setNotice(message, "error");
+  } finally {
+    state.requirements.isDeleting = false;
+    updateRequirementDeleteSubmitState();
+    renderContent();
+  }
 }
 
 function renderRequirementModuleDetailModal() {
@@ -1717,6 +1832,10 @@ return {
   getRequirementModuleByUid,
   mergeRequirementModuleUpdate,
   closeRequirementModuleDetail,
+  openRequirementDeleteModal,
+  closeRequirementDeleteModal,
+  updateRequirementDeleteSubmitState,
+  submitRequirementDelete,
   saveRequirementModule,
   analyzeSelectedRequirement,
   importInventoryFromDefaultDoc,

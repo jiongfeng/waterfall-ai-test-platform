@@ -132,6 +132,18 @@ def download_requirement_response(
 
 def delete_requirement_response(services, requirement_uid):
     try:
+        requirement = services.get_requirement(requirement_uid)
+        if not requirement:
+            return jsonify({"error": "需求不存在。"}), 404
+        payload = request.get_json(silent=True) or {}
+        confirmation_name = str(
+            payload.get("confirmation_name") or ""
+        ).strip()
+        requirement_name = str(
+            requirement.get("title") or ""
+        ).strip()
+        if confirmation_name != requirement_name:
+            raise ValueError("输入的需求名称不匹配。")
         deleted = services.delete_requirement(requirement_uid)
         if not deleted:
             return jsonify({"error": "需求不存在。"}), 404

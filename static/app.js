@@ -559,6 +559,8 @@ const state = {
     bulkSelectionMode: false,
     selectedModuleUids: new Set(),
     bulkDeletingModules: false,
+    isDeleting: false,
+    deletingUid: "",
     planGenerationBatches: loadRequirementPlanGenerationBatchesFromStorage(),
   },
   plans: {
@@ -964,6 +966,14 @@ const elements = {
   requirementPlanGenerationBatchTabPanel: document.getElementById("requirementPlanGenerationBatchTabPanel"),
   requirementMeta: document.getElementById("requirementMeta"),
   requirementDownloadLink: document.getElementById("requirementDownloadLink"),
+  requirementDeleteButton: document.getElementById("requirementDeleteButton"),
+  requirementDeleteModal: document.getElementById("requirementDeleteModal"),
+  requirementDeleteTitle: document.getElementById("requirementDeleteTitle"),
+  requirementDeleteName: document.getElementById("requirementDeleteName"),
+  requirementDeleteConfirmation: document.getElementById("requirementDeleteConfirmation"),
+  requirementDeleteClose: document.getElementById("requirementDeleteClose"),
+  requirementDeleteCancel: document.getElementById("requirementDeleteCancel"),
+  requirementDeleteSubmit: document.getElementById("requirementDeleteSubmit"),
   requirementPreview: document.getElementById("requirementPreview"),
   requirementModuleSummary: document.getElementById("requirementModuleSummary"),
   analyzeRequirementButton: document.getElementById("analyzeRequirementButton"),
@@ -3023,6 +3033,10 @@ const {
   getRequirementModuleByUid,
   mergeRequirementModuleUpdate,
   closeRequirementModuleDetail,
+  openRequirementDeleteModal,
+  closeRequirementDeleteModal,
+  updateRequirementDeleteSubmitState,
+  submitRequirementDelete,
   saveRequirementModule,
   analyzeSelectedRequirement,
   importInventoryFromDefaultDoc,
@@ -3841,6 +3855,25 @@ elements.uploadRequirementButton.addEventListener("click", () => {
 elements.requirementFileInput.addEventListener("change", () => uploadRequirementFile(elements.requirementFileInput.files?.[0]));
 elements.analyzeRequirementButton.addEventListener("click", analyzeSelectedRequirement);
 elements.importInventoryButton.addEventListener("click", importInventoryFromDefaultDoc);
+elements.requirementDeleteButton.addEventListener("click", openRequirementDeleteModal);
+elements.requirementDeleteClose.addEventListener("click", closeRequirementDeleteModal);
+elements.requirementDeleteCancel.addEventListener("click", closeRequirementDeleteModal);
+elements.requirementDeleteSubmit.addEventListener("click", submitRequirementDelete);
+elements.requirementDeleteConfirmation.addEventListener("input", () => {
+  elements.requirementDeleteConfirmation.setCustomValidity("");
+  updateRequirementDeleteSubmitState();
+});
+elements.requirementDeleteConfirmation.addEventListener("keydown", (event) => {
+  if (event.key === "Enter" && !elements.requirementDeleteSubmit.disabled) {
+    event.preventDefault();
+    submitRequirementDelete();
+  }
+});
+elements.requirementDeleteModal.addEventListener("click", (event) => {
+  if (event.target === elements.requirementDeleteModal) {
+    closeRequirementDeleteModal();
+  }
+});
 elements.requirementPreviewTab.addEventListener("click", () => switchRequirementViewTab(REQUIREMENT_VIEW_TAB.PREVIEW));
 elements.requirementModulesTab.addEventListener("click", () => switchRequirementViewTab(REQUIREMENT_VIEW_TAB.MODULES));
 elements.requirementPlanGenerationBatchTab?.addEventListener("click", () =>
@@ -3967,6 +4000,10 @@ window.addEventListener("keydown", (event) => {
   }
   if (event.key === "Escape" && !elements.requirementBatchPlanModal.classList.contains("hidden")) {
     closeRequirementBatchPlanModal();
+    return;
+  }
+  if (event.key === "Escape" && !elements.requirementDeleteModal.classList.contains("hidden")) {
+    closeRequirementDeleteModal();
     return;
   }
   if (event.key === "Escape" && !elements.requirementModuleDetailModal.classList.contains("hidden")) {

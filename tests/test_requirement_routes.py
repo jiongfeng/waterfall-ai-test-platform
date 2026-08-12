@@ -83,7 +83,8 @@ class RequirementBlueprintTests(unittest.TestCase):
                 "/api/requirements/requirement-3"
             )
             deleted = client.delete(
-                "/api/requirements/requirement-3"
+                "/api/requirements/requirement-3",
+                json={"confirmation_name": "需求"},
             )
 
         self.assertEqual(listed.status_code, 200)
@@ -102,6 +103,24 @@ class RequirementBlueprintTests(unittest.TestCase):
             detail.json["modules"][0]["module_uid"],
             "module-5",
         )
+        services.delete_requirement.assert_called_once_with(
+            "requirement-3"
+        )
+
+    def test_delete_requires_exact_requirement_name(self):
+        services = make_services()
+        with make_app(services).test_client() as client:
+            response = client.delete(
+                "/api/requirements/requirement-3",
+                json={"confirmation_name": "错误名称"},
+            )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(
+            response.json["error"],
+            "输入的需求名称不匹配。",
+        )
+        services.delete_requirement.assert_not_called()
 
     def test_module_routes_preserve_reset_and_not_found_behavior(self):
         services = make_services()

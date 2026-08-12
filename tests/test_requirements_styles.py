@@ -18,6 +18,7 @@ EXPECTED_REQUIREMENTS_SELECTORS = {
     ".module-name-button",
     ".module-name-button:hover",
     ".requirement-download-link",
+    ".requirement-delete-warning",
     ".requirement-header-actions",
     ".requirement-list-meta",
     ".requirement-list-title",

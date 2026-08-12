@@ -25,7 +25,10 @@ const state = {
   isEditing: false,
   requirements: {
     items: [{ requirement_uid: "requirement-1", module_count: 2 }],
-    current: { title: "需求一" },
+    current: {
+      requirement_uid: "requirement-1",
+      title: "需求一",
+    },
     modules: [
       {
         module_uid: "module-1",
@@ -52,6 +55,8 @@ const state = {
     selectedModuleUids: new Set(),
     bulkSelectionMode: false,
     bulkDeletingModules: false,
+    isDeleting: false,
+    deletingUid: "",
     planGenerationRunning: false,
     detailModuleUid: "",
     modulePlanLogs: {},
@@ -90,6 +95,27 @@ const elements = {
     querySelector: () => null,
   },
   requirementFileInput: { value: "" },
+  requirementDeleteButton: {
+    disabled: false,
+    focus() {},
+  },
+  requirementDeleteModal: {
+    classList: {
+      hidden: true,
+      add() { this.hidden = true; },
+      remove() { this.hidden = false; },
+      contains(value) { return value === "hidden" && this.hidden; },
+    },
+  },
+  requirementDeleteName: { textContent: "" },
+  requirementDeleteConfirmation: {
+    value: "",
+    validationMessage: "",
+    setCustomValidity(message) { this.validationMessage = message; },
+    reportValidity() {},
+    focus() {},
+  },
+  requirementDeleteSubmit: { disabled: true },
 };
 
 let requestMode = "delete";
@@ -137,6 +163,9 @@ const feature = context.window.createRequirementsFeature({
     requestAnimationFrame: (callback) => callback(),
     WaterfallI18n: {
       log: (value) => value,
+      source: (value) => value,
+      localizeDom: () => {},
+      markDynamic: () => {},
       t: (key, params = {}) => {
         const messages = {
           "requirements.candidateMeta": "{count} candidates · {timestamp}",
@@ -178,8 +207,20 @@ const feature = context.window.createRequirementsFeature({
   },
   normalizeRequirementModule,
   isAnyScriptJobRunning: () => false,
-  requestJson: async (url, options) => {
+  requestJson: async (url, options = {}) => {
     requests.push({ url, options });
+    if (requestMode === "requirement-delete") {
+      if (
+        url === "/api/requirements/requirement-2" &&
+        options.method === "DELETE"
+      ) {
+        return {};
+      }
+      if (url === "/api/requirements") {
+        return { requirements: [] };
+      }
+      throw new Error(`unexpected requirement delete request: ${url}`);
+    }
     if (requestMode === "delete") {
       if (url.includes("/module-2")) {
         throw new Error("无权限");
@@ -341,6 +382,27 @@ assert.deepStrictEqual(
   assert.ok(requests.some(({ url }) => url === "/api/requirements"));
   assert.ok(persistenceCalls > 0);
   assert.ok(renderCalls > 0);
+
+  requestMode = "requirement-delete";
+  feature.openRequirementDeleteModal();
+  assert.strictEqual(elements.requirementDeleteName.textContent, "需求二");
+  assert.strictEqual(elements.requirementDeleteSubmit.disabled, true);
+  elements.requirementDeleteConfirmation.value = "需求二";
+  feature.updateRequirementDeleteSubmitState();
+  assert.strictEqual(elements.requirementDeleteSubmit.disabled, false);
+  await feature.submitRequirementDelete();
+  const deleteRequest = requests.find(
+    ({ url, options }) =>
+      url === "/api/requirements/requirement-2" &&
+      options.method === "DELETE",
+  );
+  assert.deepStrictEqual(
+    JSON.parse(deleteRequest.options.body),
+    { confirmation_name: "需求二" },
+  );
+  assert.strictEqual(state.requirements.current, null);
+  assert.strictEqual(elements.requirementDeleteModal.classList.hidden, true);
+  assert.ok(notices.at(-1).message.includes("已保留"));
   process.stdout.write("requirements feature VM smoke: ok\n");
 })().catch((error) => {
   process.stderr.write(`${error.stack || error}\n`);
