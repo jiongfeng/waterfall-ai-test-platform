@@ -97,6 +97,7 @@ REQUIRED_ROUTE_CONTRACTS = {
     ("DELETE", "/api/test-suites/<suite_uid>/items/<int:item_id>"),
     ("PUT", "/api/test-suites/<suite_uid>/items/reorder"),
     ("GET", "/api/jobs/<job_id>"),
+    ("POST", "/api/jobs/<job_id>/cancel"),
     ("GET", "/api/jobs/<job_id>/log"),
     ("GET", "/api/jobs/<job_id>/log/download"),
     ("GET", "/api/assets/<int:asset_id>/revisions"),

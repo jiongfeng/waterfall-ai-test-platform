@@ -151,6 +151,7 @@ const feature = context.window.createModulePlanGenerationFeature({
   parseSseBlock: () => null,
   getDefaultScriptTargetPath: (moduleName) => `tests/${moduleName}`,
   getProjectRequestHeaders: (headers) => headers,
+  createClientJobId: () => "generator-test",
   persistViewState() {},
   loadScriptTree: async () => {},
   renderSideList() {},
@@ -158,6 +159,14 @@ const feature = context.window.createModulePlanGenerationFeature({
   getGenerationStatusInfo: (record) => ({ status: record?.status || "idle" }),
   getPlanRecordKey,
 });
+
+const cancelledStreamResult = feature.handleModulePlanScriptStreamEvent(
+  { event: "done", data: { ok: false, status: "cancelled", error: "用户终止" } },
+  { status: "running", logs: "生成日志\n" },
+  "账户",
+  "登录.md",
+);
+assert.strictEqual(cancelledStreamResult.status, "cancelled");
 
 assert.deepStrictEqual(
   feature.getCurrentModulePlans().map((plan) => plan.filename),

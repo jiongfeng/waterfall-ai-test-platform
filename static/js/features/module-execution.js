@@ -1420,6 +1420,8 @@ function renderScriptRepairRecord() {
     elements.scriptRunJobOutput.classList.add("hidden");
     elements.scriptRunSubmit.disabled = true;
     elements.scriptRunSubmit.textContent = "确认修复";
+    elements.scriptRunSubmit.classList.add("primary-button");
+    elements.scriptRunSubmit.classList.remove("danger-primary-button");
     return;
   }
 
@@ -1430,6 +1432,9 @@ function renderScriptRepairRecord() {
   elements.scriptRunJobOutput.classList.toggle("hidden", !record.logs && record.status === "idle");
   elements.scriptRunJobStatus.className = "job-status";
   renderScriptRunDuration(record);
+  const isRunning = record.status === "running" || record.status === "cancelling" || state.scriptRun.isRunning;
+  elements.scriptRunSubmit.classList.toggle("primary-button", !isRunning);
+  elements.scriptRunSubmit.classList.toggle("danger-primary-button", isRunning);
 
   if (record.status === "succeeded") {
     elements.scriptRunJobStatus.textContent = "任务成功";
@@ -1455,10 +1460,17 @@ function renderScriptRepairRecord() {
     return;
   }
 
+  if (record.status === "cancelling" || state.scriptRun.cancelRequested) {
+    elements.scriptRunJobStatus.textContent = "正在终止任务";
+    elements.scriptRunSubmit.disabled = true;
+    elements.scriptRunSubmit.textContent = "正在终止…";
+    return;
+  }
+
   if (record.status === "running" || state.scriptRun.isRunning) {
     elements.scriptRunJobStatus.textContent = "任务进行中，正在接收实时输出";
-    elements.scriptRunSubmit.disabled = true;
-    elements.scriptRunSubmit.textContent = "修复中";
+    elements.scriptRunSubmit.disabled = false;
+    elements.scriptRunSubmit.textContent = "终止修复";
     return;
   }
 

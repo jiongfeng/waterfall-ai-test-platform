@@ -372,6 +372,20 @@ assert.deepStrictEqual(
     "succeeded",
   );
 
+  const cancelledBatchItem = feature.handleRequirementBatchPlanGenerationEvent(
+    { event: "done", data: { ok: false, status: "cancelled", error: "用户终止" } },
+    { status: "running", logs: "计划日志\n" },
+    "requirement-1",
+    state.requirements.modules[0],
+  );
+  assert.strictEqual(cancelledBatchItem.status, "cancelled");
+
+  feature.handleRequirementAnalysisEvent({
+    event: "done",
+    data: { ok: false, status: "cancelled", error: "用户终止" },
+  });
+  assert.strictEqual(state.requirements.analysisStatus, "cancelled");
+
   requestMode = "load";
   state.requirements.items = [];
   state.requirements.selectedUid = null;

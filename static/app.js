@@ -475,6 +475,13 @@ function normalizeRequirementModule(moduleItem) {
   };
 }
 
+function createClientJobId(prefix = "job") {
+  if (window.crypto?.randomUUID) {
+    return `${prefix}-${window.crypto.randomUUID()}`;
+  }
+  return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
 function normalizeViewStateRecord(parsed) {
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     return {};
@@ -551,7 +558,11 @@ const state = {
     analysisStatus: "",
     analysisError: "",
     analysisRunning: false,
+    analysisCancelRequested: false,
+    analysisJobId: "",
     planGenerationRunning: false,
+    planGenerationCancelRequested: false,
+    planGenerationJobId: "",
     generatingModuleUid: "",
     modulePlanLogs: {},
     activeTab: REQUIREMENT_VIEW_TAB.PREVIEW,
@@ -593,6 +604,8 @@ const state = {
     pollTimer: null,
     durationTimer: null,
     isRunning: false,
+    cancelRequested: false,
+    currentJobId: "",
     source: "plans",
     requirementUid: "",
     requirementModuleUid: "",
@@ -605,6 +618,8 @@ const state = {
   },
   scriptGeneration: {
     isRunning: false,
+    cancelRequested: false,
+    currentJobId: "",
     durationTimer: null,
   },
   scriptExecution: {
@@ -681,6 +696,8 @@ const state = {
   },
   scriptRun: {
     isRunning: false,
+    cancelRequested: false,
+    currentJobId: "",
     durationTimer: null,
   },
   moduleRepair: {
@@ -923,6 +940,7 @@ const elements = {
   planGenerationRecordContent: document.getElementById("planGenerationRecordContent"),
   planRecordPrompt: document.getElementById("planRecordPrompt"),
   planRecordTargetPath: document.getElementById("planRecordTargetPath"),
+  planGenerationCancelButton: document.getElementById("planGenerationCancelButton"),
   planRecordJobOutput: document.getElementById("planRecordJobOutput"),
   planRecordJobStatus: document.getElementById("planRecordJobStatus"),
   planRecordJobLogs: document.getElementById("planRecordJobLogs"),
@@ -951,6 +969,7 @@ const elements = {
   modulePlanScriptBatchRecord: document.getElementById("modulePlanScriptBatchRecord"),
   modulePlanScriptBatchHeader: document.getElementById("modulePlanScriptBatchHeader"),
   modulePlanScriptBatchSummary: document.getElementById("modulePlanScriptBatchSummary"),
+  modulePlanScriptBatchCancelButton: document.getElementById("modulePlanScriptBatchCancelButton"),
   modulePlanScriptBatchEmpty: document.getElementById("modulePlanScriptBatchEmpty"),
   modulePlanScriptBatchList: document.getElementById("modulePlanScriptBatchList"),
   assetInfoPanel: document.getElementById("assetInfoPanel"),
@@ -995,6 +1014,7 @@ const elements = {
   requirementPlanGenerationBatchRecord: document.getElementById("requirementPlanGenerationBatchRecord"),
   requirementPlanGenerationBatchHeader: document.getElementById("requirementPlanGenerationBatchHeader"),
   requirementPlanGenerationBatchSummary: document.getElementById("requirementPlanGenerationBatchSummary"),
+  requirementPlanGenerationBatchCancelButton: document.getElementById("requirementPlanGenerationBatchCancelButton"),
   requirementPlanGenerationBatchEmpty: document.getElementById("requirementPlanGenerationBatchEmpty"),
   requirementPlanGenerationBatchList: document.getElementById("requirementPlanGenerationBatchList"),
   requirementModuleDetailModal: document.getElementById("requirementModuleDetailModal"),
@@ -2053,12 +2073,12 @@ const generationFeature = createGenerationFeature({
   requestJson,
   encodePathPart,
   getProjectRequestHeaders,
+  createClientJobId,
   parseSseBlock,
   setNotice,
   persistViewState,
   renderContent,
   renderSideList,
-  renderPlanGenerationRecord,
   loadPlanModules,
   selectPlan,
   selectPlanModule,
@@ -2067,6 +2087,8 @@ const generationFeature = createGenerationFeature({
 });
 const {
   renderGenerationDuration,
+  renderPlanGenerationRecord,
+  renderPlanScriptGenerationRecord,
   ensurePlanScriptGenerationRecord,
   setPlanScriptGenerationRecord,
   updatePlanScriptGenerationPromptFromInputs,
@@ -2084,10 +2106,12 @@ const {
   openRequirementPlanGenerationModal,
   closePlanGenerationModal,
   submitPlanGeneration,
+  cancelPlanGeneration,
   renderScriptPromptFromTemplate,
   openScriptGenerationModal,
   closeScriptGenerationModal,
   submitScriptGeneration,
+  cancelScriptGeneration,
 } = generationFeature;
 const scriptRepairFeature = createScriptRepairFeature({
   state,
@@ -2113,6 +2137,7 @@ const scriptRepairFeature = createScriptRepairFeature({
   renderContent,
   setNotice,
   getProjectRequestHeaders,
+  createClientJobId,
   refreshScriptMetadata,
   confirmDiscardEdit,
 });
@@ -2126,6 +2151,7 @@ const {
   executeSelectedScript,
   openScriptRepairRecord,
   submitScriptRun,
+  cancelScriptRun,
   updateScriptRepairPromptFromInputs,
 } = scriptRepairFeature;
 
@@ -2701,117 +2727,6 @@ function renderScriptTabs() {
   return showTabs;
 }
 
-function getCurrentPlanGenerationRecord() {
-  if (!state.plans.selectedModule) {
-    return null;
-  }
-  if (state.plans.selectedPlanFile) {
-    return state.plans.generationRecords[getPlanRecordKey()] || null;
-  }
-  return Object.values(state.plans.generationRecords)
-    .filter((record) => record?.module_name === state.plans.selectedModule)
-    .sort((left, right) => (right.updated_at || 0) - (left.updated_at || 0))[0] || null;
-}
-
-function renderPlanGenerationRecord() {
-  const record = getCurrentPlanGenerationRecord();
-  const hasRecord = Boolean(record);
-
-  elements.planGenerationRecordEmpty.classList.toggle("hidden", hasRecord);
-  elements.planGenerationRecordContent.classList.toggle("hidden", !hasRecord);
-
-  if (!hasRecord) {
-    elements.planRecordPrompt.value = "";
-    elements.planRecordTargetPath.textContent = "";
-    elements.planRecordJobLogs.textContent = "";
-    elements.planRecordJobOutput.classList.add("hidden");
-    renderGenerationDuration(elements.planRecordDuration, null);
-    return;
-  }
-
-  elements.planRecordPrompt.value = record.prompt || "";
-  elements.planRecordTargetPath.textContent = record.target_path || "";
-  elements.planRecordJobLogs.textContent = window.WaterfallI18n?.log(record.logs || "") || record.logs || "";
-  elements.planRecordJobLogs.scrollTop = elements.planRecordJobLogs.scrollHeight;
-  elements.planRecordJobOutput.classList.toggle("hidden", !record.logs && record.status === "idle");
-  elements.planRecordJobStatus.className = "job-status";
-  const coverageMeta = record.coverage_profile
-    ? `模板来源：${getCoverageProfile(record.coverage_profile)?.label || "核心回归"}${record.prompt_customized ? " · 已自定义" : ""}`
-    : "";
-  renderGenerationDuration(elements.planRecordDuration, record);
-
-  if (record.status === "succeeded") {
-    elements.planRecordJobStatus.textContent = coverageMeta ? `任务成功 · ${coverageMeta}` : "任务成功";
-    elements.planRecordJobStatus.classList.add("success");
-    return;
-  }
-
-  if (record.status === "failed") {
-    elements.planRecordJobStatus.textContent = `任务失败${coverageMeta ? ` · ${coverageMeta}` : ""}${record.error ? `：${record.error}` : ""}`;
-    elements.planRecordJobStatus.classList.add("error");
-    return;
-  }
-
-  if (record.status === "running") {
-    elements.planRecordJobStatus.textContent = `任务进行中${coverageMeta ? ` · ${coverageMeta}` : ""}，正在接收实时输出`;
-    return;
-  }
-
-  elements.planRecordJobStatus.textContent = "任务进行中";
-}
-
-function renderPlanScriptGenerationRecord() {
-  const record = ensurePlanScriptGenerationRecord();
-  if (!record) {
-    elements.planScriptPromptFixed.value = "";
-    elements.planScriptPromptNote.value = "";
-    elements.planScriptRecordTargetPath.textContent = "";
-    elements.planScriptJobLogs.textContent = "";
-    elements.planScriptJobOutput.classList.add("hidden");
-    renderGenerationDuration(elements.planScriptDuration, null);
-    elements.planScriptGenerationSubmit.disabled = true;
-    elements.planScriptGenerationSubmit.textContent = "确认生成";
-    return;
-  }
-
-  elements.planScriptPromptFixed.value = record.prompt_fixed;
-  elements.planScriptPromptNote.value = record.prompt_note;
-  elements.planScriptRecordTargetPath.textContent = record.target_path || getDefaultScriptTargetPath(record.module_name);
-  elements.planScriptJobLogs.textContent = window.WaterfallI18n?.log(record.logs || "") || record.logs || "";
-  elements.planScriptJobLogs.scrollTop = elements.planScriptJobLogs.scrollHeight;
-  elements.planScriptJobOutput.classList.toggle("hidden", !record.logs && record.status === "idle");
-  elements.planScriptJobStatus.className = "job-status";
-  renderGenerationDuration(elements.planScriptDuration, record);
-
-  if (record.status === "succeeded") {
-    elements.planScriptJobStatus.textContent = "任务成功";
-    elements.planScriptJobStatus.classList.add("success");
-    elements.planScriptGenerationSubmit.disabled = state.scriptGeneration.isRunning;
-    elements.planScriptGenerationSubmit.textContent = "重新生成";
-    return;
-  }
-
-  if (record.status === "failed") {
-    elements.planScriptJobStatus.textContent = `任务失败${record.error ? `：${record.error}` : ""}`;
-    elements.planScriptJobStatus.classList.add("error");
-    elements.planScriptGenerationSubmit.disabled = state.scriptGeneration.isRunning;
-    elements.planScriptGenerationSubmit.textContent = "重试";
-    return;
-  }
-
-  if (record.status === "running" || state.scriptGeneration.isRunning) {
-    elements.planScriptJobStatus.textContent = "任务进行中，正在接收实时输出";
-    elements.planScriptGenerationSubmit.disabled = true;
-    elements.planScriptGenerationSubmit.textContent = "生成中";
-    return;
-  }
-
-  elements.planScriptJobStatus.textContent = "任务进行中";
-  elements.planScriptGenerationSubmit.disabled = state.scriptGeneration.isRunning;
-  elements.planScriptGenerationSubmit.textContent = "确认生成";
-}
-
-
 function getGenerationStatusInfo(recordOrItem) {
   if (recordOrItem?.status === "queued") {
     return { label: "排队", className: "queued" };
@@ -2819,11 +2734,17 @@ function getGenerationStatusInfo(recordOrItem) {
   if (recordOrItem?.status === "running") {
     return { label: "生成中", className: "running" };
   }
+  if (recordOrItem?.status === "cancelling") {
+    return { label: "终止中", className: "running" };
+  }
   if (recordOrItem?.status === "succeeded") {
     return { label: "成功", className: "success" };
   }
   if (recordOrItem?.status === "failed") {
     return { label: "失败", className: "error" };
+  }
+  if (recordOrItem?.status === "cancelled") {
+    return { label: "已取消", className: "cancelled" };
   }
   return { label: t("status.notGenerated"), className: "" };
 }
@@ -2923,6 +2844,7 @@ const modulePlanGenerationFeature = createModulePlanGenerationFeature({
   parseSseBlock,
   getDefaultScriptTargetPath,
   getProjectRequestHeaders,
+  createClientJobId,
   persistViewState,
   loadScriptTree,
   renderSideList,
@@ -2947,6 +2869,7 @@ const {
   readModulePlanScriptGenerationStream,
   handleModulePlanScriptStreamEvent,
   generateSelectedModulePlanScripts,
+  cancelModulePlanScriptGenerationBatch,
   renderModulePlanList,
   renderModulePlanScriptBatchRecord,
 } = modulePlanGenerationFeature;
@@ -3020,6 +2943,7 @@ const requirementsFeature = createRequirementsFeature({
   populateCoverageSelect,
   composeCoveragePrompt,
   getProjectRequestHeaders,
+  createClientJobId,
   persistViewState,
   formatModuleRepairDuration,
   createStatusBadge,
@@ -3043,6 +2967,7 @@ const {
   changeRequirementBatchCoverageProfile,
   resetRequirementBatchCoveragePrompt,
   generateSelectedRequirementModulePlans,
+  cancelRequirementPlanGenerationBatch,
   renderRequirementsPanel,
   getRequirementModuleByUid,
   mergeRequirementModuleUpdate,
@@ -3053,6 +2978,7 @@ const {
   submitRequirementDelete,
   saveRequirementModule,
   analyzeSelectedRequirement,
+  cancelRequirementAnalysis,
   importInventoryFromDefaultDoc,
   loadRequirements,
   uploadRequirementFile,
@@ -3208,6 +3134,8 @@ function renderContent() {
       setPlatformText(elements.filePath, "未选择需求");
       elements.analyzeRequirementButton.disabled = true;
       elements.analyzeRequirementButton.textContent = "解析需求";
+      elements.analyzeRequirementButton.classList.add("primary-button");
+      elements.analyzeRequirementButton.classList.remove("danger-primary-button");
       elements.importInventoryButton.disabled = state.requirements.analysisRunning || state.requirements.planGenerationRunning;
       elements.emptyState.classList.remove("hidden");
       elements.emptyState.querySelector("h3").textContent = "暂无需求";
@@ -3872,7 +3800,9 @@ elements.uploadRequirementButton.addEventListener("click", () => {
   elements.requirementFileInput.click();
 });
 elements.requirementFileInput.addEventListener("change", () => uploadRequirementFile(elements.requirementFileInput.files?.[0]));
-elements.analyzeRequirementButton.addEventListener("click", analyzeSelectedRequirement);
+elements.analyzeRequirementButton.addEventListener("click", () =>
+  state.requirements.analysisRunning ? cancelRequirementAnalysis() : analyzeSelectedRequirement(),
+);
 elements.importInventoryButton.addEventListener("click", importInventoryFromDefaultDoc);
 elements.requirementDeleteButton.addEventListener("click", openRequirementDeleteModal);
 elements.requirementDeleteClose.addEventListener("click", closeRequirementDeleteModal);
@@ -3920,16 +3850,22 @@ elements.planPromptReset.addEventListener("click", () => resetPlanPromptForCover
 elements.requirementBatchPlanClose.addEventListener("click", closeRequirementBatchPlanModal);
 elements.requirementBatchPlanCancel.addEventListener("click", closeRequirementBatchPlanModal);
 elements.requirementBatchPlanSubmit.addEventListener("click", generateSelectedRequirementModulePlans);
+elements.requirementPlanGenerationBatchCancelButton?.addEventListener("click", cancelRequirementPlanGenerationBatch);
 elements.requirementBatchCoverageProfile.addEventListener("change", changeRequirementBatchCoverageProfile);
 elements.requirementBatchCoveragePrompt.addEventListener("input", renderRequirementBatchPromptState);
 elements.requirementBatchPromptReset.addEventListener("click", resetRequirementBatchCoveragePrompt);
 elements.scriptGenerationClose.addEventListener("click", closeScriptGenerationModal);
 elements.scriptGenerationCancel.addEventListener("click", closeScriptGenerationModal);
 elements.scriptGenerationSubmit.addEventListener("click", submitScriptGeneration);
-elements.planScriptGenerationSubmit.addEventListener("click", submitScriptGeneration);
+elements.planGenerationCancelButton.addEventListener("click", cancelPlanGeneration);
+elements.planScriptGenerationSubmit.addEventListener("click", () =>
+  state.scriptGeneration.isRunning ? cancelScriptGeneration() : submitScriptGeneration(),
+);
 elements.planScriptPromptFixed.addEventListener("input", updatePlanScriptGenerationPromptFromInputs);
 elements.planScriptPromptNote.addEventListener("input", updatePlanScriptGenerationPromptFromInputs);
-elements.scriptRunSubmit.addEventListener("click", submitScriptRun);
+elements.scriptRunSubmit.addEventListener("click", () =>
+  state.scriptRun.isRunning ? cancelScriptRun() : submitScriptRun(),
+);
 elements.scriptRunPromptFixed.addEventListener("input", updateScriptRepairPromptFromInputs);
 elements.scriptRunPromptNote.addEventListener("input", updateScriptRepairPromptFromInputs);
 elements.testSuiteCreateClose.addEventListener("click", closeTestSuiteCreateModal);
@@ -3990,6 +3926,7 @@ elements.moduleSelectAll.addEventListener("change", toggleModuleSelectAll);
 elements.modulePlanBulkToggle.addEventListener("click", enterModulePlanBulkMode);
 elements.modulePlanBulkCancel.addEventListener("click", cancelModulePlanBulkMode);
 elements.modulePlanBulkGenerate.addEventListener("click", generateSelectedModulePlanScripts);
+elements.modulePlanScriptBatchCancelButton?.addEventListener("click", cancelModulePlanScriptGenerationBatch);
 elements.modulePlanBulkDelete.addEventListener("click", deleteSelectedModulePlans);
 elements.modulePlanSelectAll.addEventListener("change", toggleModulePlanSelectAll);
 elements.addModuleNameLink.addEventListener("click", togglePlanGenerationModuleMode);

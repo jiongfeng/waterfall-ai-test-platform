@@ -74,6 +74,8 @@ from test_plan_viewer.execution import playwright as execution_playwright
 from test_plan_viewer.execution import results as execution_results
 from test_plan_viewer.execution import streaming as execution_streaming
 from test_plan_viewer.generation import cases as generation_cases
+from test_plan_viewer.generation import cancellation as generation_cancellation
+from test_plan_viewer.generation import opencode as generation_opencode
 from test_plan_viewer.generation.completion import PlanCompletionProbe
 from test_plan_viewer.generation.event_stream import BoundedSseReader
 from test_plan_viewer.i18n import localize_platform_error
@@ -170,6 +172,7 @@ from test_plan_viewer.repositories.tables import (
     get_test_suites_table,
 )
 from test_plan_viewer.requirements import model as requirement_model
+from test_plan_viewer.requirements import analysis_stream as requirement_analysis_stream
 from test_plan_viewer.requirements import repository as requirement_repository
 from test_plan_viewer.requirements import service as requirement_service
 from test_plan_viewer.requirements import storage as requirement_storage
@@ -425,7 +428,7 @@ JOB_LOG_TAIL_LIMIT = 100000
 JOB_LOG_STORAGE_DIR_NAME = "jobs"
 TEST_ASSET_TYPES = {"plan", "script"}
 TEST_JOB_TYPES = {"requirement_analysis", "planner", "generator", "healer", "execution", "agent_review"}
-TEST_JOB_STATUSES = {"queued", "running", "succeeded", "failed", "cancelled"}
+TEST_JOB_STATUSES = {"queued", "running", "cancelling", "succeeded", "failed", "cancelled"}
 AGENT_RUN_STATUSES = {
     "queued",
     "running",
@@ -2927,9 +2930,10 @@ def create_test_job(
                 f"""
                 INSERT INTO {jobs_table}
                   (job_id, project_id, job_type, status, target_asset_id, source_asset_id, prompt,
-                   coverage_profile, prompt_customized, prompt_context_json, log_path, log_tail,
+                   coverage_profile, prompt_customized, prompt_context_json, cancel_requested,
+                   opencode_session_id, log_path, log_tail,
                    log_size, error, started_at, finished_at, created_at, updated_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, '', 0, NULL, %s, NULL, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 0, NULL, %s, '', 0, NULL, %s, NULL, %s, %s)
                 ON DUPLICATE KEY UPDATE
                   project_id = VALUES(project_id),
                   job_type = VALUES(job_type),
@@ -2940,6 +2944,8 @@ def create_test_job(
                   coverage_profile = VALUES(coverage_profile),
                   prompt_customized = VALUES(prompt_customized),
                   prompt_context_json = VALUES(prompt_context_json),
+                  cancel_requested = 0,
+                  opencode_session_id = NULL,
                   log_path = VALUES(log_path),
                   started_at = COALESCE(started_at, VALUES(started_at)),
                   updated_at = VALUES(updated_at)
@@ -2981,6 +2987,8 @@ def update_test_job(job_id, *, fetch=True, **updates):
         "coverage_profile",
         "prompt_customized",
         "prompt_context_json",
+        "cancel_requested",
+        "opencode_session_id",
         "log_path",
         "log_tail",
         "log_size",
@@ -3090,6 +3098,8 @@ def serialize_job(job):
         "coverage_profile": job.get("coverage_profile") or DEFAULT_COVERAGE_PROFILE,
         "prompt_customized": bool(job.get("prompt_customized")),
         "prompt_context": load_json_column(job.get("prompt_context_json"), {}),
+        "cancel_requested": bool(job.get("cancel_requested")),
+        "opencode_session_id": job.get("opencode_session_id") or "",
         "log_path": job.get("log_path"),
         "log_tail": job.get("log_tail") or "",
         "log_size": job.get("log_size") or 0,
@@ -7387,59 +7397,20 @@ def build_requirement_analysis_prompt(requirement, markdown_text):
     )
 
 
-def stream_requirement_analysis(requirement):
-    job_id = f"requirement-analysis-{uuid.uuid4().hex}"
-    markdown_text = read_requirement_markdown(requirement)
-    full_prompt = build_requirement_analysis_prompt(requirement, markdown_text)
-    create_test_job("requirement_analysis", job_id=job_id, status="queued", prompt=full_prompt)
-
-    def emit_status(status, error=None, extra=None):
-        payload = {
-            "status": status,
-            "requirement_uid": requirement.get("requirement_uid"),
-            "job_id": job_id,
-            "job": serialize_job(get_test_job(job_id)),
-            "error": error,
-        }
-        if extra:
-            payload.update(extra)
-        return sse_payload("status", payload)
-
-    def emit_log(message):
-        append_test_job_log(job_id, f"{message}\n")
-        return sse_payload("log", {"message": message})
-
-    try:
-        update_test_job(job_id, fetch=False, status="running", started_at=current_time_ms())
-        yield emit_status("running")
-        yield emit_log(agent_message("analysis_created"))
-        response = send_opencode_prompt(full_prompt, default_agent="requirement-analyst")
-        output_text = collect_opencode_response_text(response)
-        append_test_job_log(job_id, output_text[-JOB_LOG_TAIL_LIMIT:])
-        yield sse_payload("delta", {"text": output_text})
-        parsed = extract_json_object_from_text(output_text)
-        modules = normalize_analysis_json(parsed)
-        saved_modules = save_requirement_modules_from_analysis(requirement, modules, job_id)
-        serialized_modules = [serialize_requirement_module(item) for item in saved_modules]
-        finish_test_job(job_id, "succeeded")
-        yield emit_status("succeeded", extra={"modules": serialized_modules})
-        yield emit_log(agent_message("analysis_completed", count=len(serialized_modules)))
-        yield sse_payload("done", {"ok": True, "modules": serialized_modules, "job_id": job_id})
-    except Exception as exc:
-        failure_message = agent_message("analysis_failed", error=exc)
-        append_test_job_log(job_id, f"{failure_message}\n")
-        finish_test_job(job_id, "failed", error=failure_message)
-        yield emit_status("failed", failure_message)
-        yield emit_log(failure_message)
-        yield sse_payload(
-            "done",
-            {
-                "ok": False,
-                "status": "failed",
-                "error": failure_message,
-                "job_id": job_id,
-            },
-        )
+def stream_requirement_analysis(requirement, job_id=None):
+    deps = requirement_analysis_stream.RequirementAnalysisDependencies(
+        sanitize_job_id=sanitize_job_id, read_markdown=read_requirement_markdown,
+        build_prompt=build_requirement_analysis_prompt, create_job=create_test_job,
+        update_job=update_test_job, get_job=get_test_job, serialize_job=serialize_job,
+        append_log=append_test_job_log, finish_job=finish_test_job,
+        current_time_ms=current_time_ms, message=agent_message,
+        send_prompt=send_opencode_prompt_cancellable, collect_response_text=collect_opencode_response_text,
+        extract_json=extract_json_object_from_text, normalize_analysis=normalize_analysis_json,
+        save_modules=save_requirement_modules_from_analysis, serialize_module=serialize_requirement_module,
+        sse_payload=sse_payload, cancelled_exception=OpencodeTaskCancelled,
+        log_tail_limit=JOB_LOG_TAIL_LIMIT,
+    )
+    return requirement_analysis_stream.stream_requirement_analysis(requirement, job_id, deps)
 
 
 def agent_register_task(run_id):
@@ -12278,58 +12249,6 @@ def opencode_request(path, payload=None, timeout=None, method=None, query=None, 
         return {"raw": body}
 
 
-def register_opencode_task(job_id, label=None):
-    if not job_id:
-        return
-
-    now = time.time()
-    with OPENCODE_TASK_LOCK:
-        record = OPENCODE_TASKS.get(job_id) or {}
-        record.update(
-            {
-                "job_id": job_id,
-                "label": label or record.get("label") or "",
-                "updated_at": now,
-                "created_at": record.get("created_at") or now,
-                "cancel_requested": bool(record.get("cancel_requested")),
-                "session_id": record.get("session_id") or "",
-            }
-        )
-        OPENCODE_TASKS[job_id] = record
-
-
-def set_opencode_task_session(job_id, session_id):
-    if not job_id or not session_id:
-        return False
-
-    with OPENCODE_TASK_LOCK:
-        record = OPENCODE_TASKS.get(job_id) or {
-            "job_id": job_id,
-            "created_at": time.time(),
-            "cancel_requested": False,
-        }
-        record["session_id"] = session_id
-        record["updated_at"] = time.time()
-        OPENCODE_TASKS[job_id] = record
-        return bool(record.get("cancel_requested"))
-
-
-def is_opencode_task_cancelled(job_id):
-    if not job_id:
-        return False
-
-    with OPENCODE_TASK_LOCK:
-        return bool(OPENCODE_TASKS.get(job_id, {}).get("cancel_requested"))
-
-
-def cleanup_opencode_task(job_id):
-    if not job_id:
-        return
-
-    with OPENCODE_TASK_LOCK:
-        OPENCODE_TASKS.pop(job_id, None)
-
-
 def abort_opencode_session(session_id):
     if not session_id:
         return False
@@ -12343,26 +12262,19 @@ def abort_opencode_session(session_id):
     return True
 
 
-def cancel_opencode_task(job_id):
-    if not job_id:
-        raise ValueError("job_id cannot be empty.")
-
-    with OPENCODE_TASK_LOCK:
-        record = OPENCODE_TASKS.get(job_id) or {
-            "job_id": job_id,
-            "created_at": time.time(),
-            "session_id": "",
-        }
-        record["cancel_requested"] = True
-        record["updated_at"] = time.time()
-        OPENCODE_TASKS[job_id] = record
-        session_id = record.get("session_id") or ""
-
-    if session_id:
-        abort_opencode_session(session_id)
-        return {"cancel_requested": True, "aborted": True, "session_id": session_id}
-
-    return {"cancel_requested": True, "aborted": False, "session_id": ""}
+OPENCODE_TASK_REGISTRY = generation_cancellation.OpenCodeTaskRegistry(
+    tasks=OPENCODE_TASKS,
+    lock=OPENCODE_TASK_LOCK,
+    get_job=lambda job_id: get_test_job(job_id),
+    update_job=lambda job_id, **updates: update_test_job(job_id, **updates),
+    database_enabled=lambda: is_platform_database_enabled(),
+    abort_session=lambda session_id: abort_opencode_session(session_id),
+)
+register_opencode_task = OPENCODE_TASK_REGISTRY.register
+set_opencode_task_session = OPENCODE_TASK_REGISTRY.set_session
+is_opencode_task_cancelled = OPENCODE_TASK_REGISTRY.is_cancelled
+cleanup_opencode_task = OPENCODE_TASK_REGISTRY.cleanup
+cancel_opencode_task = OPENCODE_TASK_REGISTRY.cancel
 
 
 def opencode_event_stream(timeout=None):
@@ -12385,38 +12297,9 @@ def opencode_event_stream(timeout=None):
 
 
 def format_opencode_execution_error(message):
-    if not isinstance(message, str):
-        return str(message)
-
-    normalized_message = message.lower()
-    if (
-        "unknown certificate verification error" in normalized_message
-        or "unable to get local issuer certificate" in normalized_message
-        or "unable to verify the first certificate" in normalized_message
-    ):
-        return (
-            "OpenCode 模型请求 TLS 证书校验失败。这个错误来自 OpenCode provider 调用，"
-            "不是 Seed 脚本、Playwright MCP 或被测系统页面证书问题。"
-            "请检查当前模型 provider 的网络、代理/VPN 和 CA 信任链，"
-            "或切换到已正确配置证书信任的兼容 provider。"
-        )
-
-    if (
-        "Type validation failed" in message
-        and '"choices"' in message
-        and '"error"' in message
-        and '"status"' in message
-    ):
-        match = OPENCODE_TOOL_STATUS_ERROR_PATTERN.search(message)
-        tool_name = match.group(1) if match else "unknown"
-        return (
-            "OpenCode provider 兼容性错误：上游返回了工具运行状态事件，"
-            "但 OpenCode 当前按 OpenAI choices/error 响应格式解析。"
-            f"触发工具：{tool_name}。请重启 OpenCode Server 后重试；"
-            "如果仍失败，请调整 OpenAI-compatible 输出或改用支持 OpenCode 工具流的模型。"
-        )
-
-    return message
+    return generation_opencode.format_opencode_execution_error(
+        message, OPENCODE_TOOL_STATUS_ERROR_PATTERN
+    )
 
 
 def send_opencode_prompt(prompt, default_agent=None):
@@ -12450,6 +12333,22 @@ def send_opencode_prompt_async(session_id, prompt, default_agent=None):
         build_opencode_prompt_payload(prompt, default_agent=default_agent),
         timeout=30,
         query=opencode_project_query(),
+    )
+
+
+def send_opencode_prompt_cancellable(prompt, job_id, *, default_agent=None, session_title=None):
+    title = session_title or agent_message("generate_plan_title", module="")
+    return generation_cancellation.send_cancellable_prompt(
+        prompt, job_id, default_agent=default_agent, session_title=title,
+        ensure_prompt_files=ensure_project_opencode_prompt_files, register_task=register_opencode_task,
+        is_cancelled=is_opencode_task_cancelled,
+        create_session=lambda payload: opencode_request("/session", payload, timeout=30, query=opencode_project_query()),
+        build_session_payload=build_opencode_session_payload, set_session=set_opencode_task_session,
+        send_prompt=send_opencode_prompt_to_session, abort_session=abort_opencode_session,
+        task_timeout=get_opencode_task_timeout_seconds,
+        timeout_error=lambda seconds: agent_message("opencode_wait_timeout", duration=format_timeout_seconds(seconds)),
+        cancelled_error=lambda: OpencodeTaskCancelled(agent_message("task_cancelled_generic")),
+        cleanup_task=cleanup_opencode_task,
     )
 
 
@@ -12532,6 +12431,7 @@ def stream_plan_generation(
     finish_job_on_success=True,
     validate_plan_completion=False,
     agent_cancel_check=None,
+    cancel_cleanup=None,
 ):
     session_id = None
     prompt_error = []
@@ -12544,6 +12444,7 @@ def stream_plan_generation(
     next_tool_input_buffers = {}
     streamed_any_text = False
     terminalized = False
+    cancel_cleanup_completed = False
     output_batcher = AgentOutputBatcher()
     log_redaction_config = [None]
     job_log_writer = (
@@ -12852,6 +12753,17 @@ def stream_plan_generation(
                 abort_opencode_session(session_id)
             except Exception:
                 pass
+
+    def run_cancel_cleanup():
+        nonlocal cancel_cleanup_completed
+        if cancel_cleanup_completed or cancel_cleanup is None:
+            return ""
+        cancel_cleanup_completed = True
+        try:
+            cancel_cleanup()
+            return ""
+        except Exception as cleanup_error:
+            return str(cleanup_error)
 
     def raise_if_cancelled():
         if agent_cancel_check is not None:
@@ -13369,17 +13281,21 @@ def stream_plan_generation(
 
         yield from emit_success_result()
     except OpencodeTaskCancelled as exc:
+        cleanup_error = run_cancel_cleanup()
         terminal_delta = stage_terminal_result("cancelled", exc)
         if terminal_delta:
             yield terminal_delta
         yield emit_status("cancelled", str(exc))
         yield from emit_log(str(exc), persist=False)
+        if cleanup_error:
+            yield from emit_log(f"取消后的文件回滚失败：{cleanup_error}", persist=False)
         done_payload = {"ok": False, "status": "cancelled", "error": str(exc)}
         if job_id:
             done_payload["job_id"] = job_id
             done_payload["job"] = safe_serialized_job()
         yield sse_payload("done", done_payload)
     except GeneratorExit:
+        run_cancel_cleanup()
         pending_batch = output_batcher.finish(reason="generator-exit")
         if pending_batch is not None and job_log_writer is not None:
             try:
@@ -14979,12 +14895,16 @@ def test_project_database_restore():
 
 @app.post("/api/requirements/<requirement_uid>/analysis-stream")
 def analyze_requirement_stream(requirement_uid):
+    payload = request.get_json(silent=True) or {}
     try:
         requirement = get_requirement_by_uid(requirement_uid)
         if not requirement:
             return jsonify({"error": "需求不存在。"}), 404
+        job_id = sanitize_job_id(
+            str(payload.get("job_id") or f"requirement-analysis-{uuid.uuid4().hex}").strip()
+        )
         response = Response(
-            stream_with_context(stream_requirement_analysis(requirement)),
+            stream_with_context(stream_requirement_analysis(requirement, job_id=job_id)),
             mimetype="text/event-stream",
         )
         response.headers["Cache-Control"] = "no-cache"
@@ -15027,7 +14947,7 @@ def generate_requirement_module_plan_stream(requirement_uid, module_uid):
             if generation_mode == "multiple"
             else build_generation_prompt(prompt, target_file)
         )
-        job_id = f"planner-{uuid.uuid4().hex}"
+        job_id = sanitize_job_id(str(payload.get("job_id") or f"planner-{uuid.uuid4().hex}").strip())
         create_test_job(
             "planner",
             job_id=job_id,
@@ -15096,8 +15016,10 @@ def generate_requirement_module_plan_stream(requirement_uid, module_uid):
                     success_payload_factory=finalize_requirement_plan_payload,
                     session_title=agent_message("requirement_plan_title", module=module_name),
                     success_message=agent_message("requirement_plan_success", target=target_file),
+                    cancel_job_id=job_id,
                     job_id=job_id,
                     validate_plan_completion=generation_mode == PLAN_GENERATION_MODE_MULTIPLE,
+                    cancel_cleanup=lambda: target_file.unlink(missing_ok=True),
                 )
             ),
             mimetype="text/event-stream",
@@ -15507,7 +15429,7 @@ def create_plan_generation_stream():
         if generation_mode == "multiple"
         else build_generation_prompt(prompt, target_file)
     )
-    job_id = f"planner-{uuid.uuid4().hex}"
+    job_id = sanitize_job_id(str(payload.get("job_id") or f"planner-{uuid.uuid4().hex}").strip())
     try:
         create_test_job(
             "planner",
@@ -15579,8 +15501,10 @@ def create_plan_generation_stream():
                 default_agent="playwright-test-planner",
                 setup_targets=build_setup_targets(),
                 success_payload_factory=finalize_plan_generation_payload,
+                cancel_job_id=job_id,
                 job_id=job_id,
                 validate_plan_completion=generation_mode == PLAN_GENERATION_MODE_MULTIPLE,
+                cancel_cleanup=lambda: target_file.unlink(missing_ok=True),
             )
         ),
         mimetype="text/event-stream",
@@ -15618,7 +15542,7 @@ def create_script_generation_stream():
     script_filename = get_generated_script_filename_from_plan_filename(plan_filename)
     target_file = get_script_file(module_name, script_filename)
     plan_asset = sync_plan_asset(module_name, plan_file, change_source="manual", message=f"sync plan: {module_name}/{plan_filename}")
-    job_id = f"generator-{uuid.uuid4().hex}"
+    job_id = sanitize_job_id(str(payload.get("job_id") or f"generator-{uuid.uuid4().hex}").strip())
     try:
         create_test_job(
             "generator",
@@ -15669,6 +15593,12 @@ def create_script_generation_stream():
         )
         return payload
 
+    def cleanup_cancelled_generation():
+        restore_snapshot_files(snapshot)
+        cleanup_new_generated_script_files(script_dir, existing_script_names)
+        cleanup_new_managed_files(snapshot)
+        candidate_file.unlink(missing_ok=True)
+
     full_prompt = build_script_generation_prompt(prompt, module_name, plan_file, script_dir, target_file, candidate_file)
     response = Response(
         stream_with_context(
@@ -15686,7 +15616,9 @@ def create_script_generation_stream():
                     filename=script_filename,
                 ),
                 success_payload_factory=finalize_generation_payload,
+                cancel_job_id=job_id,
                 job_id=job_id,
+                cancel_cleanup=cleanup_cancelled_generation,
             )
         ),
         mimetype="text/event-stream",
@@ -15729,6 +15661,7 @@ def create_script_run_stream():
         return jsonify({"error": f"创建脚本修复任务失败：{exc}"}), 500
 
     started_at = time.time()
+    repair_snapshot = managed_file_snapshot([script_file])
 
     def finalize_healer_payload():
         result = build_run_video_result(started_at)
@@ -15767,6 +15700,7 @@ def create_script_run_stream():
                 ),
                 cancel_job_id=job_id,
                 job_id=job_id,
+                cancel_cleanup=lambda: restore_snapshot_files(repair_snapshot),
             )
         ),
         mimetype="text/event-stream",
@@ -15776,17 +15710,30 @@ def create_script_run_stream():
     return response
 
 
-@app.post("/api/script-run-cancel")
-def cancel_script_run_stream():
-    payload = request.get_json(silent=True) or {}
-    job_id = str(payload.get("job_id", "")).strip()
-
+def cancel_test_job_response(job_id):
     try:
-        return jsonify(cancel_opencode_task(job_id))
+        raw_job_id = str(job_id or "").strip()
+        if not raw_job_id:
+            raise ValueError("job_id cannot be empty.")
+        job_id = sanitize_job_id(raw_job_id)
+        if is_platform_database_enabled() and not get_test_job(job_id):
+            return jsonify({"error": "任务不存在。"}), 404
+        return jsonify({**cancel_opencode_task(job_id), "job_id": job_id})
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
     except Exception as exc:
         return jsonify({"error": f"取消 OpenCode 任务失败：{exc}"}), 500
+
+
+@app.post("/api/jobs/<job_id>/cancel")
+def cancel_test_job(job_id):
+    return cancel_test_job_response(job_id)
+
+
+@app.post("/api/script-run-cancel")
+def cancel_script_run_stream():
+    payload = request.get_json(silent=True) or {}
+    return cancel_test_job_response(payload.get("job_id"))
 
 
 @app.post("/api/script-executions")

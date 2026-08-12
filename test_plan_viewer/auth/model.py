@@ -231,6 +231,12 @@ AUTH_API_PERMISSION_POLICY = _build_api_permission_policy(
         ),
     ),
     (
+        ("menu.requirements", "menu.plans", "menu.scripts", "menu.testSuites"),
+        (
+            ("cancel_test_job", "POST"),
+        ),
+    ),
+    (
         ("menu.agent",),
         (
             ("get_project_agent_item_retry_flows_api", "GET"),

@@ -206,6 +206,8 @@ window.WaterfallTranslations.en = {
     "正在通过模块批量执行运行脚本。": "Running scripts through bulk module execution.", "正在批量执行脚本": "Running scripts in bulk",
     "执行": "Run", "执行中": "Running", "执行失败": "Run failed", "执行完成": "Run completed", "批量执行失败": "Bulk execution failed",
     "任务已取消": "Task cancelled", "已取消": "Cancelled", "成功": "Succeeded", "失败": "Failed", "排队": "Queued", "进行中": "In progress",
+    "终止生成": "Stop generation", "终止解析": "Stop analysis", "终止修复": "Stop repair", "正在终止…": "Stopping…",
+    "正在终止任务": "Stopping task", "正在终止解析": "Stopping analysis", "解析已取消": "Analysis cancelled", "重新解析": "Analyze again", "终止中": "Stopping",
     "当前模块暂无脚本。": "There are no scripts in this module.", "暂无实时输出。": "No live output yet.", "暂无执行记录": "No execution history",
     "暂无模块执行记录": "No module execution history", "最近执行记录": "Recent execution history", "未修复": "Not repaired", "未执行": "Not run",
     "未找到 Playwright Report": "Playwright report not found", "未找到执行视频": "Execution video not found", "耗时": "Duration", "进行时间": "Elapsed",

@@ -276,6 +276,8 @@ def ensure_platform_database_schema(config=None, *, dependencies, state=None):
                       coverage_profile VARCHAR(32) NOT NULL DEFAULT 'core',
                       prompt_customized TINYINT(1) NOT NULL DEFAULT 0,
                       prompt_context_json LONGTEXT NULL,
+                      cancel_requested TINYINT(1) NOT NULL DEFAULT 0,
+                      opencode_session_id VARCHAR(128) NULL,
                       log_path TEXT NULL,
                       log_tail LONGTEXT NULL,
                       log_size BIGINT NOT NULL DEFAULT 0,
@@ -1005,6 +1007,8 @@ def ensure_platform_database_schema(config=None, *, dependencies, state=None):
                 ensure_mysql_column(cursor, config, "test_jobs", "coverage_profile", "coverage_profile VARCHAR(32) NOT NULL DEFAULT 'core'")
                 ensure_mysql_column(cursor, config, "test_jobs", "prompt_customized", "prompt_customized TINYINT(1) NOT NULL DEFAULT 0")
                 ensure_mysql_column(cursor, config, "test_jobs", "prompt_context_json", "prompt_context_json LONGTEXT NULL")
+                ensure_mysql_column(cursor, config, "test_jobs", "cancel_requested", "cancel_requested TINYINT(1) NOT NULL DEFAULT 0")
+                ensure_mysql_column(cursor, config, "test_jobs", "opencode_session_id", "opencode_session_id VARCHAR(128) NULL")
                 ensure_mysql_column(cursor, config, "agent_runs", "plan_generation_json", "plan_generation_json LONGTEXT NULL")
                 ensure_mysql_index(
                     cursor,

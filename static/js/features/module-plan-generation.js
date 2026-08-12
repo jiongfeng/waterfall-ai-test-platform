@@ -27,6 +27,7 @@ function createModulePlanGenerationFeature(deps) {
     parseSseBlock,
     getDefaultScriptTargetPath,
     getProjectRequestHeaders,
+    createClientJobId,
     persistViewState,
     loadScriptTree,
     renderSideList,
@@ -301,7 +302,13 @@ function handleModulePlanScriptStreamEvent({ event, data }, previousResult, modu
   }
 
   if (event === "done") {
-    const status = data.ok === false ? "failed" : previousResult.status === "running" ? "succeeded" : previousResult.status;
+    const status = data.status === "cancelled"
+      ? "cancelled"
+      : data.ok === false
+        ? "failed"
+        : previousResult.status === "running"
+          ? "succeeded"
+          : previousResult.status;
     const nextResult = {
       ...previousResult,
       status,
@@ -354,6 +361,8 @@ async function generateSelectedModulePlanScripts() {
     ]),
   );
   state.scriptGeneration.isRunning = true;
+  state.scriptGeneration.cancelRequested = false;
+  state.scriptGeneration.currentJobId = "";
   state.plans.bulkSelectionMode = false;
   state.plans.selectedPlanFiles.clear();
   state.plans.selectedPlanFile = null;
@@ -373,10 +382,17 @@ async function generateSelectedModulePlanScripts() {
   setNotice("正在批量生成脚本，请稍候。");
 
   let hasFailure = false;
+  let wasCancelled = false;
   const renderTimer = window.setInterval(() => renderModulePlanScriptBatchRecord(), 1000);
 
   try {
     for (const planFilename of planFilenames) {
+      if (state.scriptGeneration.cancelRequested) {
+        wasCancelled = true;
+        break;
+      }
+      const jobId = createClientJobId("generator");
+      state.scriptGeneration.currentJobId = jobId;
       const promptFixed = renderScriptPromptFromTemplate(moduleName, planFilename);
       const promptNote = SCRIPT_PROMPT_NOTE_DEFAULT;
       const prompt = `${promptFixed.trim()}\n${promptNote.trim()}`.trim();
@@ -391,6 +407,7 @@ async function generateSelectedModulePlanScripts() {
         error: "",
         started_at: itemStartedAt,
         finished_at: null,
+        job_id: jobId,
       });
       setPlanScriptGenerationRecord(moduleName, planFilename, {
         status: "running",
@@ -403,6 +420,7 @@ async function generateSelectedModulePlanScripts() {
         target_path: getDefaultScriptTargetPath(moduleName),
         started_at: itemStartedAt,
         finished_at: null,
+        job_id: jobId,
       });
       renderModulePlanList();
 
@@ -416,6 +434,7 @@ async function generateSelectedModulePlanScripts() {
             module_name: moduleName,
             plan_filename: planFilename,
             prompt,
+            job_id: jobId,
           }),
         });
 
@@ -435,7 +454,7 @@ async function generateSelectedModulePlanScripts() {
 
         const result = await readModulePlanScriptGenerationStream(response, moduleName, planFilename);
         const finishedAt = Date.now();
-        if (result.status !== "succeeded" && result.status !== "failed") {
+        if (!["succeeded", "failed", "cancelled"].includes(result.status)) {
           result.status = "failed";
           result.error = "流式响应提前结束。";
         }
@@ -456,31 +475,45 @@ async function generateSelectedModulePlanScripts() {
         });
         if (result.status === "failed") {
           hasFailure = true;
+        } else if (result.status === "cancelled") {
+          wasCancelled = true;
+          break;
         }
       } catch (error) {
-        hasFailure = true;
+        const cancelled = state.scriptGeneration.cancelRequested;
+        hasFailure = hasFailure || !cancelled;
+        wasCancelled = wasCancelled || cancelled;
         const finishedAt = Date.now();
         const batch = state.plans.scriptGenerationBatches[getPlanModuleRecordKey(moduleName)] || {};
         const item = batch.items?.[planFilename] || {};
         const prefix = item.logs && !item.logs.endsWith("\n") ? "\n" : "";
         const logs = `${item.logs || ""}${prefix}${error.message}\n`;
         setPlanScriptGenerationBatchItem(moduleName, planFilename, {
-          status: "failed",
+          status: cancelled ? "cancelled" : "failed",
           error: error.message,
           logs,
           finished_at: finishedAt,
         });
         setPlanScriptGenerationRecord(moduleName, planFilename, {
-          status: "failed",
+          status: cancelled ? "cancelled" : "failed",
           error: error.message,
           logs,
           finished_at: finishedAt,
         });
+        if (cancelled) {
+          break;
+        }
+      } finally {
+        state.scriptGeneration.currentJobId = "";
       }
     }
 
+    if (wasCancelled || state.scriptGeneration.cancelRequested) {
+      markPlanScriptGenerationItemsCancelled(moduleName);
+      wasCancelled = true;
+    }
     setPlanScriptGenerationBatch(moduleName, {
-      status: hasFailure ? "failed" : "succeeded",
+      status: wasCancelled ? "cancelled" : hasFailure ? "failed" : "succeeded",
       active_plan_filename: "",
       finished_at: Date.now(),
     });
@@ -491,11 +524,61 @@ async function generateSelectedModulePlanScripts() {
     state.plans.activeTab = PLAN_VIEW_TAB.SCRIPT_GENERATION;
     persistViewState();
     renderSideList();
-    setNotice(hasFailure ? "批量生成脚本完成，存在失败计划。" : "批量生成脚本完成。", hasFailure ? "error" : "success");
+    setNotice(
+      wasCancelled ? "批量生成脚本已终止。" : hasFailure ? "批量生成脚本完成，存在失败计划。" : "批量生成脚本完成。",
+      wasCancelled ? "" : hasFailure ? "error" : "success",
+    );
   } finally {
     window.clearInterval(renderTimer);
     state.scriptGeneration.isRunning = false;
+    state.scriptGeneration.cancelRequested = false;
+    state.scriptGeneration.currentJobId = "";
     renderContent();
+  }
+}
+
+function markPlanScriptGenerationItemsCancelled(moduleName) {
+  const batch = state.plans.scriptGenerationBatches[getPlanModuleRecordKey(moduleName)];
+  (batch?.plan_filenames || []).forEach((planFilename) => {
+    const item = batch.items?.[planFilename];
+    if (item && ["queued", "running", "cancelling"].includes(item.status)) {
+      const updates = {
+        status: "cancelled",
+        error: item.error || "用户终止了生成任务。",
+        finished_at: Date.now(),
+      };
+      setPlanScriptGenerationBatchItem(moduleName, planFilename, updates);
+      setPlanScriptGenerationRecord(moduleName, planFilename, updates);
+    }
+  });
+}
+
+async function cancelModulePlanScriptGenerationBatch() {
+  if (!state.scriptGeneration.isRunning || state.scriptGeneration.cancelRequested) {
+    return;
+  }
+  if (!window.confirm("确定终止本次生成吗？已产生的日志会保留，未完成的结果不会保存。")) {
+    return;
+  }
+
+  const moduleName = state.plans.selectedModule;
+  const jobId = state.scriptGeneration.currentJobId;
+  state.scriptGeneration.cancelRequested = true;
+  setPlanScriptGenerationBatch(moduleName, { status: "cancelling" });
+  renderContent();
+  try {
+    if (jobId) {
+      await requestJson(`/api/jobs/${encodePathPart(jobId)}/cancel`, {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+    }
+    markPlanScriptGenerationItemsCancelled(moduleName);
+  } catch (error) {
+    state.scriptGeneration.cancelRequested = false;
+    setPlanScriptGenerationBatch(moduleName, { status: "running" });
+    renderContent();
+    setNotice(error.message, "error");
   }
 }
 
@@ -628,11 +711,21 @@ function renderModulePlanScriptBatchRecord() {
   elements.modulePlanScriptBatchList.classList.toggle("hidden", !hasBatch);
   elements.modulePlanScriptBatchHeader.classList.toggle("hidden", !hasBatch);
   elements.modulePlanScriptBatchSummary.textContent =
-    batch?.status === "running" || isRunningBatch
+    batch?.status === "cancelling"
+      ? `正在终止批量生成：已取消 ${statusCounts.cancelled || 0}，成功 ${statusCounts.succeeded || 0}，失败 ${statusCounts.failed || 0}`
+      : batch?.status === "running" || isRunningBatch
       ? `批量生成脚本进行中：成功 ${statusCounts.succeeded || 0}，失败 ${statusCounts.failed || 0}，进行中 ${
           statusCounts.running || 0
         }，排队 ${statusCounts.queued || 0}`
-      : `批量生成脚本记录：成功 ${statusCounts.succeeded || 0}，失败 ${statusCounts.failed || 0}`;
+      : `批量生成脚本记录：成功 ${statusCounts.succeeded || 0}，失败 ${statusCounts.failed || 0}，取消 ${statusCounts.cancelled || 0}`;
+  if (elements.modulePlanScriptBatchCancelButton) {
+    const canCancel = state.scriptGeneration.isRunning && ["running", "cancelling"].includes(batch?.status);
+    elements.modulePlanScriptBatchCancelButton.classList.toggle("hidden", !canCancel);
+    elements.modulePlanScriptBatchCancelButton.disabled = state.scriptGeneration.cancelRequested;
+    elements.modulePlanScriptBatchCancelButton.textContent = state.scriptGeneration.cancelRequested
+      ? "正在终止…"
+      : "终止生成";
+  }
 
   elements.modulePlanScriptBatchList.replaceChildren();
   if (!hasBatch) {
@@ -699,6 +792,7 @@ return {
   readModulePlanScriptGenerationStream,
   handleModulePlanScriptStreamEvent,
   generateSelectedModulePlanScripts,
+  cancelModulePlanScriptGenerationBatch,
   renderModulePlanList,
   renderModulePlanScriptBatchRecord,
 };

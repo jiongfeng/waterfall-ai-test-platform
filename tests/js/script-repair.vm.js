@@ -212,6 +212,15 @@ assert.strictEqual(cancelled.status, "cancelled");
 assert.strictEqual(elements.scriptRunJobStatus.textContent, "任务已取消");
 assert.strictEqual(elements.scriptRunSubmit.textContent, "重新修复");
 
+const cancelledDone = feature.handleScriptRunStreamEvent(
+  { event: "done", data: { ok: false, status: "cancelled", error: "用户终止" } },
+  { status: "running", logs: "诊断\n" },
+  "登录",
+  "登录成功.spec.ts",
+);
+assert.strictEqual(cancelledDone.status, "cancelled");
+assert.strictEqual(elements.scriptRunJobStatus.textContent, "任务已取消");
+
 const failed = feature.handleScriptRunStreamEvent(
   { event: "done", data: { ok: false, error: "修复失败" } },
   { status: "running", logs: "诊断\n" },

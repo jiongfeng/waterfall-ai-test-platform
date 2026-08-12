@@ -292,6 +292,10 @@
                 <code id="planRecordTargetPath"></code>
               </div>
 
+              <div class="script-repair-actions">
+                <button class="danger-primary-button hidden" id="planGenerationCancelButton" type="button">终止生成</button>
+              </div>
+
               <div class="job-output hidden" id="planRecordJobOutput">
                 <div class="job-status" id="planRecordJobStatus">任务进行中</div>
                 <pre id="planRecordJobLogs"></pre>
@@ -354,6 +358,7 @@
           <section class="module-repair-record hidden" id="modulePlanScriptBatchRecord">
             <div class="module-repair-record-header hidden" id="modulePlanScriptBatchHeader">
               <div class="module-repair-summary" id="modulePlanScriptBatchSummary">批量生成脚本进行中</div>
+              <button class="danger-primary-button" id="modulePlanScriptBatchCancelButton" type="button">终止生成</button>
             </div>
             <div class="execution-empty" id="modulePlanScriptBatchEmpty">
               <h3>暂无批量生成脚本记录</h3>
@@ -429,6 +434,7 @@
                 <div class="module-repair-record requirement-plan-batch-record" id="requirementPlanGenerationBatchRecord">
                   <div class="module-repair-record-header hidden" id="requirementPlanGenerationBatchHeader">
                     <div class="module-repair-summary" id="requirementPlanGenerationBatchSummary">批量生成计划进行中</div>
+                    <button class="danger-primary-button" id="requirementPlanGenerationBatchCancelButton" type="button">终止生成</button>
                   </div>
                   <div class="execution-empty" id="requirementPlanGenerationBatchEmpty">
                     <h3>暂无批量生成计划记录</h3>

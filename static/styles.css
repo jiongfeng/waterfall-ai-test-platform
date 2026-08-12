@@ -669,6 +669,23 @@ button:disabled {
   background: #fef2f2;
 }
 
+.danger-primary-button {
+  min-width: 64px;
+  height: 30px;
+  border: 1px solid var(--danger);
+  border-radius: 3px;
+  background: var(--danger);
+  color: #ffffff;
+  padding: 0 11px;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.danger-primary-button:hover:not(:disabled) {
+  border-color: #8f1c14;
+  background: #8f1c14;
+}
+
 .compact-button {
   min-width: 54px;
   height: 26px;
@@ -1222,7 +1239,8 @@ button:disabled {
   font-weight: 650;
 }
 
-.module-repair-record-header .secondary-button {
+.module-repair-record-header .secondary-button,
+.module-repair-record-header .danger-primary-button {
   flex: 0 0 auto;
 }
 
