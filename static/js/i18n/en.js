@@ -142,7 +142,7 @@ window.WaterfallTranslations.en = {
     "修复脚本": "Repair script", "编辑": "Edit", "暂无测试计划": "No test plans yet",
     "测试资源": "Test assets", "历史执行记录": "Execution history", "请选择一条执行记录。": "Select an execution record.",
     "共 0 条计划": "0 plans", "计划名称": "Plan name", "对应脚本": "Related script", "共 0 条相关脚本": "0 related scripts",
-    "共 0 个": "0 total", "共 0 个候选模块": "0 candidate modules", "取消修复": "Cancel repair",
+    "共 0 个": "0 total", "共 0 个项目": "0 projects", "共 0 个候选模块": "0 candidate modules", "取消修复": "Cancel repair",
     "左侧会显示 specs 目录下符合规则的模块。": "The sidebar lists valid modules from the specs directory.",
     "测试脚本内容": "Test script content", "测试计划内容": "Test plan content", "执行记录": "Execution history",
     "修复记录": "Repair history", "生成测试计划记录": "Test-plan generation history", "生成脚本记录": "Script-generation history",
