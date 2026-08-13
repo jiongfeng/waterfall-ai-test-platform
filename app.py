@@ -1772,6 +1772,9 @@ def _project_web_services():
                 if project.get("project_key")
             }
         ),
+        get_default_project_language=(
+            lambda: get_config_default_project_language()
+        ),
         parse_target_system_config=(
             lambda value: parse_target_system_config(value)
         ),
@@ -1813,6 +1816,10 @@ def get_config_projects():
 
 def get_config_default_project():
     return _project_service().get_config_default_project()
+
+
+def get_config_default_project_language():
+    return _project_service().get_config_default_project_language()
 
 
 def serialize_project(project, include_sensitive=False):

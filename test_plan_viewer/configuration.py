@@ -109,7 +109,11 @@ def normalize_project_language(value, default=DEFAULT_PROJECT_LANGUAGE):
 
     normalized = str(value or "").strip()
     if not normalized:
-        return default
+        normalized = str(default or DEFAULT_PROJECT_LANGUAGE).strip()
+    if normalized.lower() == "zh-cn":
+        return "zh-CN"
+    if normalized.lower() == "en":
+        return "en"
     if normalized not in SUPPORTED_PROJECT_LANGUAGES:
         raise ValueError("Unsupported project language.")
     return normalized
@@ -286,7 +290,13 @@ def parse_target_system_config(value):
     }
 
 
-def parse_project_entry(value, fallback_key=None, fallback_name=None):
+def parse_project_entry(
+    value,
+    fallback_key=None,
+    fallback_name=None,
+    *,
+    default_language=DEFAULT_PROJECT_LANGUAGE,
+):
     if not isinstance(value, dict):
         raise ValueError("config.json projects items must be objects.")
 
@@ -317,6 +327,10 @@ def parse_project_entry(value, fallback_key=None, fallback_name=None):
         if value.get("database_baseline") not in (None, "")
         else None,
         "plan_generation": parse_plan_generation_config(value.get("plan_generation")),
+        "language": normalize_project_language(
+            value.get("language"),
+            default=default_language,
+        ),
         "status": PROJECT_STATUS_DISABLED if value.get("status") == PROJECT_STATUS_DISABLED else PROJECT_STATUS_ACTIVE,
         "is_default": bool(value.get("is_default", False)),
     }
@@ -324,12 +338,18 @@ def parse_project_entry(value, fallback_key=None, fallback_name=None):
 
 def parse_projects_config(config):
     raw_projects = config.get("projects")
+    default_language = normalize_project_language(
+        config.get("default_project_language"),
+    )
     projects = []
     seen = set()
 
     if isinstance(raw_projects, list):
         for raw_project in raw_projects:
-            project = parse_project_entry(raw_project)
+            project = parse_project_entry(
+                raw_project,
+                default_language=default_language,
+            )
             if project["project_key"] in seen:
                 raise ValueError(f"config.json projects has duplicate key: {project['project_key']}")
             seen.add(project["project_key"])
@@ -347,7 +367,8 @@ def parse_projects_config(config):
                     "name": "默认项目",
                     "playwright_project_root": legacy_root,
                     "is_default": True,
-                }
+                },
+                default_language=default_language,
             ),
         )
 
@@ -498,6 +519,7 @@ def load_config(config_path=None):
             "playwright_project_root": "",
             "projects": [],
             "default_project_key": "",
+            "default_project_language": DEFAULT_PROJECT_LANGUAGE,
             "project_workspace_root": "",
             "project_template_dependency_source_root": "",
             "error": f"Config file not found: {path}",
@@ -511,6 +533,7 @@ def load_config(config_path=None):
             "playwright_project_root": "",
             "projects": [],
             "default_project_key": "",
+            "default_project_language": DEFAULT_PROJECT_LANGUAGE,
             "project_workspace_root": "",
             "project_template_dependency_source_root": "",
             "error": f"Invalid JSON in config.json: {exc}",
@@ -518,6 +541,9 @@ def load_config(config_path=None):
 
     project_root = str(config.get("playwright_project_root", "")).strip()
     try:
+        default_project_language = normalize_project_language(
+            config.get("default_project_language"),
+        )
         projects, default_project_key = parse_projects_config(config)
         default_project = next(project for project in projects if project["project_key"] == default_project_key)
         project_root = project_root or default_project["playwright_project_root"]
@@ -539,6 +565,7 @@ def load_config(config_path=None):
             "playwright_project_root": project_root,
             "projects": [],
             "default_project_key": "",
+            "default_project_language": DEFAULT_PROJECT_LANGUAGE,
             "project_workspace_root": str(config.get("project_workspace_root", "")).strip(),
             "project_template_dependency_source_root": str(
                 config.get("project_template_dependency_source_root", "")
@@ -566,6 +593,7 @@ def load_config(config_path=None):
         ).strip(),
         "projects": projects,
         "default_project_key": default_project_key,
+        "default_project_language": default_project_language,
         "platform_database": platform_database,
         "database_baseline": database_baseline,
         "auth": auth,

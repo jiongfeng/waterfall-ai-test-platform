@@ -526,6 +526,12 @@ class ProjectServiceTests(unittest.TestCase):
                 workspace_root,
                 initialize_created_project_directory=initialize,
                 create_project_record=create_record,
+                load_config=lambda: {
+                    "error": None,
+                    "projects": [],
+                    "default_project_key": "",
+                    "default_project_language": "zh-cn",
+                },
             )
 
             created = service.ProjectService(
@@ -536,6 +542,7 @@ class ProjectServiceTests(unittest.TestCase):
 
             self.assertEqual(created["project_id"], 9)
             self.assertEqual(created["name"], "Demo")
+            self.assertEqual(created["language"], "zh-CN")
             self.assertEqual(len(initialized), 1)
             self.assertTrue(
                 (workspace_root / "demo" / "marker.txt").is_file()
@@ -657,6 +664,11 @@ class ProjectRouteTests(unittest.TestCase):
                 "get_project_workspace_root_text",
                 return_value="/workspace",
             ),
+            patch.object(
+                app,
+                "get_config_default_project_language",
+                return_value="zh-CN",
+            ),
         ):
             response = self.client.get("/api/projects")
 
@@ -668,6 +680,7 @@ class ProjectRouteTests(unittest.TestCase):
             "",
         )
         self.assertEqual(payload["project_workspace_root"], "/workspace")
+        self.assertEqual(payload["default_project_language"], "zh-CN")
         list_projects.assert_called_once_with()
 
     def test_create_route_preserves_status_and_error_contracts(self):

@@ -30,6 +30,7 @@ class ProjectWebServices:
         lambda _project_key, _confirmation_name, _current_project_key: {}
     )
     get_config_project_keys: Callable = lambda: set()
+    get_default_project_language: Callable = lambda: "en"
 
 
 def list_projects_response(services):
@@ -65,6 +66,9 @@ def list_projects_response(services):
                 "default_project": default_project,
                 "project_workspace_root": (
                     services.get_project_workspace_root_text()
+                ),
+                "default_project_language": (
+                    services.get_default_project_language()
                 ),
                 "error": None,
             }

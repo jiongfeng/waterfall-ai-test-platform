@@ -48,6 +48,7 @@ Docker 包装脚本默认读取仓库根目录 `config.json`，也可用
 ```json
 {
   "project_workspace_root": "/data/playwright-workspaces",
+  "default_project_language": "en",
   "opencode_server_url": "http://opencode:4096",
   "opencode_username": "opencode",
   "opencode_password": "",
@@ -189,6 +190,11 @@ OpenCode、平台数据库和被测系统凭据按原有配置字段保存：
 `status` 支持 `active` 和 `disabled`。禁用项目不会删除工作区、Git 历史或
 数据库记录。`default_project_key` 必须指向已配置项目；未提供时选择标记为
 默认的项目，或回退到第一个项目。
+
+`default_project_language` 支持 `zh-CN` 和 `en`，未配置时默认为 `en`。
+配置中也兼容大小写不同的 `zh-cn`，运行时会统一为 `zh-CN`。该值用于默认项目
+首次初始化以及新增项目弹窗的默认选项；新增项目可显式选择其他语言。已经保存到
+数据库的项目语言不会因为修改该配置或重启平台而被覆盖。
 
 ## OpenCode
 

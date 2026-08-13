@@ -134,6 +134,17 @@ def parse_and_validate(raw: bytes) -> dict[str, object]:
     if default_project_key not in project_keys:
         raise ConfigError("default_project_key must reference an entry in projects")
 
+    configured_language = config.get("default_project_language")
+    if configured_language is not None:
+        default_project_language = _require_nonempty_text(
+            configured_language,
+            "default_project_language",
+        )
+        if default_project_language.lower() not in {"zh-cn", "en"}:
+            raise ConfigError(
+                "default_project_language must be 'zh-CN' or 'en'"
+            )
+
     database = config.get("platform_database")
     if not isinstance(database, dict):
         raise ConfigError("platform_database must be an object")

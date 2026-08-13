@@ -16,6 +16,7 @@ def normalize_create_project_payload(
     *,
     parse_project_key,
     parse_project_path_segment,
+    default_language=DEFAULT_PROJECT_LANGUAGE,
 ):
     """Validate and normalize the stable project-creation payload."""
 
@@ -47,8 +48,8 @@ def normalize_create_project_payload(
             "tests_dir",
         ),
         "language": normalize_project_language(
-            payload.get("language")
-            or DEFAULT_PROJECT_LANGUAGE
+            payload.get("language"),
+            default=normalize_project_language(default_language),
         ),
     }
 

@@ -23,6 +23,7 @@ const PROJECT_MANAGEMENT_ELEMENT_IDS = [
   "projectCreateWorkspaceHint",
   "newProjectKey",
   "newProjectName",
+  "newProjectLanguage",
   "newProjectSpecsDir",
   "newProjectTestsDir",
   "newProjectDescription",
@@ -250,6 +251,7 @@ async function loadProjects() {
   const data = await requestJson("/api/projects");
   state.project.projects = (data.projects || []).map(normalizeProject).filter(Boolean);
   state.project.workspaceRoot = typeof data.project_workspace_root === "string" ? data.project_workspace_root : "";
+  state.project.defaultLanguage = data.default_project_language === "zh-CN" ? "zh-CN" : "en";
   state.project.defaultKey =
     normalizeProject(data.default_project)?.project_key ||
     state.project.projects.find((project) => project.is_default)?.project_key ||
@@ -452,6 +454,7 @@ function clearProjectCreateValidity() {
   [
     elements.newProjectKey,
     elements.newProjectName,
+    elements.newProjectLanguage,
     elements.newProjectSpecsDir,
     elements.newProjectTestsDir,
     elements.newProjectDescription,
@@ -465,6 +468,7 @@ function openProjectCreateModal() {
   clearProjectCreateValidity();
   elements.newProjectKey.value = "";
   elements.newProjectName.value = "";
+  elements.newProjectLanguage.value = state.project.defaultLanguage;
   elements.newProjectSpecsDir.value = "specs";
   elements.newProjectTestsDir.value = "tests";
   elements.newProjectDescription.value = "";
@@ -487,6 +491,7 @@ async function submitProjectCreate() {
   const payload = {
     project_key: elements.newProjectKey.value.trim(),
     name: elements.newProjectName.value.trim(),
+    language: elements.newProjectLanguage.value,
     specs_dir: elements.newProjectSpecsDir.value.trim() || "specs",
     tests_dir: elements.newProjectTestsDir.value.trim() || "tests",
     description: elements.newProjectDescription.value.trim(),
@@ -870,6 +875,7 @@ function bindProjectManagementEvents() {
   [
     elements.newProjectKey,
     elements.newProjectName,
+    elements.newProjectLanguage,
     elements.newProjectSpecsDir,
     elements.newProjectTestsDir,
     elements.newProjectDescription,

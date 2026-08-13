@@ -537,6 +537,7 @@ const state = {
     currentKey: getStoredProjectKey(),
     current: null,
     defaultKey: "",
+    defaultLanguage: "en",
     workspaceRoot: "",
     isExporting: false,
     isImporting: false,

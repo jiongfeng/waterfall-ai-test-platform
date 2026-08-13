@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
+from test_plan_viewer.configuration import normalize_project_language
 from test_plan_viewer.projects.model import (
     normalize_create_project_payload,
     normalize_update_project_payload,
@@ -64,13 +65,23 @@ class ProjectService:
             return {**projects[0], "project_id": None}
         raise RuntimeError("未配置可用项目。")
 
+    def get_config_default_project_language(self):
+        config = self.dependencies.load_config()
+        if config["error"]:
+            raise RuntimeError(config["error"])
+        return normalize_project_language(
+            config.get("default_project_language")
+        )
+
     def create_project(self, payload):
+        default_language = self.get_config_default_project_language()
         project = normalize_create_project_payload(
             payload,
             parse_project_key=self.dependencies.parse_project_key,
             parse_project_path_segment=(
                 self.dependencies.parse_project_path_segment
             ),
+            default_language=default_language,
         )
         config = self.dependencies.get_platform_database_config()
         if not config.get("enabled"):

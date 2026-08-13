@@ -135,6 +135,17 @@ class DeployRuntimeContractTests(unittest.TestCase):
         self.assertIn("opencode_password still contains a placeholder", result.stderr)
         self.assertNotIn("replace-me", result.stderr)
 
+    def test_configctl_rejects_an_unsupported_default_project_language(self):
+        source = self.temp_path / "config.json"
+        config = self.valid_config()
+        config["default_project_language"] = "fr"
+        self.write_source_config(source, config)
+
+        result = self.run_configctl("validate", "--source", source)
+
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("default_project_language", result.stderr)
+
     def test_configctl_fails_closed_on_nonprivate_runtime_directory(self):
         source = self.temp_path / "config.json"
         runtime = self.temp_path / "runtime"
