@@ -390,6 +390,18 @@ button:disabled {
   border-bottom: 1px solid #edf2f7;
 }
 
+.plan-transfer-sidebar-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.plan-transfer-sidebar-actions .secondary-button {
+  min-height: 28px;
+  padding: 4px 8px;
+}
+
 .create-module-button {
   width: 100%;
   min-height: 28px;
@@ -1510,6 +1522,71 @@ button:disabled {
   gap: 16px;
   overflow: auto;
   padding: 20px 22px;
+}
+
+.plan-transfer-modal {
+  width: min(760px, 100%);
+}
+
+.plan-export-selection-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  color: #475569;
+  font-size: 13px;
+}
+
+.plan-export-selection-toolbar label,
+.plan-export-module-header,
+.plan-export-plan-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.plan-export-tree {
+  min-height: 180px;
+  max-height: 420px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.plan-export-module + .plan-export-module {
+  border-top: 1px solid #e2e8f0;
+}
+
+.plan-export-module-header {
+  padding: 10px 12px;
+  background: #f8fafc;
+  font-weight: 650;
+}
+
+.plan-export-module-plans {
+  display: grid;
+}
+
+.plan-export-plan-row {
+  padding: 8px 12px 8px 34px;
+  color: #334155;
+}
+
+.plan-export-plan-row:hover {
+  background: #f8fbff;
+}
+
+.plan-export-plan-row small {
+  margin-left: auto;
+  color: var(--muted);
+}
+
+.plan-export-empty {
+  margin: 0;
+  padding: 28px 16px;
+  color: var(--muted);
+  text-align: center;
 }
 
 .form-field {

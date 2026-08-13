@@ -867,6 +867,30 @@ class ArchitectureContractTests(unittest.TestCase):
                 self.assertIn(f"function {function_name}(", feature_source)
                 self.assertNotIn(f"function {function_name}(", main_source)
 
+    def test_plan_transfer_ui_is_owned_by_feature_and_plan_sidebar(self):
+        static_dir = app.APP_DIR / "static"
+        main_source = (static_dir / "app.js").read_text(encoding="utf-8")
+        feature_source = (
+            static_dir / "js" / "features" / "plan-transfer.js"
+        ).read_text(encoding="utf-8")
+        template_source = (
+            app.APP_DIR / "templates" / "index.html"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn(
+            "function createPlanTransferFeature(deps)",
+            feature_source,
+        )
+        self.assertIn(
+            "const planTransferFeature = createPlanTransferFeature({",
+            main_source,
+        )
+        plan_wrap_start = template_source.index('id="planCreateWrap"')
+        plan_wrap_end = template_source.index("</div>", plan_wrap_start)
+        plan_wrap = template_source[plan_wrap_start:plan_wrap_end]
+        self.assertIn('id="exportPlansButton"', plan_wrap)
+        self.assertIn('id="importPlansButton"', plan_wrap)
+
     def test_project_settings_ui_is_owned_by_its_feature_factory(self):
         static_dir = app.APP_DIR / "static"
         main_source = (static_dir / "app.js").read_text(encoding="utf-8")

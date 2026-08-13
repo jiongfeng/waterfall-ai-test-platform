@@ -178,6 +178,8 @@ AUTH_API_PERMISSION_POLICY = _build_api_permission_policy(
             ("save_plan", "PUT"),
             ("delete_plan", "DELETE"),
             ("split_plan_cases", "POST"),
+            ("plan_workbook.export_plans_xlsx", "POST"),
+            ("plan_workbook.import_plans_xlsx", "POST"),
             ("get_plan_generation_defaults", "GET"),
             ("create_plan_generation_job", "POST"),
             ("get_plan_generation_job", "GET"),

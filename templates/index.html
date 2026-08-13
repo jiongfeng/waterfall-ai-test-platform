@@ -123,6 +123,10 @@
           </div>
           <div class="sidebar-action" id="planCreateWrap">
             <button class="create-module-button" id="createModuleButton" type="button">新增计划</button>
+            <div class="plan-transfer-sidebar-actions">
+              <button class="secondary-button" id="exportPlansButton" type="button">导出</button>
+              <button class="secondary-button" id="importPlansButton" type="button">导入</button>
+            </div>
           </div>
           <div class="sidebar-action hidden" id="requirementUploadWrap">
             <button class="create-module-button" id="uploadRequirementButton" type="button">上传需求</button>
@@ -581,6 +585,8 @@
 
 {% include "partials/project_modals.html" %}
 
+{% include "partials/plan_transfer_modals.html" %}
+
 {% include "partials/test_suite_modals.html" %}
 
     <script src="{{ url_for('static', filename='js/core/api-client.js') }}"></script>
@@ -595,6 +601,7 @@
     <script src="{{ url_for('static', filename='js/features/module-plan-generation.js') }}"></script>
     <script src="{{ url_for('static', filename='js/features/admin.js') }}"></script>
     <script src="{{ url_for('static', filename='js/features/projects.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/features/plan-transfer.js') }}"></script>
     <script src="{{ url_for('static', filename='js/features/project-settings.js') }}"></script>
     <script src="{{ url_for('static', filename='js/features/setup-preparation.js') }}"></script>
     <script src="{{ url_for('static', filename='js/features/agent-script-preparation.js', v=4) }}"></script>

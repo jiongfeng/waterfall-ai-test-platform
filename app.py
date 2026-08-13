@@ -119,6 +119,7 @@ from test_plan_viewer.platform_records import (
     validate_platform_record_bucket as validate_record_bucket,
     validate_platform_record_key as validate_record_key,
 )
+from test_plan_viewer.plans import workbook as plan_workbook
 from test_plan_viewer.process_output import (
     PROCESS_OUTPUT_ENCODING_FALLBACKS,
     PROCESS_OUTPUT_MOJIBAKE_MARKERS,
@@ -189,6 +190,7 @@ from test_plan_viewer.web import (
     AgentScriptPreparationWebServices,
     AuthWebServices,
     PageInventoryWebServices,
+    PlanWorkbookWebServices,
     PlatformRecordServices,
     ProjectArchiveWebServices,
     ProjectWebServices,
@@ -199,6 +201,7 @@ from test_plan_viewer.web import (
     create_agent_script_preparation_blueprint,
     create_auth_blueprint,
     create_page_inventory_blueprint,
+    create_plan_workbook_blueprint,
     create_platform_records_blueprint,
     create_project_archive_blueprint,
     create_projects_blueprint,
@@ -215,13 +218,6 @@ from test_plan_viewer.web.projects import (
 from test_plan_viewer.web.project_archive import (
     export_project_response,
     import_project_response,
-)
-from test_plan_viewer.web.page_inventory import (
-    create_page_inventory_response,
-    delete_page_inventory_response,
-    import_page_inventory_response,
-    list_page_inventory_response,
-    update_page_inventory_response,
 )
 from test_plan_viewer.web.test_suites import (
     add_test_suite_items_response,
@@ -10881,6 +10877,30 @@ def _page_inventory_web_services():
     )
 
 
+def _plan_workbook_service():
+    return plan_workbook.PlanWorkbookService(
+        plan_workbook.PlanWorkbookDependencies(
+            get_project_key=lambda: get_current_project()["project_key"],
+            get_plan_file=lambda module_name, filename: get_plan_file(module_name, filename),
+            validate_module_name=lambda value: validate_module_name(value),
+            validate_plan_filename=lambda value: validate_plan_filename(value),
+            sync_plan_asset=lambda *args, **kwargs: sync_plan_asset(*args, **kwargs),
+            find_plan_asset=lambda path: get_test_asset_by_path("plan", path),
+            mark_plan_asset_deleted=lambda asset: mark_test_asset_deleted(asset),
+            commit_removed_plan=lambda path, message: ensure_git_commit_for_removed_path(path, message),
+            current_timestamp=lambda: time.strftime("%Y%m%d-%H%M%S"),
+        )
+    )
+
+
+def _plan_workbook_web_services():
+    return PlanWorkbookWebServices(
+        export_plans=lambda selections: _plan_workbook_service().export(selections),
+        import_plans=lambda data, policy: _plan_workbook_service().import_bytes(data, policy),
+        upload_max_bytes=plan_workbook.PLAN_WORKBOOK_MAX_UPLOAD_BYTES,
+    )
+
+
 def serialize_page_inventory(row):
     return page_inventory_model.serialize_page_inventory(
         row,
@@ -15033,36 +15053,6 @@ def generate_requirement_module_plan_stream(requirement_uid, module_uid):
         return jsonify({"error": f"生成测试计划失败：{exc}"}), 500
 
 
-def list_page_inventory():
-    return list_page_inventory_response(
-        _page_inventory_web_services()
-    )
-
-
-def create_page_inventory_item():
-    return create_page_inventory_response(
-        _page_inventory_web_services()
-    )
-
-
-def update_page_inventory_item(inventory_uid):
-    return update_page_inventory_response(
-        _page_inventory_web_services(),
-        inventory_uid,
-    )
-
-
-def delete_page_inventory_item(inventory_uid):
-    return delete_page_inventory_response(
-        _page_inventory_web_services(),
-        inventory_uid,
-    )
-
-
-def import_page_inventory_doc():
-    return import_page_inventory_response(
-        _page_inventory_web_services()
-    )
 @app.get("/api/test-suites/<suite_uid>/execution-records")
 def list_test_suite_execution_records(suite_uid):
     try:
@@ -16586,6 +16576,9 @@ app.register_blueprint(
     create_page_inventory_blueprint(
         _page_inventory_web_services()
     )
+)
+app.register_blueprint(
+    create_plan_workbook_blueprint(_plan_workbook_web_services())
 )
 app.register_blueprint(
     create_test_suites_blueprint(_test_suite_web_services())

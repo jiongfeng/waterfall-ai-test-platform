@@ -908,6 +908,8 @@ const elements = {
   uploadRequirementButton: document.getElementById("uploadRequirementButton"),
   requirementFileInput: document.getElementById("requirementFileInput"),
   createModuleButton: document.getElementById("createModuleButton"),
+  exportPlansButton: document.getElementById("exportPlansButton"),
+  importPlansButton: document.getElementById("importPlansButton"),
   moduleList: document.getElementById("moduleList"),
   moduleSearch: document.getElementById("moduleSearch"),
   refreshButton: document.getElementById("refreshButton"),
@@ -920,6 +922,20 @@ const elements = {
   editSaveButton: document.getElementById("editSaveButton"),
   cancelButton: document.getElementById("cancelButton"),
   notice: document.getElementById("notice"),
+  planExportModal: document.getElementById("planExportModal"),
+  planExportClose: document.getElementById("planExportClose"),
+  planExportCancel: document.getElementById("planExportCancel"),
+  planExportSubmit: document.getElementById("planExportSubmit"),
+  planExportSearch: document.getElementById("planExportSearch"),
+  planExportSelectAll: document.getElementById("planExportSelectAll"),
+  planExportSelectionCount: document.getElementById("planExportSelectionCount"),
+  planExportTree: document.getElementById("planExportTree"),
+  planImportModal: document.getElementById("planImportModal"),
+  planImportClose: document.getElementById("planImportClose"),
+  planImportCancel: document.getElementById("planImportCancel"),
+  planImportSubmit: document.getElementById("planImportSubmit"),
+  planImportFile: document.getElementById("planImportFile"),
+  planImportConflictPolicy: document.getElementById("planImportConflictPolicy"),
   viewerArea: document.getElementById("viewerArea"),
   emptyState: document.getElementById("emptyState"),
   userAdminPanel: document.getElementById("userAdminPanel"),
@@ -1926,6 +1942,22 @@ const {
   switchProject,
 } = projectsFeature;
 projectsFeature.bindProjectManagementEvents();
+
+const planTransferFeature = createPlanTransferFeature({
+  state,
+  elements,
+  document,
+  window,
+  fetch: (...args) => fetch(...args),
+  FormData,
+  getProjectRequestHeaders,
+  readFetchError,
+  getDownloadFilename,
+  loadPlanModules,
+  setNotice,
+  stripMarkdownSuffix,
+});
+planTransferFeature.bind();
 
 
 function isPlainObject(value) {

@@ -218,6 +218,7 @@ for (const filename of [
   "static/js/features/module-plan-generation.js",
   "static/js/features/admin.js",
   "static/js/features/projects.js",
+  "static/js/features/plan-transfer.js",
   "static/js/features/project-settings.js",
   "static/js/features/setup-preparation.js",
   "static/js/features/agent-progress.js",

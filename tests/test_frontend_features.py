@@ -85,6 +85,12 @@ class FrontendFeatureVmTests(unittest.TestCase):
             "projects feature VM smoke: ok",
         )
 
+    def test_plan_transfer_selection_download_and_import_contracts(self):
+        self.run_vm_test(
+            "plan-transfer.vm.js",
+            "plan transfer feature VM smoke: ok",
+        )
+
     def test_project_settings_feature_payload_and_stream_contracts(self):
         self.run_vm_test(
             "project-settings.vm.js",

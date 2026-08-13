@@ -43,6 +43,14 @@ class ApplicationCompositionTests(unittest.TestCase):
             "page_inventory.create_page_inventory",
         )
         self.assertEqual(
+            rules[("/api/plans/export-xlsx", "POST")],
+            "plan_workbook.export_plans_xlsx",
+        )
+        self.assertEqual(
+            rules[("/api/plans/import-xlsx", "POST")],
+            "plan_workbook.import_plans_xlsx",
+        )
+        self.assertEqual(
             rules[("/api/test-suites", "GET")],
             "test_suites.list_test_suites",
         )
