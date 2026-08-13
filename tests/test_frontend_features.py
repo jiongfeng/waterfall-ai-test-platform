@@ -91,6 +91,12 @@ class FrontendFeatureVmTests(unittest.TestCase):
             "plan transfer feature VM smoke: ok",
         )
 
+    def test_static_select_options_use_semantic_translations(self):
+        self.run_vm_test(
+            "i18n-static-options.vm.js",
+            "static option i18n VM smoke: ok",
+        )
+
     def test_project_settings_feature_payload_and_stream_contracts(self):
         self.run_vm_test(
             "project-settings.vm.js",

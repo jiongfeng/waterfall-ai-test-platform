@@ -5,6 +5,7 @@
   const CHINESE = "zh-CN";
   const DYNAMIC_CONTENT_ATTRIBUTE = "data-i18n-dynamic";
   const DYNAMIC_ATTRIBUTES_ATTRIBUTE = "data-i18n-dynamic-attributes";
+  const LOCALIZABLE_TEXT_KEY_ATTRIBUTE = "data-i18n-key";
   const LOCALIZABLE_ATTRIBUTES = ["title", "placeholder", "aria-label", "aria-description"];
   const TEXT_SKIPPED_SELECTOR = [
     "pre",
@@ -222,6 +223,11 @@
 
   function localizeElement(element) {
     if (isAttributeExcluded(element)) return;
+    if (element.hasAttribute(LOCALIZABLE_TEXT_KEY_ATTRIBUTE)) {
+      const key = element.getAttribute(LOCALIZABLE_TEXT_KEY_ATTRIBUTE);
+      const translated = translate(key);
+      if (translated !== key) element.textContent = translated;
+    }
     LOCALIZABLE_ATTRIBUTES.forEach((attribute) => {
       if (!element.hasAttribute(attribute)) return;
       const value = element.getAttribute(attribute);
@@ -237,7 +243,9 @@
     while (walker.nextNode()) textNodes.push(walker.currentNode);
     textNodes.forEach(localizeTextNode);
     if (root.nodeType === Node.ELEMENT_NODE) localizeElement(root);
-    root.querySelectorAll?.("[title], [placeholder], [aria-label], [aria-description]").forEach(localizeElement);
+    root.querySelectorAll?.(
+      `[${LOCALIZABLE_TEXT_KEY_ATTRIBUTE}], [title], [placeholder], [aria-label], [aria-description]`,
+    ).forEach(localizeElement);
   }
 
   function setDynamicContent(element, enabled = true) {
