@@ -57,7 +57,7 @@ flowchart LR
 
 兼容包装必须只做参数转发、依赖装配或返回值适配。新业务规则不应继续写入包装函数。
 
-当前仍是渐进迁移期，而不是“入口已经完全清空”的状态。Agent 主工作流装配、生成/执行 SSE、项目 seed 与数据库基线操作、测试资产编辑及部分执行记录接口仍暂留在 `app.py`；它们是后续迁移边界，不是新增代码的默认落点。逐脚本的生成、执行、一次自动修复、复验、模型分析和人工操作状态机由 `agent/script_preparation.py` 拥有，`web/agent_script_preparation.py` 只负责 HTTP 交付。装配根只注入持久化、模型、脚本操作和时间等外部能力。已抽出的诊断、脚本准备、验证、Prompt 和结果解析能力不能回填到入口。
+当前仍是渐进迁移期，而不是“入口已经完全清空”的状态。Agent 主工作流装配、其余生成/执行 SSE、项目数据库基线操作、测试资产编辑及部分执行记录接口仍暂留在 `app.py`；它们是后续迁移边界，不是新增代码的默认落点。项目 Seed 生成的 HTTP/SSE 边界已迁至 `web/seed.py`，固定模板、模式识别、完成判定、并发租约和产物收口由 `generation/seed.py` 负责。逐脚本的生成、执行、一次自动修复、复验、模型分析和人工操作状态机由 `agent/script_preparation.py` 拥有，`web/agent_script_preparation.py` 只负责 HTTP 交付。装配根只注入持久化、模型、脚本操作和时间等外部能力。已抽出的诊断、脚本准备、验证、Prompt 和结果解析能力不能回填到入口。
 
 ### `test_plan_viewer/web/`
 
@@ -79,6 +79,7 @@ Blueprint 的 endpoint 名称不是外部契约；URL、method、状态码、JSO
 | `auth` | 登录、当前用户、用户/角色/权限管理（12 条） |
 | `platform_records` | 平台兼容记录读取与保存（2 条） |
 | `projects` | 项目列表、创建与项目设置读写（4 条） |
+| `seed` | 项目 Seed 生成流（1 条） |
 | `project_archive` | 项目 ZIP 导入与导出（2 条） |
 | `setup` | 准备脚本、绑定、运行记录与试运行（10 条） |
 | `requirements` | 需求和候选模块的非流式 CRUD（8 条） |
@@ -86,7 +87,7 @@ Blueprint 的 endpoint 名称不是外部契约；URL、method、状态码、JSO
 | `test_suites` | 测试集及测试集条目的非执行接口（8 条） |
 | `agent_script_preparation` | Agent 脚本准备快照、详情、单项操作和批量操作（4 条） |
 
-同一路由族中除脚本准备外仍留在 `app.py` 的 Agent HTTP、项目 seed/数据库测试、需求分析与计划生成流、计划/脚本生成执行流、测试集执行、jobs 和 assets 接口不应被误认为已迁移；迁移时继续使用独立 Blueprint，并先补齐 SSE 与失败状态 parity 测试。
+同一路由族中除脚本准备外仍留在 `app.py` 的 Agent HTTP、项目 Seed 测试与数据库测试、需求分析与计划生成流、计划/脚本生成执行流、测试集执行、jobs 和 assets 接口不应被误认为已迁移；迁移时继续使用独立 Blueprint，并先补齐 SSE 与失败状态 parity 测试。
 
 ## 3. 后端目录职责
 
@@ -97,7 +98,7 @@ test_plan_viewer/
 ├── auth/               # 登录、角色、权限的策略与领域规则
 ├── core/               # 无框架通用验证
 ├── execution/          # Playwright 命令、结果解析、报告和视频证据
-├── generation/         # 计划/脚本 Prompt 与 cases 拆分
+├── generation/         # 计划/脚本 Prompt、cases 拆分与 Seed 生成领域规则
 ├── infrastructure/     # MySQL 方言、连接和 schema 迁移
 ├── page_inventory/     # 页面清单模型、项目级仓储与导入服务
 ├── platform_records/   # 兼容记录与任务的持久化仓储

@@ -4,7 +4,27 @@ const path = require("path");
 const vm = require("vm");
 
 const appDir = path.resolve(__dirname, "../..");
-const context = { window: {}, TextDecoder };
+const documentListeners = {};
+const documentObject = {
+  activeElement: null,
+  addEventListener(type, listener) {
+    (documentListeners[type] ||= []).push(listener);
+  },
+  dispatch(type, event = {}) {
+    const normalizedEvent = {
+      key: "",
+      target: null,
+      defaultPrevented: false,
+      preventDefault() {
+        this.defaultPrevented = true;
+      },
+      ...event,
+    };
+    documentListeners[type]?.forEach((listener) => listener(normalizedEvent));
+    return normalizedEvent;
+  },
+};
+const context = { window: { document: documentObject }, document: documentObject, TextDecoder };
 vm.createContext(context);
 for (const filename of [
   "static/js/core/sse.js",
@@ -19,11 +39,47 @@ function field(value = "") {
     textContent: "",
     innerHTML: "",
     className: "",
+    hidden: false,
+    disabled: false,
+    attributes: {},
+    listeners: {},
     scrollTop: 0,
     scrollHeight: 0,
     dataset: {},
     classList: { add() {}, remove() {}, toggle() {} },
-    addEventListener() {},
+    addEventListener(type, listener) {
+      this.listeners[type] = listener;
+    },
+    dispatch(type, event = {}) {
+      const normalizedEvent = {
+        key: "",
+        target: this,
+        defaultPrevented: false,
+        preventDefault() {
+          this.defaultPrevented = true;
+        },
+        ...event,
+      };
+      return this.listeners[type]?.(normalizedEvent);
+    },
+    setAttribute(name, value) {
+      this.attributes[name] = String(value);
+    },
+    getAttribute(name) {
+      return this.attributes[name] ?? null;
+    },
+    focus() {
+      documentObject.activeElement = this;
+    },
+    contains() {
+      return false;
+    },
+    querySelector() {
+      return null;
+    },
+    querySelectorAll() {
+      return [];
+    },
   };
 }
 
@@ -35,9 +91,40 @@ const fields = {
   "#projectDefaultCoverageProfile": field("full"),
   "#projectSettingsOutput": field(),
 };
+const seedGenerateToggle = field();
+const seedGenerateMenu = field();
+const visitSeedButton = field();
+const loginSeedButton = field();
+const seedGenerateWrap = field();
+const projectSettingsForm = field();
+const projectSeedTest = field();
+seedGenerateMenu.hidden = true;
+visitSeedButton.dataset.seedMode = "visit_only";
+loginSeedButton.dataset.seedMode = "login";
+const seedModeButtons = [visitSeedButton, loginSeedButton];
+seedGenerateMenu.querySelector = (selector) =>
+  selector.includes("[data-seed-mode]")
+    ? seedModeButtons.find((button) => !selector.includes(":not") || !button.disabled) || null
+    : null;
+seedGenerateMenu.querySelectorAll = (selector) =>
+  selector.includes("[data-seed-mode]")
+    ? seedModeButtons.filter((button) => !selector.includes(":not") || !button.disabled)
+    : [];
+seedGenerateWrap.contains = (target) =>
+  [seedGenerateWrap, seedGenerateToggle, seedGenerateMenu, ...seedModeButtons].includes(target);
+Object.assign(fields, {
+  "#projectSettingsForm": projectSettingsForm,
+  "#projectSeedGenerateToggle": seedGenerateToggle,
+  "#projectSeedGenerateMenu": seedGenerateMenu,
+  "#projectSeedTest": projectSeedTest,
+  ".project-seed-generate-menu-wrap": seedGenerateWrap,
+});
 const projectSettingsPanel = field();
 projectSettingsPanel.querySelector = (selector) => fields[selector] || null;
-projectSettingsPanel.querySelectorAll = () => [];
+projectSettingsPanel.querySelectorAll = (selector) =>
+  selector === "button"
+    ? [seedGenerateToggle, ...seedModeButtons, projectSeedTest]
+    : [];
 const state = {
   project: {
     currentKey: "alpha",
@@ -49,6 +136,8 @@ const state = {
     isSaving: false,
     isGeneratingSeed: false,
     isTestingSeed: false,
+    seedScriptPath: "tests/seed/seed.spec.ts",
+    seedMode: "",
     output: "",
     activeTab: "basic",
     setup: { loaded: false },
@@ -61,6 +150,12 @@ const state = {
 const elements = { projectSettingsPanel };
 let renderCalls = 0;
 const requests = [];
+const seedGenerationRequests = [];
+const notices = [];
+let generatedSeedMode = "visit_only";
+let confirmResult = true;
+const confirmMessages = [];
+const encoder = new TextEncoder();
 const normalizeProject = (value) =>
   value?.project_key ? { ...value, key: value.project_key } : null;
 const feature = context.window.createProjectSettingsFeature({
@@ -68,8 +163,28 @@ const feature = context.window.createProjectSettingsFeature({
   elements,
   DEFAULT_COVERAGE_PROFILE: "core",
   PROJECT_SETTINGS_VIEW_TAB: { BASIC: "basic", SETUP: "setup" },
-  fetch: async () => {
-    throw new Error("focused settings VM paths must not fetch");
+  fetch: async (url, options) => {
+    seedGenerationRequests.push({ url, options });
+    const payload = `event: done\ndata: ${JSON.stringify({
+      ok: true,
+      status: "succeeded",
+      seed_mode: generatedSeedMode,
+    })}\n\n`;
+    let delivered = false;
+    return {
+      ok: true,
+      body: {
+        getReader: () => ({
+          read: async () => {
+            if (delivered) {
+              return { done: true, value: undefined };
+            }
+            delivered = true;
+            return { done: false, value: encoder.encode(payload) };
+          },
+        }),
+      },
+    };
   },
   TextDecoder,
   setupFeature: {
@@ -100,11 +215,12 @@ const feature = context.window.createProjectSettingsFeature({
         plan_generation: { default_coverage_profile: "full" },
         coverage_profiles: [{ key: "full", label: "完整回归" }],
         seed_script_path: "tests/seed/seed.spec.ts",
+        seed_mode: "login",
       };
     }
     throw new Error(`unexpected request ${url}`);
   },
-  setNotice: () => {},
+  setNotice: (message, type) => notices.push({ message, type }),
   setLoading: () => {},
   renderContent: () => {
     renderCalls += 1;
@@ -114,9 +230,28 @@ const feature = context.window.createProjectSettingsFeature({
   isPlainObject: (value) =>
     Boolean(value && typeof value === "object" && !Array.isArray(value)),
   escapeHtml: String,
-  t: (key) => ({
-    "projectSettings.seedGenerationComplete": "Seed 生成完成。",
-  }[key] || key),
+  document: documentObject,
+  confirm: (message) => {
+    confirmMessages.push(message);
+    return confirmResult;
+  },
+  t: (key, params = {}) => {
+    const template = {
+      "projectSettings.seedGenerationComplete": "Seed 生成完成。",
+      "projectSettings.generatingSeedMode": "正在生成{mode} Seed...",
+      "projectSettings.seedGenerated": "Seed 脚本已生成。",
+      "projectSettings.seedModeVisitOnly": "访问目标系统（不登录）",
+      "projectSettings.seedModeLogin": "带登录",
+      "projectSettings.seedModeUnknown": "未知",
+      "projectSettings.currentSeedMode": "当前 Seed 类型",
+      "projectSettings.generateSeed": "生成 Seed",
+      "projectSettings.generateVisitSeed": "生成访问 Seed（不登录）",
+      "projectSettings.generateLoginSeed": "生成登录 Seed",
+      "projectSettings.testSeed": "测试 Seed",
+      "projectSettings.confirmSeedModeOverwrite": "从{current}切换为{next}会覆盖当前 Seed",
+    }[key] || key;
+    return template.replace(/\{(\w+)\}/g, (_, name) => params[name] ?? `{${name}}`);
+  },
 });
 
 const normalized = feature.normalizeTargetSystem({
@@ -163,8 +298,69 @@ assert.strictEqual(
     state.projectSettings.planGeneration.default_coverage_profile,
     "full",
   );
+  assert.strictEqual(state.projectSettings.seedMode, "login");
   assert.strictEqual(state.projectSettings.coverageProfiles.length, 1);
   assert.ok(renderCalls >= 1);
+
+  feature.renderProjectSettingsPanel();
+  assert.match(projectSettingsPanel.innerHTML, /id="projectSeedGenerateToggle"/);
+  assert.match(projectSettingsPanel.innerHTML, /data-seed-mode="visit_only"/);
+  assert.match(projectSettingsPanel.innerHTML, /data-seed-mode="login"/);
+  assert.match(projectSettingsPanel.innerHTML, /当前 Seed 类型/);
+  assert.match(projectSettingsPanel.innerHTML, />带登录</);
+  assert.match(projectSettingsPanel.innerHTML, /id="projectSeedTest"/);
+
+  seedGenerateMenu.hidden = true;
+  seedGenerateToggle.dispatch("click");
+  assert.strictEqual(seedGenerateMenu.hidden, false);
+  assert.strictEqual(seedGenerateToggle.getAttribute("aria-expanded"), "true");
+  assert.strictEqual(documentObject.activeElement, visitSeedButton);
+  loginSeedButton.focus();
+  seedGenerateMenu.dispatch("keydown", { key: "ArrowUp" });
+  assert.strictEqual(documentObject.activeElement, visitSeedButton);
+  documentObject.dispatch("keydown", { key: "Escape" });
+  assert.strictEqual(seedGenerateMenu.hidden, true);
+  assert.strictEqual(documentObject.activeElement, seedGenerateToggle);
+  seedGenerateToggle.dispatch("click");
+  assert.strictEqual(seedGenerateMenu.hidden, false);
+  documentObject.dispatch("pointerdown", { target: field() });
+  assert.strictEqual(seedGenerateMenu.hidden, true);
+
+  state.projectSettings.isTestingSeed = true;
+  feature.renderProjectSettingsPanel();
+  assert.match(
+    projectSettingsPanel.innerHTML,
+    /id="projectSeedGenerateToggle"[^>]*disabled/,
+  );
+  assert.match(
+    projectSettingsPanel.innerHTML,
+    /data-seed-mode="visit_only"[^>]*disabled/,
+  );
+  state.projectSettings.isTestingSeed = false;
+
+  confirmResult = false;
+  await visitSeedButton.dispatch("click");
+  assert.strictEqual(seedGenerationRequests.length, 0);
+  assert.strictEqual(confirmMessages.length, 1);
+
+  confirmResult = true;
+  generatedSeedMode = "visit_only";
+  await visitSeedButton.dispatch("click");
+  assert.strictEqual(seedGenerationRequests.length, 1);
+  assert.strictEqual(seedGenerationRequests[0].url, "/api/project-settings/seed/generate");
+  assert.deepStrictEqual(JSON.parse(seedGenerationRequests[0].options.body), {
+    mode: "visit_only",
+  });
+  assert.strictEqual(state.projectSettings.seedMode, "visit_only");
+
+  generatedSeedMode = "login";
+  await loginSeedButton.dispatch("click");
+  assert.strictEqual(seedGenerationRequests.length, 2);
+  assert.deepStrictEqual(JSON.parse(seedGenerationRequests[1].options.body), {
+    mode: "login",
+  });
+  assert.strictEqual(state.projectSettings.seedMode, "login");
+  assert.strictEqual(notices.at(-1).type, "success");
   process.stdout.write("project-settings feature VM smoke: ok\n");
 })().catch((error) => {
   process.stderr.write(`${error.stack || error}\n`);

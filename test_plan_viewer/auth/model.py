@@ -141,7 +141,7 @@ AUTH_API_PERMISSION_POLICY = _build_api_permission_policy(
             ("setup.list_setup_runs", "GET"),
             ("test_project_database_connection", "POST"),
             ("test_project_database_restore", "POST"),
-            ("generate_project_seed", "POST"),
+            ("seed.generate_project_seed", "POST"),
             ("test_project_seed", "POST"),
         ),
     ),

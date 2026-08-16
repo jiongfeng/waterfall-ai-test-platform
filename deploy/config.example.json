@@ -39,7 +39,8 @@
         "base_url": "https://test.example.invalid",
         "login_url": "/login",
         "username": "",
-        "password": ""
+        "password": "",
+        "seed_mode": "login"
       },
       "database_baseline": {
         "enabled": false

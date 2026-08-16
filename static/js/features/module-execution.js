@@ -1073,7 +1073,10 @@ function isAnyScriptJobRunning() {
     state.scripts.bulkDeletingScripts ||
     state.requirements.planGenerationRunning ||
     state.project.isExporting ||
-    state.project.isImporting
+    state.project.isImporting ||
+    state.projectSettings?.isSaving ||
+    state.projectSettings?.isGeneratingSeed ||
+    state.projectSettings?.isTestingSeed
   );
 }
 

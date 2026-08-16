@@ -106,6 +106,11 @@ const state = {
     planGenerationRunning: false,
   },
   project: { isExporting: false, isImporting: false },
+  projectSettings: {
+    isSaving: false,
+    isGeneratingSeed: false,
+    isTestingSeed: false,
+  },
 };
 const elements = {
   moduleScriptSummary: createElement(),
@@ -282,6 +287,11 @@ const feature = context.window.createModuleExecutionFeature({
   getDbExecutionModeLabel: String,
   formatTimestampMs: String,
 });
+
+assert.strictEqual(feature.isAnyScriptJobRunning(), false);
+state.projectSettings.isGeneratingSeed = true;
+assert.strictEqual(feature.isAnyScriptJobRunning(), true);
+state.projectSettings.isGeneratingSeed = false;
 
 assert.deepStrictEqual(
   JSON.parse(JSON.stringify(feature.getExecutionStatusInfo({ status: "running" }))),

@@ -13,11 +13,14 @@ DEFAULT_CONFIG_PATH = APP_DIR / "config.json"
 CONFIG_PATH = DEFAULT_CONFIG_PATH
 
 DISABLED_DATABASE_BASELINE_CONFIG = {"enabled": False}
+DEFAULT_SEED_MODE = "login"
+SEED_MODES = frozenset({"visit_only", "login"})
 DEFAULT_TARGET_SYSTEM_CONFIG = {
     "base_url": "",
     "login_url": "/login",
     "username": "",
     "password": "",
+    "seed_mode": DEFAULT_SEED_MODE,
 }
 DEFAULT_COVERAGE_PROFILE = "core"
 DEFAULT_PROJECT_LANGUAGE = "en"
@@ -282,12 +285,21 @@ def parse_target_system_config(value):
     )
     username = str(value.get("username", "")).strip()
     password = str(value.get("password", ""))
+    seed_mode = validate_seed_mode(value.get("seed_mode"))
     return {
         "base_url": base_url,
         "login_url": login_url,
         "username": username,
         "password": password,
+        "seed_mode": seed_mode,
     }
+
+
+def validate_seed_mode(value, fallback=DEFAULT_SEED_MODE):
+    mode = str(value or fallback or DEFAULT_SEED_MODE).strip().lower()
+    if mode not in SEED_MODES:
+        raise ValueError("seed_mode must be 'visit_only' or 'login'.")
+    return mode
 
 
 def parse_project_entry(
@@ -611,6 +623,7 @@ __all__ = [
     "DEFAULT_DATABASE_BASELINE_TIMEOUT_SECONDS",
     "DEFAULT_OPENCODE_TASK_TIMEOUT_SECONDS",
     "DEFAULT_SCRIPT_EXECUTION_TIMEOUT_SECONDS",
+    "DEFAULT_SEED_MODE",
     "DEFAULT_TARGET_SYSTEM_CONFIG",
     "DISABLED_DATABASE_BASELINE_CONFIG",
     "MYSQL_IDENTIFIER_PATTERN",
@@ -618,6 +631,7 @@ __all__ = [
     "PROJECT_KEY_PATTERN",
     "PROJECT_STATUS_ACTIVE",
     "PROJECT_STATUS_DISABLED",
+    "SEED_MODES",
     "format_timeout_seconds",
     "load_config",
     "parse_boolean",
@@ -634,4 +648,5 @@ __all__ = [
     "parse_timeout_seconds",
     "resolve_config_path",
     "validate_coverage_profile",
+    "validate_seed_mode",
 ]

@@ -59,6 +59,7 @@ from test_plan_viewer.configuration import (
     parse_projects_config,
     parse_target_system_config,
     parse_timeout_seconds,
+    validate_seed_mode,
     validate_coverage_profile,
     normalize_project_language,
 )
@@ -76,6 +77,7 @@ from test_plan_viewer.execution import streaming as execution_streaming
 from test_plan_viewer.generation import cases as generation_cases
 from test_plan_viewer.generation import cancellation as generation_cancellation
 from test_plan_viewer.generation import opencode as generation_opencode
+from test_plan_viewer.generation import seed as generation_seed
 from test_plan_viewer.generation.completion import PlanCompletionProbe
 from test_plan_viewer.generation.event_stream import BoundedSseReader
 from test_plan_viewer.i18n import localize_platform_error
@@ -195,6 +197,7 @@ from test_plan_viewer.web import (
     ProjectArchiveWebServices,
     ProjectWebServices,
     RequirementWebServices,
+    SeedWebServices,
     SetupWebServices,
     TestSuiteWebServices,
     create_application,
@@ -206,6 +209,7 @@ from test_plan_viewer.web import (
     create_project_archive_blueprint,
     create_projects_blueprint,
     create_requirements_blueprint,
+    create_seed_blueprint,
     create_setup_blueprint,
     create_test_suites_blueprint,
 )
@@ -1806,6 +1810,9 @@ def _project_web_services():
         serialize_coverage_profiles=lambda: serialize_coverage_profiles(),
         get_seed_script_relative_path=(
             lambda: get_seed_script_relative_path()
+        ),
+        get_seed_mode=(
+            lambda target_system: get_current_seed_mode(target_system)
         ),
     )
 
@@ -14693,85 +14700,65 @@ def save_project_settings():
     return save_project_settings_response(_project_web_services())
 
 
-@app.post("/api/project-settings/seed/generate")
-def generate_project_seed():
+def persist_current_seed_mode(seed_mode, target_system=None):
+    mode = validate_seed_mode(seed_mode)
+    if not is_platform_database_enabled():
+        return None
+    normalized_target_system = parse_target_system_config(
+        target_system or get_current_target_system_config()
+    )
+    normalized_target_system["seed_mode"] = mode
+    return update_current_project_settings_in_mysql(
+        normalized_target_system,
+        get_database_baseline_config(),
+        get_plan_generation_config(),
+    )
+
+
+def get_current_seed_mode(target_system=None):
+    normalized_target_system = parse_target_system_config(
+        target_system or get_current_target_system_config()
+    )
     try:
-        target_system = get_current_target_system_config()
-        target_file = get_seed_script_file()
-        original_hash = file_hash(target_file)
-        original_mtime = target_file.stat().st_mtime if target_file.exists() else 0
-        full_prompt = build_seed_generation_prompt(target_system, target_file)
-        job_id = f"generator-{uuid.uuid4().hex}"
-        try:
-            create_test_job(
-                "generator",
-                job_id=job_id,
-                status="queued",
-                prompt=full_prompt,
+        content = read_file_bytes(get_seed_script_file())
+    except Exception:
+        content = None
+    return generation_seed.detect_seed_mode(
+        content,
+        normalized_target_system.get("seed_mode"),
+    )
+
+
+def _seed_web_services():
+    return SeedWebServices(
+        validate_seed_mode=lambda mode: validate_seed_mode(mode),
+        get_target_base_url=lambda: get_playwright_base_url(),
+        get_current_target_system_config=lambda: get_current_target_system_config(),
+        get_seed_script_file=lambda: get_seed_script_file(),
+        get_seed_script_relative_path=lambda: get_seed_script_relative_path(),
+        build_seed_generation_prompt=lambda target_system, target_file: build_seed_generation_prompt(
+            target_system, target_file
+        ),
+        create_test_job=lambda *args, **kwargs: create_test_job(*args, **kwargs),
+        stream_plan_generation=lambda *args, **kwargs: stream_plan_generation(*args, **kwargs),
+        build_setup_targets=lambda **kwargs: build_setup_targets(**kwargs),
+        file_hash=lambda path: file_hash(path),
+        validate_generated_script_content=(
+            lambda content, filename: validate_generated_script_content(
+                content,
+                filename,
             )
-        except Exception as exc:
-            return jsonify({"error": f"创建 Seed 生成任务失败：{exc}"}), 500
-
-        def has_seed_output():
-            if not target_file.exists() or not target_file.is_file() or target_file.stat().st_size <= 0:
-                return False
-            if target_file.stat().st_mtime > original_mtime + 0.001:
-                return True
-            current_hash = file_hash(target_file)
-            return bool(current_hash and current_hash != original_hash)
-
-        def finalize_seed_payload():
-            content = target_file.read_text(encoding="utf-8")
-            validate_generated_script_content(content, target_file.name)
-            script_asset = sync_script_asset(
-                SEED_MODULE_NAME,
-                target_file,
-                change_source="generator",
-                source_job_id=job_id,
-                from_plan_asset_id=None,
-                message=f"generator: {SEED_MODULE_NAME}/{target_file.name}",
-            )
-            return {
-                "module_name": SEED_MODULE_NAME,
-                "filename": SEED_SCRIPT_FILENAME,
-                "target_path": str(target_file),
-                "seed_script_path": get_seed_script_relative_path(),
-                "asset": serialize_asset(script_asset),
-                "revisions": (
-                    [serialize_revision(item) for item in list_asset_revisions(script_asset["asset_id"], 10)]
-                    if script_asset
-                    else []
-                ),
-            }
-
-        response = Response(
-            stream_with_context(
-                stream_plan_generation(
-                    SEED_MODULE_NAME,
-                    full_prompt,
-                    target_file,
-                    completion_check=has_seed_output,
-                    target_label=str(target_file),
-                    session_title=agent_message("seed_generation_title"),
-                    success_message=agent_message("seed_generation_success", target=target_file),
-                    default_agent="playwright-test-generator",
-                    setup_targets=build_setup_targets(
-                        module_name=SEED_MODULE_NAME,
-                        filename=SEED_SCRIPT_FILENAME,
-                    ),
-                    success_payload_factory=finalize_seed_payload,
-                    job_id=job_id,
-                )
-            ),
-            mimetype="text/event-stream",
-        )
-        response.headers["Cache-Control"] = "no-cache"
-        response.headers["X-Accel-Buffering"] = "no"
-        return response
-    except ValueError as exc:
-        return jsonify({"error": str(exc)}), 400
-    except Exception as exc:
-        return jsonify({"error": f"生成 Seed 脚本失败：{exc}"}), 500
+        ),
+        write_file_atomically=lambda path, content: write_file_atomically(path, content),
+        sync_script_asset=lambda *args, **kwargs: sync_script_asset(*args, **kwargs),
+        persist_seed_mode=lambda mode: persist_current_seed_mode(mode),
+        serialize_asset=lambda asset: serialize_asset(asset),
+        list_asset_revisions=lambda asset_id, limit: list_asset_revisions(asset_id, limit),
+        serialize_revision=lambda revision: serialize_revision(revision),
+        agent_message=lambda key, **values: agent_message(key, **values),
+        module_name=SEED_MODULE_NAME,
+        script_filename=SEED_SCRIPT_FILENAME,
+    )
 
 
 @app.post("/api/project-settings/seed/test")
@@ -16567,6 +16554,9 @@ app.register_blueprint(
 )
 app.register_blueprint(
     create_projects_blueprint(_project_web_services())
+)
+app.register_blueprint(
+    create_seed_blueprint(_seed_web_services())
 )
 app.register_blueprint(
     create_project_archive_blueprint(_project_archive_web_services())

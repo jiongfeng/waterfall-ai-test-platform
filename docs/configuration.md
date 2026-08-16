@@ -77,7 +77,8 @@ Docker 包装脚本默认读取仓库根目录 `config.json`，也可用
         "base_url": "https://test.example.invalid",
         "login_url": "/login",
         "username": "",
-        "password": ""
+        "password": "",
+        "seed_mode": "login"
       },
       "database_baseline": {
         "enabled": false
@@ -155,10 +156,16 @@ OpenCode、平台数据库和被测系统凭据按原有配置字段保存：
 }
 ```
 
-`password_ref` 是页面清单中的业务标识，不会自动解析环境变量。项目设置中的
-用户名和密码可能进入计划/脚本生成 Prompt、seed 脚本、工作区 Git 和执行产物。
-因此只能使用隔离非生产系统中的可撤销、最小权限测试账号，并将模型服务和所有
-相关产物纳入同一敏感数据边界。
+`password_ref` 是页面清单中的业务标识，不会自动解析环境变量。`seed_mode`
+支持 `visit_only` 和 `login`，旧配置默认按 `login` 处理。“访问 Seed”使用固定
+模板，只使用 `base_url`，不创建模型任务，也不把登录地址、用户名或密码写入
+Seed；“登录 Seed”沿用模型生成流程，并会把配置的登录信息提供给模型。两种模式
+都会覆盖同一个 `tests/seed/seed.spec.ts`。
+旧版本生成且没有模式标记的 Seed 会在界面显示为“未知”，重新生成后即可识别。
+
+项目设置中的用户名和密码仍可能进入计划/脚本生成 Prompt、登录 Seed、工作区
+Git 和执行产物。因此只能使用隔离非生产系统中的可撤销、最小权限测试账号，
+并将模型服务和所有相关产物纳入同一敏感数据边界。
 
 不要把秘密放入命令行、Compose YAML、镜像层、公开示例、Issue 或诊断附件。
 实际 `config.json` 和 `.env` 必须保持未跟踪、权限受限；正式部署还应加密其备份。

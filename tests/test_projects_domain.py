@@ -134,6 +134,7 @@ class ProjectModelTests(unittest.TestCase):
                 "base_url": "https://example.test",
                 "username": "tester",
                 "password": "secret",
+                "seed_mode": "visit_only",
             },
         }
 
@@ -712,6 +713,7 @@ class ProjectRouteTests(unittest.TestCase):
                 "base_url": "https://example.test",
                 "username": "tester",
                 "password": "secret",
+                "seed_mode": "visit_only",
             },
             "database_baseline": {"enabled": False},
             "plan_generation": {
@@ -743,6 +745,15 @@ class ProjectRouteTests(unittest.TestCase):
             response.get_json()["target_system"]["password"],
             "secret",
         )
+        self.assertEqual(response.get_json()["seed_mode"], "visit_only")
+
+        updated_project = {
+            **project,
+            "target_system": {
+                **project["target_system"],
+                "seed_mode": "login",
+            },
+        }
 
         with (
             patch.object(
@@ -753,7 +764,7 @@ class ProjectRouteTests(unittest.TestCase):
             patch.object(
                 app,
                 "update_current_project_settings_in_mysql",
-                return_value=project,
+                return_value=updated_project,
             ) as update_settings,
             patch.object(
                 app,
@@ -765,6 +776,7 @@ class ProjectRouteTests(unittest.TestCase):
                 "/api/project-settings",
                 json={
                     "target_system": project["target_system"],
+                    "seed_mode": "login",
                     "database_baseline": {"enabled": False},
                     "plan_generation": project["plan_generation"],
                 },
@@ -775,7 +787,62 @@ class ProjectRouteTests(unittest.TestCase):
             response.get_json()["project"]["target_system"]["password"],
             "secret",
         )
+        self.assertEqual(response.get_json()["seed_mode"], "login")
         update_settings.assert_called_once()
+        self.assertEqual(
+            update_settings.call_args.args[0]["seed_mode"],
+            "login",
+        )
+
+    def test_project_settings_save_preserves_seed_mode_when_omitted(self):
+        project = {
+            "project_id": 5,
+            "project_key": "demo",
+            "target_system": {
+                "base_url": "https://example.test",
+                "login_url": "/login",
+                "username": "tester",
+                "password": "secret",
+                "seed_mode": "visit_only",
+            },
+            "database_baseline": {"enabled": False},
+            "plan_generation": {
+                "default_coverage_profile": "standard"
+            },
+        }
+        submitted_target_system = {
+            key: value
+            for key, value in project["target_system"].items()
+            if key != "seed_mode"
+        }
+        with (
+            self.auth_disabled,
+            patch.object(
+                app,
+                "get_current_project",
+                return_value=project,
+            ),
+            patch.object(
+                app,
+                "update_current_project_settings_in_mysql",
+                return_value=project,
+            ) as update_settings,
+        ):
+            response = self.client.put(
+                "/api/project-settings",
+                json={
+                    "target_system": submitted_target_system,
+                    "database_baseline": {"enabled": False},
+                    "plan_generation": project["plan_generation"],
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["seed_mode"], "visit_only")
+        self.assertEqual(
+            update_settings.call_args.args[0]["seed_mode"],
+            "visit_only",
+        )
 
     def test_compatibility_wrappers_resolve_patched_collaborators(self):
         with patch.object(

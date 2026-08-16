@@ -269,7 +269,12 @@ PLATFORM_ALLOW_TEST_EXECUTION=true
 | `PLATFORM_ALLOW_TEST_EXECUTION` | 显式允许执行可信 Playwright 代码 |
 | `PLATFORM_ALLOW_HOST_SCRIPT_EXECUTION` | 显式允许可信准备 shell；公开 Compose 中保持禁用 |
 
-平台可能把被测系统用户名和密码放入规划/生成 Prompt 或生成的 seed 脚本。只能
+“生成 Seed”提供“访问目标系统（不登录）”和“带登录”两种模式。访问 Seed 使用
+固定脚本，只访问 `base_url`，不创建模型任务，也不会把登录地址、用户名或密码
+写入 Seed；登录 Seed 沿用模型生成流程，会把配置的登录信息提供给模型。两种
+模式都会覆盖同一个 `tests/seed/seed.spec.ts`。
+
+平台仍可能把被测系统用户名和密码放入规划/脚本生成 Prompt 或登录 Seed。只能
 使用隔离非生产环境中的可撤销、最小权限测试账号，并把模型提供方、工作区 Git、
 日志和执行产物都视为该凭据的暴露边界。
 

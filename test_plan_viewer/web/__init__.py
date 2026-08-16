@@ -35,6 +35,10 @@ from test_plan_viewer.web.requirements import (
     RequirementWebServices,
     create_requirements_blueprint,
 )
+from test_plan_viewer.web.seed import (
+    SeedWebServices,
+    create_seed_blueprint,
+)
 from test_plan_viewer.web.setup import (
     SetupWebServices,
     create_setup_blueprint,
@@ -54,6 +58,7 @@ __all__ = [
     "ProjectArchiveWebServices",
     "ProjectWebServices",
     "RequirementWebServices",
+    "SeedWebServices",
     "SetupWebServices",
     "TestSuiteWebServices",
     "create_application",
@@ -65,6 +70,7 @@ __all__ = [
     "create_project_archive_blueprint",
     "create_projects_blueprint",
     "create_requirements_blueprint",
+    "create_seed_blueprint",
     "create_setup_blueprint",
     "create_test_suites_blueprint",
     "index_blueprint",

@@ -31,6 +31,9 @@ class ProjectWebServices:
     )
     get_config_project_keys: Callable = lambda: set()
     get_default_project_language: Callable = lambda: "en"
+    get_seed_mode: Callable = (
+        lambda target_system: target_system.get("seed_mode") or "login"
+    )
 
 
 def list_projects_response(services):
@@ -153,6 +156,7 @@ def get_project_settings_response(services):
         target_system = services.parse_target_system_config(
             project.get("target_system")
         )
+        seed_mode = services.get_seed_mode(target_system)
         database_baseline = services.get_database_baseline_config()
         plan_generation = services.get_plan_generation_config()
         return jsonify(
@@ -162,6 +166,7 @@ def get_project_settings_response(services):
                     include_sensitive=True,
                 ),
                 "target_system": target_system,
+                "seed_mode": seed_mode,
                 "database_baseline": (
                     services.parse_database_baseline_config(
                         database_baseline
@@ -186,8 +191,33 @@ def get_project_settings_response(services):
 def save_project_settings_response(services):
     payload = request.get_json(silent=True) or {}
     try:
+        target_system_payload = payload.get("target_system")
+        requested_seed_mode = payload.get("seed_mode")
+        if isinstance(target_system_payload, dict) and (
+            "seed_mode" not in target_system_payload
+            or "seed_mode" in payload
+        ):
+            if "seed_mode" not in payload:
+                current_project = services.get_current_project()
+                requested_seed_mode = (
+                    services.parse_target_system_config(
+                        current_project.get("target_system")
+                    ).get("seed_mode")
+                )
+            target_system_payload = {
+                **target_system_payload,
+                "seed_mode": requested_seed_mode,
+            }
+        elif "seed_mode" in payload and target_system_payload is None:
+            current_project = services.get_current_project()
+            target_system_payload = {
+                **services.parse_target_system_config(
+                    current_project.get("target_system")
+                ),
+                "seed_mode": requested_seed_mode,
+            }
         target_system = services.parse_target_system_config(
-            payload.get("target_system")
+            target_system_payload
         )
         database_baseline = services.parse_database_baseline_config(
             payload.get("database_baseline")
@@ -200,17 +230,20 @@ def save_project_settings_response(services):
             database_baseline,
             plan_generation,
         )
+        updated_target_system = services.parse_target_system_config(
+            project.get("target_system")
+        )
+        effective_seed_mode = services.get_seed_mode(
+            updated_target_system
+        )
         return jsonify(
             {
                 "project": services.serialize_project(
                     project,
                     include_sensitive=True,
                 ),
-                "target_system": (
-                    services.parse_target_system_config(
-                        project.get("target_system")
-                    )
-                ),
+                "target_system": updated_target_system,
+                "seed_mode": effective_seed_mode,
                 "database_baseline": (
                     services.parse_database_baseline_config(
                         project.get("database_baseline")

@@ -640,6 +640,7 @@ const state = {
     isGeneratingSeed: false,
     isTestingSeed: false,
     seedScriptPath: "tests/seed/seed.spec.ts",
+    seedMode: "",
     targetSystem: {
       base_url: "",
       login_url: "/login",
@@ -2937,6 +2938,7 @@ const projectSettingsFeature = createProjectSettingsFeature({
   isPlainObject,
   escapeHtml,
   t,
+  document,
 });
 const {
   loadProjectSettings,

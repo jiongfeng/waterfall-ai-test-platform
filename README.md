@@ -307,8 +307,15 @@ in encrypted, access-controlled backups.
 | `PLATFORM_ALLOW_TEST_EXECUTION` | Allows generated Playwright code; enabled by the bundled demo defaults |
 | `PLATFORM_ALLOW_HOST_SCRIPT_EXECUTION` | Allows trusted setup shell code; enabled by the bundled demo defaults |
 
-The platform may include target-system usernames and passwords in planning or
-generation prompts and generated seed scripts. Use only disposable,
+The Generate Seed menu offers a visit-only mode and a login mode. A visit Seed
+uses a fixed script that only opens `base_url`; it creates no model job and
+does not write the login URL, username, or password into the Seed. A login
+Seed keeps the model-generated login flow and provides the configured login
+details to the model. Both modes replace the same
+`tests/seed/seed.spec.ts` file.
+
+The platform may still include target-system usernames and passwords in
+planning or script-generation prompts and login Seeds. Use only disposable,
 least-privilege credentials for an isolated non-production target. Treat the
 model provider, workspace Git history, logs, and execution artifacts as being
 inside that credential's exposure boundary.
