@@ -75,7 +75,7 @@ def apply_seed_mode_marker(content, seed_mode):
     if len(lines) > 1 and not lines[1].strip():
         insert_at = 2
     lines.insert(insert_at, f"// {marker}")
-    return f"{'\n'.join(lines).rstrip()}\n"
+    return "\n".join(lines).rstrip() + "\n"
 
 
 class SeedCompletionProbe:
