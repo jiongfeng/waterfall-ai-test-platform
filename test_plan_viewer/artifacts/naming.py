@@ -297,6 +297,26 @@ def validate_chinese_script_filename(
     return filename
 
 
+def validate_generated_script_filename(
+    filename,
+    language="zh-CN",
+    *,
+    validate_script=validate_script_filename,
+    validate_chinese_script=validate_chinese_script_filename,
+):
+    """Validate a generated script filename for the project language.
+
+    English projects only require the common filename safety and suffix
+    checks.  Chinese projects retain the stricter Chinese-only stem rule.
+    Missing or unsupported language values deliberately take the stricter
+    path so callers cannot accidentally weaken validation.
+    """
+
+    if str(language or "").strip().lower() == "en":
+        return validate_script(filename)
+    return validate_chinese_script(filename)
+
+
 def is_plan_index_filename(filename):
     path_name = Path(str(filename or "")).name
     stem = Path(path_name).stem

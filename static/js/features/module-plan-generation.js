@@ -314,13 +314,17 @@ function handleModulePlanScriptStreamEvent({ event, data }, previousResult, modu
       status,
       error: data.error || previousResult.error,
       plan_filename: data.plan_filename || previousResult.plan_filename || planFilename,
+      script_filename:
+        data.script_filename ||
+        previousResult.script_filename ||
+        getExpectedScriptFilenameForPlan(planFilename),
     };
     setPlanScriptGenerationBatchItem(moduleName, planFilename, {
       status: nextResult.status,
       error: nextResult.error || "",
       logs: nextResult.logs || "",
       target_path: nextResult.target_path || "",
-      script_filename: getExpectedScriptFilenameForPlan(planFilename),
+      script_filename: nextResult.script_filename,
       finished_at: Date.now(),
     });
     setPlanScriptGenerationRecord(moduleName, planFilename, {
@@ -463,7 +467,7 @@ async function generateSelectedModulePlanScripts() {
           error: result.error || "",
           logs: result.logs || "",
           target_path: result.target_path || getDefaultScriptTargetPath(moduleName),
-          script_filename: getExpectedScriptFilenameForPlan(planFilename),
+          script_filename: result.script_filename || getExpectedScriptFilenameForPlan(planFilename),
           finished_at: finishedAt,
         });
         setPlanScriptGenerationRecord(moduleName, planFilename, {

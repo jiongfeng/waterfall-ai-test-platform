@@ -811,6 +811,15 @@ def validate_chinese_script_filename(filename):
     )
 
 
+def validate_generated_script_filename(filename, language=None):
+    return artifact_naming.validate_generated_script_filename(
+        filename,
+        normalize_project_language(language or agent_project_language()),
+        validate_script=validate_script_filename,
+        validate_chinese_script=validate_chinese_script_filename,
+    )
+
+
 def get_plan_file(module_name, plan_filename=None):
     module_name = validate_module_name(module_name)
     plan_filename = validate_plan_filename(plan_filename or get_default_plan_filename(module_name))
@@ -855,8 +864,9 @@ def get_script_filename_from_plan_filename(plan_filename):
     )
 
 
-def get_generated_script_filename_from_plan_filename(plan_filename):
-    if get_current_project_language() == "en":
+def get_generated_script_filename_from_plan_filename(plan_filename, language=None):
+    language = normalize_project_language(language or agent_project_language())
+    if language == "en":
         return get_script_filename_from_plan_filename(plan_filename)
     return artifact_naming.get_generated_script_filename_from_plan_filename(
         plan_filename,
@@ -875,9 +885,17 @@ def get_generation_workspace_dir():
     )
 
 
-def get_script_generation_candidate_file(module_name, plan_filename, job_id):
+def get_script_generation_candidate_file(
+    module_name,
+    plan_filename,
+    job_id,
+    language=None,
+):
     module_name = validate_module_name(module_name)
-    filename = get_generated_script_filename_from_plan_filename(plan_filename)
+    filename = get_generated_script_filename_from_plan_filename(
+        plan_filename,
+        language=language,
+    )
     candidate_root = get_generation_workspace_dir() / SCRIPT_GENERATION_CANDIDATE_DIR_NAME
     return artifact_paths.build_script_generation_candidate_file(
         candidate_root,
@@ -8658,19 +8676,28 @@ def agent_generate_script_for_plan(
 ):
     module_name = validate_module_name(plan["module_name"])
     plan_filename = validate_plan_filename(plan["plan_filename"])
+    generation_language = agent_project_language()
     plan_file = get_plan_target_path(module_name, plan_filename)
     if not plan_file.exists():
         raise FileNotFoundError(f"测试计划不存在：{plan_file}")
     script_dir = get_script_module_dir(module_name)
     existing_script_names = {item.name for item in script_dir.glob("*.spec.ts") if item.is_file()} if script_dir.exists() else set()
-    script_filename = get_generated_script_filename_from_plan_filename(plan_filename)
+    script_filename = get_generated_script_filename_from_plan_filename(
+        plan_filename,
+        language=generation_language,
+    )
     target_file = get_script_file(module_name, script_filename)
     plan_asset = sync_plan_asset(module_name, plan_file, change_source="manual", message=f"agent sync plan: {module_name}/{plan_filename}")
     job_id = f"generator-{uuid.uuid4().hex}"
     prompt = str(original_prompt or build_agent_script_generation_prompt(plan)).strip()
     prompt = agent_localization.append_supplemental_prompt(agent_project_language(), prompt, supplemental_prompt, "generation")
     create_test_job("generator", job_id=job_id, status="queued", source_asset_id=plan_asset.get("asset_id") if plan_asset else None, prompt=prompt)
-    candidate_file = get_script_generation_candidate_file(module_name, plan_filename, job_id)
+    candidate_file = get_script_generation_candidate_file(
+        module_name,
+        plan_filename,
+        job_id,
+        language=generation_language,
+    )
     candidate_file.parent.mkdir(parents=True, exist_ok=True)
     snapshot = managed_file_snapshot(collect_generation_managed_files(module_name, plan_file, target_file))
     target_snapshot = snapshot.get(str(target_file.resolve(strict=False)), {})
@@ -8704,6 +8731,7 @@ def agent_generate_script_for_plan(
             candidate_file,
             snapshot,
             existing_script_names,
+            language=generation_language,
         )
         script_asset = sync_script_asset(
             module_name,
@@ -9671,6 +9699,16 @@ def mark_agent_workflow_failed(run_id, error, fallback_step=""):
     update_agent_run(run_id, status="failed", error=str(error), finished=True)
 
 
+def restore_agent_run_project_language(project, run):
+    language = load_json_column((run or {}).get("summary_json"), {}).get("language")
+    if language:
+        PROJECT_CONTEXT.project = {
+            **project,
+            "language": normalize_project_language(language),
+        }
+    return agent_project_language()
+
+
 def run_agent_workflow(run_id, project, author):
     agent_register_task(run_id)
     with use_project_context(project), use_author_context(f"agent:{author or 'platform'}"):
@@ -9678,9 +9716,7 @@ def run_agent_workflow(run_id, project, author):
             run = get_agent_run_row(run_id)
             if not run:
                 return
-            language = load_json_column(run.get("summary_json"), {}).get("language")
-            if language:
-                PROJECT_CONTEXT.project = {**project, "language": normalize_project_language(language)}
+            restore_agent_run_project_language(project, run)
             requirement = get_requirement_by_uid(run.get("requirement_uid"))
             if not requirement:
                 raise RuntimeError("需求不存在。")
@@ -9734,9 +9770,7 @@ def run_agent_script_preparation_continue_workflow(run_id, project, author):
             run = get_agent_run_row(run_id)
             if not run or run.get("status") in AGENT_TERMINAL_STATUSES:
                 return
-            language = load_json_column(run.get("summary_json"), {}).get("language")
-            if language:
-                PROJECT_CONTEXT.project = {**project, "language": normalize_project_language(language)}
+            restore_agent_run_project_language(project, run)
             requirement = get_requirement_by_uid(run.get("requirement_uid"), True)
             if not requirement:
                 raise RuntimeError("需求不存在。")
@@ -9771,9 +9805,7 @@ def run_agent_resume_workflow(run_id, project, author, from_step, resume_context
             run = get_agent_run_row(run_id)
             if not run:
                 return
-            language = load_json_column(run.get("summary_json"), {}).get("language")
-            if language:
-                PROJECT_CONTEXT.project = {**project, "language": normalize_project_language(language)}
+            restore_agent_run_project_language(project, run)
             requirement = get_requirement_by_uid(run.get("requirement_uid"), True)
             if not requirement:
                 raise RuntimeError("需求不存在。")
@@ -10004,6 +10036,10 @@ def run_agent_item_retry_workflow(run_id, retry_flow_id, project, author):
         use_agent_item_retry_context(run_id, retry_flow_id),
     ):
         try:
+            restore_agent_run_project_language(
+                project,
+                get_agent_run_row(run_id) or {},
+            )
             flow_row = get_agent_item_retry_flow(run_id, retry_flow_id)
             if not flow_row or flow_row.get("status") not in AGENT_ITEM_RETRY_ACTIVE_STATUSES:
                 return
@@ -11222,9 +11258,18 @@ def choose_generated_script_source(candidate_file, target_file, script_dir, exis
     raise RuntimeError(f"OpenCode 已结束，但未生成候选脚本：{candidate_file}")
 
 
-def finalize_script_generation(module_name, plan_filename, plan_file, target_file, candidate_file, snapshot, existing_script_names):
+def finalize_script_generation(
+    module_name,
+    plan_filename,
+    plan_file,
+    target_file,
+    candidate_file,
+    snapshot,
+    existing_script_names,
+    *,
+    language=None,
+):
     script_dir = get_script_module_dir(module_name)
-    validate_chinese_script_filename(target_file.name)
     target_key = str(target_file.resolve(strict=False))
     original_target = snapshot.get(target_key, {})
     original_target_content = original_target.get("content")
@@ -11233,6 +11278,7 @@ def finalize_script_generation(module_name, plan_filename, plan_file, target_fil
     source_kind = ""
 
     try:
+        validate_generated_script_filename(target_file.name, language)
         source_file, source_kind = choose_generated_script_source(
             candidate_file,
             target_file,
@@ -11287,6 +11333,7 @@ def finalize_script_generation(module_name, plan_filename, plan_file, target_fil
         restore_snapshot_files(snapshot)
         cleanup_new_generated_script_files(script_dir, existing_script_names)
         cleanup_new_managed_files(snapshot)
+        candidate_file.unlink(missing_ok=True)
         raise
 
 
@@ -15521,11 +15568,15 @@ def create_script_generation_stream():
     if not plan_file.exists():
         return jsonify({"error": f"测试计划不存在：{plan_file}"}), 404
 
+    generation_language = agent_project_language()
     existing_script_names = set()
     if script_dir.exists():
         existing_script_names = {item.name for item in script_dir.glob("*.spec.ts") if item.is_file()}
 
-    script_filename = get_generated_script_filename_from_plan_filename(plan_filename)
+    script_filename = get_generated_script_filename_from_plan_filename(
+        plan_filename,
+        language=generation_language,
+    )
     target_file = get_script_file(module_name, script_filename)
     plan_asset = sync_plan_asset(module_name, plan_file, change_source="manual", message=f"sync plan: {module_name}/{plan_filename}")
     job_id = sanitize_job_id(str(payload.get("job_id") or f"generator-{uuid.uuid4().hex}").strip())
@@ -15539,7 +15590,12 @@ def create_script_generation_stream():
         )
     except Exception as exc:
         return jsonify({"error": f"创建测试脚本生成任务失败：{exc}"}), 500
-    candidate_file = get_script_generation_candidate_file(module_name, plan_filename, job_id)
+    candidate_file = get_script_generation_candidate_file(
+        module_name,
+        plan_filename,
+        job_id,
+        language=generation_language,
+    )
     candidate_file.parent.mkdir(parents=True, exist_ok=True)
     snapshot = managed_file_snapshot(collect_generation_managed_files(module_name, plan_file, target_file))
     target_snapshot = snapshot.get(str(target_file.resolve(strict=False)), {})
@@ -15561,6 +15617,7 @@ def create_script_generation_stream():
             candidate_file,
             snapshot,
             existing_script_names,
+            language=generation_language,
         )
         script_asset = sync_script_asset(
             module_name,

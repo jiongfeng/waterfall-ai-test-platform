@@ -2475,7 +2475,117 @@ class AgentDiagnosticBundleTests(unittest.TestCase):
         self.assertIn("grid-template-rows: auto minmax(0, 1fr) auto auto;", stylesheet)
 
 
+class ScriptGenerationLanguageRouteTests(unittest.TestCase):
+    VALID_SCRIPT = (
+        "import { test, expect } from '@playwright/test';\n"
+        "test('successful login', async () => {\n"
+        "  expect(true).toBe(true);\n"
+        "});\n"
+    )
+
+    def test_single_generation_uses_language_captured_before_stream_runs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            plan_file = root / "specs" / "Authentication" / "Successful Login.md"
+            script_dir = root / "tests" / "Authentication"
+            target_file = script_dir / "Successful Login.spec.ts"
+            candidate_file = root / "candidates" / target_file.name
+            plan_file.parent.mkdir(parents=True)
+            script_dir.mkdir(parents=True)
+            plan_file.write_text("# Successful Login\n", encoding="utf-8")
+            language = {"value": "en"}
+            candidate_languages = []
+
+            def candidate_path(_module_name, _plan_filename, _job_id, language=None):
+                candidate_languages.append(language)
+                return candidate_file
+
+            def generated_stream(*_args, **kwargs):
+                # Simulate a project setting change while OpenCode is running.
+                # Finalization must continue to use the request's captured locale.
+                language["value"] = "zh-CN"
+                candidate_file.write_text(self.VALID_SCRIPT, encoding="utf-8")
+                payload = kwargs["success_payload_factory"]()
+                yield app.sse_payload(
+                    "done",
+                    {"ok": True, "status": "succeeded", **payload},
+                )
+
+            def script_path(module_name, filename):
+                self.assertEqual(module_name, "Authentication")
+                self.assertEqual(filename, target_file.name)
+                return target_file
+
+            with (
+                patch.object(app, "get_auth_config", return_value={"enabled": False}),
+                patch.object(
+                    app,
+                    "agent_project_language",
+                    side_effect=lambda: language["value"],
+                ),
+                patch.object(app, "get_plan_target_path", return_value=plan_file),
+                patch.object(app, "get_script_module_dir", return_value=script_dir),
+                patch.object(app, "get_script_file", side_effect=script_path),
+                patch.object(
+                    app,
+                    "get_script_generation_candidate_file",
+                    side_effect=candidate_path,
+                ),
+                patch.object(
+                    app,
+                    "collect_generation_managed_files",
+                    return_value=[plan_file, target_file],
+                ),
+                patch.object(
+                    app,
+                    "iter_generation_managed_files",
+                    side_effect=lambda: iter(
+                        path
+                        for path in (plan_file, target_file)
+                        if path.exists()
+                    ),
+                ),
+                patch.object(app, "sync_plan_asset", return_value={"asset_id": 10}),
+                patch.object(app, "sync_script_asset", return_value={"asset_id": 20}),
+                patch.object(app, "serialize_asset", side_effect=lambda value: value),
+                patch.object(app, "list_asset_revisions", return_value=[]),
+                patch.object(app, "create_test_job"),
+                patch.object(app, "build_script_generation_prompt", return_value="prompt"),
+                patch.object(app, "build_setup_targets", return_value=[]),
+                patch.object(app, "backup_script_file", return_value=None),
+                patch.object(app, "stream_plan_generation", side_effect=generated_stream),
+            ):
+                response = app.app.test_client().post(
+                    "/api/script-generation-stream",
+                    json={
+                        "module_name": "Authentication",
+                        "plan_filename": plan_file.name,
+                        "prompt": "Generate the script.",
+                        "job_id": "generator-language-test",
+                    },
+                )
+                events = list(
+                    app.parse_sse_text_blocks(response.get_data(as_text=True))
+                )
+
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(candidate_languages, ["en"])
+            self.assertEqual(target_file.read_text(encoding="utf-8"), self.VALID_SCRIPT)
+            done = [data for event, data in events if event == "done"][-1]
+            self.assertEqual(done["status"], "succeeded")
+            self.assertEqual(done["script_filename"], target_file.name)
+
+
 class AgentItemRetryWorkflowTests(unittest.TestCase):
+    def setUp(self):
+        self.get_agent_run_row_patcher = patch.object(
+            app,
+            "get_agent_run_row",
+            return_value={"summary_json": "{}"},
+        )
+        self.get_agent_run_row = self.get_agent_run_row_patcher.start()
+        self.addCleanup(self.get_agent_run_row_patcher.stop)
+
     def make_flow(self, auto_repair=True):
         return {
             "retry_flow_id": "retry-1",
@@ -2575,6 +2685,87 @@ class AgentItemRetryWorkflowTests(unittest.TestCase):
         repair_one.assert_not_called()
         self.assertEqual(finish_attempt.call_count, 2)
         self.assertTrue(any(item.get("status") == "succeeded" and item.get("current_phase") == "completed" for item in updates_seen))
+
+    def test_retry_generation_restores_the_original_run_language(self):
+        flow = self.make_flow()
+        updates_seen = []
+        generated = {
+            "module_name": "Authentication",
+            "plan_filename": "Successful Login.md",
+            "filename": "Successful Login.spec.ts",
+            "job_id": "generator-english-retry",
+            "asset": {
+                "asset_id": 20,
+                "current_revision_id": 21,
+                "from_plan_asset_id": 10,
+            },
+        }
+        executed = {
+            **generated,
+            "execution": {
+                "status": "succeeded",
+                "run_id": "run-english-retry",
+                "job_id": "execution-english-retry",
+                "result_id": 31,
+            },
+        }
+        observed_languages = []
+
+        def generate_one(*_args, **_kwargs):
+            observed_languages.append(app.agent_project_language())
+            return generated
+
+        self.get_agent_run_row.return_value = {
+            "summary_json": json.dumps({"language": "en"}),
+        }
+        with (
+            patch.object(app, "register_agent_item_retry_task"),
+            patch.object(app, "cleanup_agent_item_retry_task"),
+            patch.object(app, "agent_set_current_job"),
+            patch.object(app, "agent_raise_if_cancelled"),
+            patch.object(app, "get_agent_item_retry_flow", return_value=flow),
+            patch.object(app, "get_agent_attempt", return_value=self.make_root_attempt()),
+            patch.object(
+                app,
+                "update_agent_item_retry_flow",
+                side_effect=self.stateful_flow_updater(flow, updates_seen),
+            ),
+            patch.object(
+                app,
+                "start_agent_attempt",
+                side_effect=[
+                    {"attempt_id": "attempt-generation"},
+                    {"attempt_id": "attempt-execution"},
+                ],
+            ),
+            patch.object(app, "finish_agent_attempt"),
+            patch.object(
+                app,
+                "agent_generate_script_for_plan",
+                side_effect=generate_one,
+            ),
+            patch.object(
+                app,
+                "agent_execute_generated_script",
+                return_value=executed,
+            ),
+            patch.object(app, "agent_repair_script"),
+            patch.object(app, "merge_agent_retry_step_result"),
+            patch.object(app, "append_agent_item_retry_event"),
+            patch.object(app, "supersede_agent_failed_script_review"),
+            patch.object(app, "mark_agent_suite_stale_after_item_retry"),
+        ):
+            app.run_agent_item_retry_workflow(
+                "agent-1",
+                "retry-1",
+                {"project_key": "demo", "language": "zh-CN"},
+                "admin",
+            )
+
+        self.assertEqual(observed_languages, ["en"])
+        self.assertTrue(
+            any(item.get("status") == "succeeded" for item in updates_seen)
+        )
 
     def test_retry_execution_failure_repairs_once_and_verifies(self):
         flow = self.make_flow()
