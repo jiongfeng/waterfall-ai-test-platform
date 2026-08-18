@@ -850,6 +850,53 @@ class OpenCodeStreamLifecycleTests(unittest.TestCase):
             patch.object(app, "persist_agent_stream_batch"),
         )
 
+    def test_session_error_diagnostic_uses_captured_english_project_language(self):
+        response = FiniteEventResponse(
+            [
+                {
+                    "type": "session.error",
+                    "properties": {
+                        "sessionID": "session-1",
+                        "error": {
+                            "data": {
+                                "message": "unknown certificate verification error",
+                            }
+                        },
+                    },
+                }
+            ]
+        )
+
+        with app.use_project_context({"language": "en"}), ExitStack() as stack:
+            for stream_patch in self.stream_patches(response, 3):
+                stack.enter_context(stream_patch)
+            events = []
+            for chunk in app.stream_plan_generation(
+                "Login",
+                "prompt",
+                Path("/tmp/login-plan.md"),
+                setup_targets=[],
+                completion_required=False,
+            ):
+                events.extend(app.parse_sse_text_blocks(chunk))
+
+        failed = [
+            payload
+            for event, payload in events
+            if event == "status" and payload.get("status") == "failed"
+        ][-1]
+        done = [payload for event, payload in events if event == "done"][-1]
+        failure_log = [
+            payload["message"]
+            for event, payload in events
+            if event == "log" and payload.get("message", "").startswith("Task failed:")
+        ][-1]
+
+        for value in (failed["error"], done["error"], failure_log):
+            self.assertIn("OpenCode execution failed:", value)
+            self.assertIn("TLS certificate verification failed", value)
+            self.assertNotRegex(value, r"[\u3400-\u9fff]")
+
     def test_silent_stream_honors_wall_clock_deadline(self):
         response = BlockingEventResponse()
         with tempfile.TemporaryDirectory() as directory:

@@ -63,7 +63,11 @@ def build_opencode_session_payload(
     return payload
 
 
-def format_opencode_execution_error(message, tool_status_error_pattern):
+def format_opencode_execution_error(
+    message,
+    tool_status_error_pattern,
+    language="zh-CN",
+):
     if not isinstance(message, str):
         return str(message)
     normalized = message.lower()
@@ -75,6 +79,15 @@ def format_opencode_execution_error(message, tool_status_error_pattern):
             "unable to verify the first certificate",
         )
     ):
+        if language == "en":
+            return (
+                "TLS certificate verification failed for the OpenCode model request. "
+                "This error originated in the OpenCode provider call, not in the Seed "
+                "script, Playwright MCP, or the target system page certificate. Check "
+                "the current model provider's network connection, proxy/VPN, and CA "
+                "trust chain, or switch to a compatible provider with certificate "
+                "trust configured correctly."
+            )
         return (
             "OpenCode 模型请求 TLS 证书校验失败。这个错误来自 OpenCode provider 调用，"
             "不是 Seed 脚本、Playwright MCP 或被测系统页面证书问题。"
@@ -84,6 +97,15 @@ def format_opencode_execution_error(message, tool_status_error_pattern):
     if all(marker in message for marker in ("Type validation failed", '"choices"', '"error"', '"status"')):
         match = tool_status_error_pattern.search(message)
         tool_name = match.group(1) if match else "unknown"
+        if language == "en":
+            return (
+                "OpenCode provider compatibility error: the upstream returned a tool "
+                "execution status event, but OpenCode is currently parsing it as an "
+                "OpenAI choices/error response. "
+                f"Triggering tool: {tool_name}. Restart OpenCode Server and retry. "
+                "If it still fails, adjust the OpenAI-compatible response format or "
+                "use a model that supports OpenCode tool streaming."
+            )
         return (
             "OpenCode provider 兼容性错误：上游返回了工具运行状态事件，"
             "但 OpenCode 当前按 OpenAI choices/error 响应格式解析。"

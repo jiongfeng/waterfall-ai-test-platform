@@ -12332,7 +12332,9 @@ def opencode_event_stream(timeout=None):
 
 def format_opencode_execution_error(message):
     return generation_opencode.format_opencode_execution_error(
-        message, OPENCODE_TOOL_STATUS_ERROR_PATTERN
+        message,
+        OPENCODE_TOOL_STATUS_ERROR_PATTERN,
+        language=agent_project_language(),
     )
 
 
