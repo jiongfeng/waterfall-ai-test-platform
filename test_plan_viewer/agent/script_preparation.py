@@ -23,6 +23,7 @@ from test_plan_viewer.agent import localization as agent_localization
 
 SCRIPT_PREPARATION_STEP_KEY = "prepare_scripts"
 SCRIPT_PREPARATION_SCHEMA_VERSION = 1
+_MISSING = object()
 
 ITEM_STATUS_QUEUED = "queued"
 ITEM_STATUS_GENERATING = "generating"
@@ -65,6 +66,8 @@ STAGE_LABELS = {
     "rerepair": "重新修复",
     "abandon": "放弃脚本",
     "blocked": "环境阻断",
+    "external_version_adopted": "采纳外部脚本版本",
+    "cancelled": "任务取消",
 }
 
 
@@ -113,6 +116,8 @@ class ScriptPreparationDependencies:
     make_id: Callable[[str], str] = lambda prefix: f"{prefix}-{uuid.uuid4().hex}"
     waiting_run_status: str = "awaiting_script_action"
     get_project_language: Callable[[], str] = lambda: "zh-CN"
+    validate_actionable_run: Callable[[str], Any] | None = None
+    persist_state: Callable[..., Any] | None = None
 
 
 def script_preparation_dependencies_from_resolver(resolver):
@@ -141,6 +146,7 @@ def script_preparation_dependencies_from_resolver(resolver):
         make_id=lazy("make_id"),
         waiting_run_status=str(resolver("waiting_run_status")),
         get_project_language=lazy("get_project_language"),
+        persist_state=lazy("persist_state"),
     )
 
 
@@ -185,6 +191,302 @@ class ScriptPreparationService:
             self._persist(state)
             return self._operation_result(state)
 
+    def resume(self, run_id):
+        """Recover a lease-expired module run from its persisted checkpoint."""
+
+        with self._lock:
+            state = self._load_state(run_id)
+            self._recover_interrupted_state(state)
+            for item in state.get("items") or []:
+                if item.get("status") == ITEM_STATUS_QUEUED:
+                    self._run_generate_cycle(
+                        state,
+                        item,
+                        stage_type="generate",
+                        trigger="automatic_recovery",
+                    )
+            state["initial_run_finished"] = True
+            self._persist(state)
+            return self._operation_result(state)
+
+    def recover_interrupted(self, run_id):
+        """Make lease-orphaned busy items actionable before replaying actions."""
+
+        with self._lock:
+            state = self._load_state(run_id)
+            if self._recover_interrupted_state(state):
+                self._persist(state)
+            return self._operation_result(state)
+
+    def finalize_interrupted(self, run_id, *, message, error_type):
+        """Close unfinished item/stage state before a run becomes terminal."""
+
+        with self._lock:
+            state = self._load_state(run_id, required=False)
+            if not state:
+                return None
+            now = self._now()
+            changed = False
+            for item in state.get("items") or []:
+                unfinished_stages = [
+                    stage
+                    for stage in item.get("history") or []
+                    if stage.get("status") in {"running", "pending"}
+                ]
+                for stage in unfinished_stages:
+                    stage.update(
+                        {
+                            "status": "failed",
+                            "error": message,
+                            "result": {
+                                "error": message,
+                                "error_type": error_type,
+                            },
+                            "finished_at": now,
+                        }
+                    )
+                if (
+                    item.get("status") not in TERMINAL_ITEM_STATUSES
+                    or unfinished_stages
+                ):
+                    item["status"] = ITEM_STATUS_ABANDONED
+                    item["included_in_suite"] = False
+                    self._touch_item(item)
+                    changed = True
+                changed = changed or bool(unfinished_stages)
+            if changed:
+                self._persist(state)
+            return self._operation_result(state)
+
+    def cancel_interrupted(self, run_id, message="脚本准备任务已取消。"):
+        return self.finalize_interrupted(
+            run_id, message=message, error_type="cancelled"
+        )
+
+    def initialize_cancelled(self, run_id, plans, message="脚本准备任务已取消。"):
+        """Persist traceable terminal items when cancelled before initialization."""
+
+        with self._lock:
+            existing = self._load_state(run_id, required=False)
+            if existing:
+                return self.cancel_interrupted(run_id, message)
+            state = self._new_state(run_id, plans)
+            now = self._now()
+            for item in state["items"]:
+                stage = {
+                    "stage_id": self.dependencies.make_id("script-stage"),
+                    "sequence_no": 1,
+                    "stage_type": "cancelled",
+                    "stage_name": STAGE_LABELS["cancelled"],
+                    "status": "failed",
+                    "trigger": "run_cancelled",
+                    "parent_stage_id": "",
+                    "input_revision_id": None,
+                    "output_revision_id": None,
+                    "original_prompt": "",
+                    "supplemental_prompt": "",
+                    "result": {"error": message, "error_type": "cancelled"},
+                    "error": message,
+                    "started_at": now,
+                    "finished_at": now,
+                }
+                item["history"] = [stage]
+                item["current_stage_id"] = stage["stage_id"]
+                item["status"] = ITEM_STATUS_ABANDONED
+                item["included_in_suite"] = False
+                self._touch_item(item)
+            state["initial_run_finished"] = True
+            self._persist(state, started=True)
+            return self._operation_result(state)
+
+    def adopt_external_versions(self, run_id, revisions):
+        """Adopt out-of-workflow file revisions and require fresh verification."""
+
+        revisions = {
+            str(value.get("item_id") or ""): value.get("revision_id")
+            for value in revisions or []
+            if isinstance(value, dict) and value.get("item_id")
+        }
+        with self._lock:
+            state = self._load_state(run_id)
+            now = self._now()
+            changed = False
+            for item in state.get("items") or []:
+                item_id = str(item.get("item_id") or "")
+                if item_id not in revisions:
+                    continue
+                previous = item.get("current_revision_id")
+                revision = revisions[item_id]
+                if str(previous) == str(revision):
+                    continue
+                changed = True
+                for pending in item.get("history") or []:
+                    if (
+                        pending.get("stage_type") == "human_review"
+                        and pending.get("status") == "pending"
+                    ):
+                        pending["status"] = "superseded"
+                        pending["finished_at"] = now
+                stage = {
+                    "stage_id": self.dependencies.make_id("script-stage"),
+                    "sequence_no": len(item.get("history") or []) + 1,
+                    "stage_type": "external_version_adopted",
+                    "stage_name": STAGE_LABELS["external_version_adopted"],
+                    "status": "succeeded",
+                    "trigger": "external_change",
+                    "parent_stage_id": item.get("current_stage_id") or "",
+                    "input_revision_id": previous,
+                    "output_revision_id": revision,
+                    "original_prompt": "",
+                    "supplemental_prompt": "",
+                    "result": {
+                        "message": "检测到脚本在准备流程外更新，已采纳最新版本。",
+                        "previous_revision_id": previous,
+                        "current_revision_id": revision,
+                    },
+                    "error": "",
+                    "started_at": now,
+                    "finished_at": now,
+                }
+                item.setdefault("history", []).append(stage)
+                item["current_revision_id"] = revision
+                if revision is None:
+                    item["current_script"] = None
+                else:
+                    script = dict(item.get("current_script") or {})
+                    script.pop("verification", None)
+                    asset = dict(script.get("asset") or {})
+                    asset["current_revision_id"] = revision
+                    item["current_script"] = {
+                        **script,
+                        "module_name": item.get("module_name") or "",
+                        "plan_filename": item.get("plan_filename") or "",
+                        "filename": item.get("filename") or "",
+                        "asset": asset,
+                    }
+                has_script = isinstance(item.get("current_script"), dict)
+                recommended = ACTION_EXECUTE if has_script else ACTION_REGENERATE
+                analysis = {
+                    "summary": "外部脚本版本尚未在本批次验证，请重新执行。"
+                    if has_script
+                    else "脚本文件已删除，请重新生成。",
+                    "recommended_action": recommended,
+                    "prompt_patch": "",
+                    "analysis_status": "external_change",
+                }
+                review = {
+                    "stage_id": self.dependencies.make_id("script-stage"),
+                    "sequence_no": len(item["history"]) + 1,
+                    "stage_type": "human_review",
+                    "stage_name": STAGE_LABELS["human_review"],
+                    "status": "pending",
+                    "trigger": "external_change",
+                    "parent_stage_id": stage["stage_id"],
+                    "input_revision_id": revision,
+                    "output_revision_id": revision,
+                    "original_prompt": "",
+                    "supplemental_prompt": "",
+                    "result": {"analysis": analysis},
+                    "error": "",
+                    "started_at": now,
+                    "finished_at": None,
+                }
+                item["history"].append(review)
+                item["current_stage_id"] = review["stage_id"]
+                item["latest_analysis"] = analysis
+                item["status"] = ITEM_STATUS_AWAITING_HUMAN
+                item["included_in_suite"] = False
+                self._touch_item(item)
+            if changed:
+                self._persist(state)
+            return self._operation_result(state)
+
+    def _recover_interrupted_state(self, state):
+        recovered = False
+        now = self._now()
+        message = "后台 worker 中断，当前原子操作结果未知，请确认后重试。"
+        prompt_patch = "请基于已保存的失败阶段重新处理，并验证产物完整性。"
+        for item in state.get("items") or []:
+            has_running_stage = any(
+                stage.get("status") == "running"
+                for stage in item.get("history") or []
+            )
+            if item.get("status") not in BUSY_ITEM_STATUSES and not has_running_stage:
+                continue
+            recovered = True
+            for stage in reversed(item.get("history") or []):
+                if stage.get("status") == "running":
+                    stage.update(
+                        {
+                            "status": "failed",
+                            "error": message,
+                            "result": {
+                                "error": message,
+                                "error_type": "worker_interrupted",
+                            },
+                            "finished_at": now,
+                        }
+                    )
+                    break
+            has_script = isinstance(item.get("current_script"), dict)
+            suggested = ACTION_REPAIR if has_script else ACTION_REGENERATE
+            analysis = {
+                "summary": message,
+                "recommended_action": suggested,
+                "prompt_patch": prompt_patch,
+                "analysis_status": "recovered",
+                "prompt_options": {
+                    ACTION_REGENERATE: {
+                        "original_prompt": str(
+                            item.get("prompt_defaults", {}).get("regenerate") or ""
+                        ),
+                        "supplemental_prompt": (
+                            prompt_patch if suggested == ACTION_REGENERATE else ""
+                        ),
+                        "enabled": True,
+                    },
+                    ACTION_REPAIR: {
+                        "original_prompt": str(
+                            item.get("prompt_defaults", {}).get("repair") or ""
+                        ),
+                        "supplemental_prompt": (
+                            prompt_patch if suggested == ACTION_REPAIR else ""
+                        ),
+                        "enabled": has_script,
+                    },
+                },
+            }
+            review_stage = {
+                "stage_id": self.dependencies.make_id("script-stage"),
+                "sequence_no": len(item.get("history") or []) + 1,
+                "stage_type": "human_review",
+                "stage_name": STAGE_LABELS["human_review"],
+                "status": "pending",
+                "trigger": "worker_recovery",
+                "parent_stage_id": item.get("current_stage_id") or "",
+                "input_revision_id": item.get("current_revision_id"),
+                "output_revision_id": item.get("current_revision_id"),
+                "original_prompt": "",
+                "supplemental_prompt": "",
+                "result": {
+                    "failure": {
+                        "error": message,
+                        "error_type": "worker_interrupted",
+                    },
+                    "analysis": analysis,
+                },
+                "error": message,
+                "started_at": now,
+                "finished_at": None,
+            }
+            item.setdefault("history", []).append(review_stage)
+            item["current_stage_id"] = review_stage["stage_id"]
+            item["latest_analysis"] = analysis
+            item["status"] = ITEM_STATUS_AWAITING_HUMAN
+            item["included_in_suite"] = False
+            self._touch_item(item)
+        return recovered
+
     def apply_action(
         self,
         run_id,
@@ -195,7 +497,7 @@ class ScriptPreparationService:
         supplemental_prompt=None,
         content=None,
         execute_after_save=False,
-        expected_revision_id=None,
+        expected_revision_id=_MISSING,
     ):
         action = str(action or "").strip().lower()
         if action not in HUMAN_ACTIONS:
@@ -206,6 +508,10 @@ class ScriptPreparationService:
             state = self._load_state(run_id)
             item = self._find_item(state, item_id)
             self._assert_actionable(item, action)
+            if expected_revision_id is not _MISSING and str(expected_revision_id) != str(
+                item.get("current_revision_id")
+            ):
+                raise ScriptPreparationConflict("脚本版本已变化，请刷新后重试。")
             self._resolve_pending_human_stage(item, action)
 
             if action == ACTION_EDIT:
@@ -273,7 +579,7 @@ class ScriptPreparationService:
         supplemental_prompt=None,
         content=None,
         execute_after_save=False,
-        expected_revision_id=None,
+        expected_revision_id=_MISSING,
     ):
         """Apply a supported batch action sequentially with partial results."""
 
@@ -418,14 +724,23 @@ class ScriptPreparationService:
             trigger,
             original_prompt=base_prompt,
             supplemental_prompt=supplement,
-            input_revision_id=None,
+            input_revision_id=(
+                item.get("current_revision_id")
+                if stage_type == "regenerate"
+                else None
+            ),
         )
+        operation_plan = deepcopy(item.get("plan_snapshot") or {})
+        if stage_type == "regenerate":
+            operation_plan["_expected_script_revision_id"] = item.get(
+                "current_revision_id"
+            )
         try:
             with self._unlocked_external_operation():
                 script = self.dependencies.generate_script(
                     state["run_id"],
                     SCRIPT_PREPARATION_STEP_KEY,
-                    deepcopy(item.get("plan_snapshot") or {}),
+                    operation_plan,
                     original_prompt=base_prompt,
                     supplemental_prompt=supplement,
                 )
@@ -445,6 +760,7 @@ class ScriptPreparationService:
         except Exception as exc:
             if self.dependencies.is_cancelled_error(exc):
                 raise
+            self._adopt_rollback_script(item, exc)
             failure = self._failure_payload(exc, item, stage)
             self._finish_stage(state, item, stage, "failed", error=str(exc), result=failure)
             self._await_human(state, item, failure)
@@ -548,6 +864,7 @@ class ScriptPreparationService:
         except Exception as exc:
             if self.dependencies.is_cancelled_error(exc):
                 raise
+            self._adopt_rollback_script(item, exc)
             failure = self._failure_payload(exc, item, stage)
             self._finish_stage(state, item, stage, "failed", error=str(exc), result=failure)
             if analyze_after_failure:
@@ -741,6 +1058,11 @@ class ScriptPreparationService:
             or "databasepath is not configured" in message
             or "baselinepath is not configured" in message
             or "markerpath is not configured" in message
+            or "已启用数据库基线，但未配置" in message
+            or "已启用文件数据库基线，但未配置" in message
+            or "数据库基线工作目录不存在" in message
+            or "运行数据库文件不存在" in message
+            or "脚本目标正在被其他准备任务处理" in message
         )
 
     def _mark_environment_blocked(self, state, item, failure):
@@ -804,7 +1126,7 @@ class ScriptPreparationService:
         if not content.strip():
             raise ValueError("脚本内容不能为空。")
         current_revision_id = item.get("current_revision_id")
-        if expected_revision_id is not None and str(expected_revision_id) != str(current_revision_id):
+        if expected_revision_id is not _MISSING and str(expected_revision_id) != str(current_revision_id):
             raise ScriptPreparationConflict("脚本版本已变化，请刷新后重新编辑。")
         stage = self._begin_stage(
             state,
@@ -836,6 +1158,7 @@ class ScriptPreparationService:
         except Exception as exc:
             if self.dependencies.is_cancelled_error(exc):
                 raise
+            self._adopt_rollback_script(item, exc)
             failure = self._failure_payload(exc, item, stage)
             self._finish_stage(state, item, stage, "failed", error=str(exc), result=failure)
             item["status"] = ITEM_STATUS_AWAITING_HUMAN
@@ -1010,6 +1333,9 @@ class ScriptPreparationService:
         )
 
     def _assert_run_accepts_actions(self, run_id):
+        if self.dependencies.validate_actionable_run is not None:
+            self.dependencies.validate_actionable_run(run_id)
+            return
         run = self.dependencies.get_agent_run(run_id)
         if not isinstance(run, dict):
             raise ScriptPreparationNotFound("Agent 任务不存在。")
@@ -1049,20 +1375,26 @@ class ScriptPreparationService:
             or asset.get("current_revision_id")
         )
 
+    def _adopt_rollback_script(self, item, error):
+        script = getattr(error, "rollback_script", None)
+        if not isinstance(script, dict):
+            return
+        item["current_script"] = self._safe(script)
+        item["current_revision_id"] = self._script_revision_id(script)
+        item["included_in_suite"] = False
+
     @staticmethod
     def _execution_failure_message(execution):
         execution = execution if isinstance(execution, dict) else {}
         if execution.get("error"):
             return str(execution["error"])
         nested = execution.get("execution") if isinstance(execution.get("execution"), dict) else execution
-        if nested.get("ok") is False or nested.get("status") in {
-            "failed",
-            "timedOut",
-            "interrupted",
-            "cancelled",
-        }:
-            return str(nested.get("error") or "脚本执行失败。")
-        return ""
+        if (
+            nested.get("ok") is not False
+            and nested.get("status") in {"succeeded", "completed"}
+        ):
+            return ""
+        return str(nested.get("error") or "脚本执行失败。")
 
     @staticmethod
     def _assert_atom_succeeded(value, fallback_message):
@@ -1137,31 +1469,27 @@ class ScriptPreparationService:
             step_status = "running"
         else:
             step_status = "awaiting_action"
-        self.dependencies.update_agent_step(
-            state["run_id"],
-            SCRIPT_PREPARATION_STEP_KEY,
-            status=step_status,
-            input_data={"script_count": counts["total"]} if started else None,
-            output_data=self._safe(state),
-            counts=counts,
-            error=state.get("error") or "",
-            started=bool(started),
-            finished=bool(should_continue),
-        )
+        step_values = {
+            "status": step_status,
+            "input_data": {"script_count": counts["total"]} if started else None,
+            "output_data": self._safe(state),
+            "counts": counts,
+            "error": state.get("error") or "",
+            "started": bool(started),
+            "finished": bool(should_continue),
+        }
         event_item = max(
             state.get("items") or [],
             key=lambda item: (int(item.get("updated_at") or 0), int(item.get("order_index") or 0)),
             default={},
         )
-        self.dependencies.append_agent_event(
-            state["run_id"],
-            SCRIPT_PREPARATION_STEP_KEY,
-            "status",
-            agent_localization.message(
+        event_values = {
+            "event_type": "status",
+            "message": agent_localization.message(
                 self.dependencies.get_project_language(),
                 "script_preparation_updated",
             ),
-            {
+            "payload": {
                 "artifact_progress": True,
                 "artifact_type": "script",
                 "item_status": event_item.get("status") or step_status,
@@ -1171,21 +1499,39 @@ class ScriptPreparationService:
                 "item_id": event_item.get("item_id") or "",
                 "item": self._safe(event_item) if event_item else None,
             },
-        )
+        }
+        run_values = None
         if step_status == "running":
-            self.dependencies.update_agent_run(
-                state["run_id"],
-                status="running",
-                current_step=SCRIPT_PREPARATION_STEP_KEY,
-                error="",
-            )
+            run_values = {"status": "running", "error": ""}
         elif step_status == "awaiting_action":
-            self.dependencies.update_agent_run(
+            run_values = {
+                "status": self.dependencies.waiting_run_status,
+                "error": state.get("error") or "",
+            }
+        if self.dependencies.persist_state:
+            self.dependencies.persist_state(
                 state["run_id"],
-                status=self.dependencies.waiting_run_status,
-                current_step=SCRIPT_PREPARATION_STEP_KEY,
-                error=state.get("error") or "",
+                step_values=step_values,
+                event_values=event_values,
+                run_values=run_values,
             )
+        else:
+            self.dependencies.update_agent_step(
+                state["run_id"], SCRIPT_PREPARATION_STEP_KEY, **step_values
+            )
+            self.dependencies.append_agent_event(
+                state["run_id"],
+                SCRIPT_PREPARATION_STEP_KEY,
+                event_values["event_type"],
+                event_values["message"],
+                event_values["payload"],
+            )
+            if run_values:
+                self.dependencies.update_agent_run(
+                    state["run_id"],
+                    current_step=SCRIPT_PREPARATION_STEP_KEY,
+                    **run_values,
+                )
         return state
 
     @staticmethod
@@ -1289,7 +1635,7 @@ def claim_script_preparation_continue_record(
                 f"""
                 UPDATE {runs_table} AS runs
                 SET status = 'running', current_step = 'create_suite',
-                    error = '', updated_at = %s
+                    error = '', updated_at = GREATEST(updated_at + 1, %s)
                 WHERE runs.project_id = %s AND runs.run_id = %s
                   AND runs.current_step = 'prepare_scripts'
                   AND runs.status IN ('running', 'awaiting_script_action')
@@ -1343,6 +1689,18 @@ def get_script_preparation_item(run_id, item_id):
     return _service().get_item(run_id, item_id)
 
 
+def adopt_script_preparation_external_versions(run_id, revisions):
+    return _service().adopt_external_versions(run_id, revisions)
+
+
+def recover_script_preparation_interrupted(run_id):
+    return _service().recover_interrupted(run_id)
+
+
+def cancel_script_preparation_interrupted(run_id, message="脚本准备任务已取消。"):
+    return _service().cancel_interrupted(run_id, message)
+
+
 def apply_script_preparation_action(
     run_id,
     item_id,
@@ -1352,7 +1710,7 @@ def apply_script_preparation_action(
     supplemental_prompt=None,
     content=None,
     execute_after_save=False,
-    expected_revision_id=None,
+    expected_revision_id=_MISSING,
 ):
     return _service().apply_action(
         run_id,
@@ -1375,7 +1733,7 @@ def apply_script_preparation_batch_action(
     supplemental_prompt=None,
     content=None,
     execute_after_save=False,
-    expected_revision_id=None,
+    expected_revision_id=_MISSING,
 ):
     return _service().apply_batch_action(
         run_id,
@@ -1400,6 +1758,7 @@ __all__ = [
     "ScriptPreparationError",
     "ScriptPreparationNotFound",
     "ScriptPreparationService",
+    "adopt_script_preparation_external_versions",
     "apply_script_preparation_action",
     "apply_script_preparation_batch_action",
     "claim_script_preparation_continue_record",

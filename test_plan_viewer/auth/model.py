@@ -187,6 +187,17 @@ AUTH_API_PERMISSION_POLICY = _build_api_permission_policy(
         ),
     ),
     (
+        ("menu.scripts",),
+        (
+            ("module_script_preparation.create_run", "POST"),
+            ("module_script_preparation.get_run", "GET"),
+            ("module_script_preparation.get_item", "GET"),
+            ("module_script_preparation.apply_action", "POST"),
+            ("module_script_preparation.apply_batch_action", "POST"),
+            ("module_script_preparation.cancel_run", "POST"),
+        ),
+    ),
+    (
         ("menu.scripts", "menu.testSuites"),
         (
             ("list_test_scripts", "GET"),

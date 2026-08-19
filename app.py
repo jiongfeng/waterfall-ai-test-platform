@@ -156,6 +156,7 @@ from test_plan_viewer.repositories.tables import (
     get_agent_run_events_table,
     get_agent_run_steps_table,
     get_agent_runs_table,
+    get_script_preparation_runs_table,
     get_job_artifacts_table,
     get_page_inventory_table,
     get_platform_projects_table,
@@ -189,7 +190,6 @@ from test_plan_viewer.test_suites import model as test_suite_model
 from test_plan_viewer.test_suites import repository as test_suite_repository
 from test_plan_viewer.test_suites import service as test_suite_service
 from test_plan_viewer.web import (
-    AgentScriptPreparationWebServices,
     AuthWebServices,
     PageInventoryWebServices,
     PlanWorkbookWebServices,
@@ -201,7 +201,6 @@ from test_plan_viewer.web import (
     SetupWebServices,
     TestSuiteWebServices,
     create_application,
-    create_agent_script_preparation_blueprint,
     create_auth_blueprint,
     create_page_inventory_blueprint,
     create_plan_workbook_blueprint,
@@ -213,6 +212,9 @@ from test_plan_viewer.web import (
     create_setup_blueprint,
     create_test_suites_blueprint,
 )
+from test_plan_viewer.script_preparation.composition import register_script_preparation_blueprints, start_agent_script_preparation_continuation
+from test_plan_viewer.script_preparation import agent_adapter as script_preparation_agent_adapter
+from test_plan_viewer.script_preparation.target_lease import ScriptTargetBusy, acquire_script_target_lease, call_with_script_target_lease, hold_script_module_leases, hold_script_target_lease, release_script_target_lease_after
 from test_plan_viewer.web.projects import (
     create_project_response,
     get_project_settings_response,
@@ -279,6 +281,7 @@ OPENCODE_TASKS = {}
 OPENCODE_TASK_LOCK = threading.Lock()
 AGENT_RUN_TASKS = {}
 AGENT_RUN_TASK_LOCK = threading.Lock()
+AGENT_RUN_TASK_CONTEXT = threading.local()
 AGENT_ITEM_RETRY_TASKS = {}
 AGENT_ITEM_RETRY_TASK_LOCK = threading.RLock()
 AGENT_PROJECT_OPERATION_LOCK = threading.RLock()
@@ -2824,6 +2827,11 @@ def delete_plan_asset(module_name, plan_filename, message=None):
 
 
 def delete_script_asset(module_name, filename, message=None):
+    with acquire_script_target_lease(sys.modules[__name__], module_name, filename):
+        return _delete_script_asset_locked(module_name, filename, message)
+
+
+def _delete_script_asset_locked(module_name, filename, message=None):
     script_file = get_script_file(module_name, filename)
     if not script_file.exists():
         raise FileNotFoundError(f"Script file not found: {script_file}")
@@ -4233,6 +4241,7 @@ def ensure_platform_database_schema(config=None):
             get_agent_run_events_table=get_agent_run_events_table,
             get_agent_run_steps_table=get_agent_run_steps_table,
             get_agent_runs_table=get_agent_runs_table,
+            get_script_preparation_runs_table=get_script_preparation_runs_table,
             get_page_inventory_table=get_page_inventory_table,
             get_platform_projects_table=get_platform_projects_table,
             get_requirement_module_plans_table=get_requirement_module_plans_table,
@@ -5886,11 +5895,11 @@ def ensure_agent_run_step_rows(run_id):
         connection.commit()
 
 
-def update_agent_run(run_id, status=None, current_step=None, suite_uid=None, summary=None, error=None, finished=False, reopened=False):
+def update_agent_run(run_id, status=None, current_step=None, suite_uid=None, summary=None, error=None, finished=False, reopened=False, expected_status=None, report_applied=False):
     config = require_platform_database()
     table = get_agent_runs_table(config)
     project_id = get_current_project_id()
-    fields = ["updated_at = %s"]
+    fields = ["updated_at = GREATEST(updated_at + 1, %s)"]
     values = [current_time_ms()]
     if status is not None:
         fields.append("status = %s")
@@ -5916,11 +5925,16 @@ def update_agent_run(run_id, status=None, current_step=None, suite_uid=None, sum
     elif reopened:
         fields.append("finished_at = NULL")
     values.extend([project_id, validate_uid(run_id, "run_id")])
+    expected_clause = ""
+    if expected_status is not None:
+        expected_clause, values = " AND status = %s", [*values, validate_agent_status(expected_status)]
     with platform_mysql_connection(config) as connection:
         with connection.cursor() as cursor:
-            cursor.execute(f"UPDATE {table} SET {', '.join(fields)} WHERE project_id = %s AND run_id = %s", values)
+            cursor.execute(f"UPDATE {table} SET {', '.join(fields)} WHERE project_id = %s AND run_id = %s{expected_clause}", values)
+            applied = cursor.rowcount == 1
         connection.commit()
-    return get_agent_run_row(run_id)
+    run = get_agent_run_row(run_id)
+    return (applied, run) if report_applied else run
 
 
 def update_agent_step(run_id, step_key, status=None, input_data=None, output_data=None, counts=None, error=None, started=False, finished=False, reopened=False):
@@ -6296,23 +6310,26 @@ def resolve_agent_resume_step(run_id, requested_step):
     return requested_step
 
 
-def reset_agent_run_for_resume(run_id, from_step):
+def reset_agent_run_for_resume(run_id, from_step, expected_status, expected_updated_at):
     with AGENT_PROJECT_OPERATION_LOCK:
         active_retry_flows = list_agent_item_retry_flows(active_only=True, limit=1)
         if active_retry_flows:
             raise AgentItemRetryConflict("当前项目有脚本正在重试并验证。", active_retry_flows[0])
         active_run = get_active_agent_run_row()
-        if active_run and active_run.get("run_id") != run_id:
+        if active_run:
             raise AgentItemRetryConflict("当前项目已有 Agent 任务正在运行。")
-        return reset_agent_run_for_resume_record(run_id, from_step)
+        return reset_agent_run_for_resume_record(run_id, from_step, expected_status, expected_updated_at)
 
 
-def reset_agent_run_for_resume_record(run_id, from_step):
+def reset_agent_run_for_resume_record(run_id, from_step, expected_status, expected_updated_at):
     from_step = validate_agent_step_key(from_step)
+    if expected_status not in {"failed", "cancelled"}:
+        raise AgentItemRetryConflict("Agent 任务状态已变化，不能重复恢复。")
     ensure_agent_run_step_rows(run_id)
     config = require_platform_database()
     runs_table = get_agent_runs_table(config)
     steps_table = get_agent_run_steps_table(config)
+    events_table = get_agent_run_events_table(config)
     project_id = get_current_project_id()
     run_id = validate_uid(run_id, "run_id")
     now_ms = current_time_ms()
@@ -6326,11 +6343,14 @@ def reset_agent_run_for_resume_record(run_id, from_step):
                     current_step = %s,
                     error = '',
                     finished_at = NULL,
-                    updated_at = %s
+                    updated_at = GREATEST(updated_at + 1, %s)
                 WHERE project_id = %s AND run_id = %s
+                  AND status = %s AND updated_at = %s
                 """,
-                (from_step, now_ms, project_id, run_id),
+                (from_step, now_ms, project_id, run_id, validate_agent_status(expected_status), int(expected_updated_at)),
             )
+            if cursor.rowcount != 1:
+                raise AgentItemRetryConflict("Agent 任务状态已变化，不能重复恢复。")
             for step_key in AGENT_STEP_KEYS[resume_index:]:
                 cursor.execute(
                     f"""
@@ -6347,14 +6367,10 @@ def reset_agent_run_for_resume_record(run_id, from_step):
                     """,
                     (now_ms, project_id, run_id, step_key),
                 )
+            insert_agent_event_row(cursor, events_table, project_id, run_id, from_step, "status",
+                                   agent_message("task_resumed", step=agent_step_name(from_step)),
+                                   {"from_step": from_step}, created_at=now_ms)
         connection.commit()
-    append_agent_event(
-        run_id,
-        from_step,
-        "status",
-        agent_message("task_resumed", step=agent_step_name(from_step)),
-        {"from_step": from_step},
-    )
     return get_agent_run_row(run_id)
 
 
@@ -7441,20 +7457,38 @@ def stream_requirement_analysis(requirement, job_id=None):
     return requirement_analysis_stream.stream_requirement_analysis(requirement, job_id, deps)
 
 
-def agent_register_task(run_id):
+def agent_register_task(run_id, *, replace=False):
+    worker_token = uuid.uuid4().hex
     with AGENT_RUN_TASK_LOCK:
         existing = AGENT_RUN_TASKS.get(run_id) or {}
+        if existing.get("worker_token") and not replace:
+            return ""
         AGENT_RUN_TASKS[run_id] = {
-            "cancel_requested": bool(existing.get("cancel_requested")),
-            "current_job_id": existing.get("current_job_id") or "",
-            "last_db_check": float(existing.get("last_db_check") or 0),
+            "worker_token": worker_token,
+            "cancel_requested": False,
+            "current_job_id": "",
+            "last_db_check": 0,
             "updated_at": time.time(),
         }
+    AGENT_RUN_TASK_CONTEXT.run_id = run_id
+    AGENT_RUN_TASK_CONTEXT.worker_token = worker_token
+    return worker_token
 
 
 def agent_cleanup_task(run_id):
+    worker_token = getattr(AGENT_RUN_TASK_CONTEXT, "worker_token", "")
     with AGENT_RUN_TASK_LOCK:
-        AGENT_RUN_TASKS.pop(run_id, None)
+        task = AGENT_RUN_TASKS.get(run_id) or {}
+        if worker_token and task.get("worker_token") == worker_token:
+            AGENT_RUN_TASKS.pop(run_id, None)
+    if getattr(AGENT_RUN_TASK_CONTEXT, "run_id", "") == run_id:
+        AGENT_RUN_TASK_CONTEXT.run_id = ""
+        AGENT_RUN_TASK_CONTEXT.worker_token = ""
+
+
+def agent_has_live_task(run_id):
+    with AGENT_RUN_TASK_LOCK:
+        return bool((AGENT_RUN_TASKS.get(run_id) or {}).get("worker_token"))
 
 
 def agent_set_current_job(run_id, job_id):
@@ -7471,8 +7505,11 @@ def agent_set_current_job(run_id, job_id):
             AGENT_ITEM_RETRY_TASKS[retry_flow_id] = task
             return bool(task.get("cancel_requested"))
 
+    worker_token = getattr(AGENT_RUN_TASK_CONTEXT, "worker_token", "")
     with AGENT_RUN_TASK_LOCK:
         task = AGENT_RUN_TASKS.get(run_id) or {"cancel_requested": False}
+        if worker_token and task.get("worker_token") != worker_token:
+            return True
         task["current_job_id"] = job_id or ""
         task["updated_at"] = time.time()
         AGENT_RUN_TASKS[run_id] = task
@@ -7521,8 +7558,11 @@ def agent_is_cancelled(run_id, *, force=False):
         return cancelled
 
     now = time.monotonic()
+    worker_token = getattr(AGENT_RUN_TASK_CONTEXT, "worker_token", "")
     with AGENT_RUN_TASK_LOCK:
         task = AGENT_RUN_TASKS.get(run_id) or {"cancel_requested": False}
+        if worker_token and task.get("worker_token") != worker_token:
+            return True
         if task.get("cancel_requested"):
             return True
         last_check = float(task.get("last_db_check") or 0)
@@ -7535,8 +7575,9 @@ def agent_is_cancelled(run_id, *, force=False):
     if cancelled:
         with AGENT_RUN_TASK_LOCK:
             task = AGENT_RUN_TASKS.get(run_id) or {}
-            task["cancel_requested"] = True
-            AGENT_RUN_TASKS[run_id] = task
+            if not worker_token or task.get("worker_token") == worker_token:
+                task["cancel_requested"] = True
+                AGENT_RUN_TASKS[run_id] = task
     return cancelled
 
 
@@ -7611,15 +7652,8 @@ def request_agent_item_retry_cancel(run_id, retry_flow_id):
 
 def agent_start_step(run_id, step_key, input_data=None):
     agent_raise_if_cancelled(run_id)
-    update_agent_run(run_id, status="running", current_step=step_key)
-    update_agent_step(run_id, step_key, status="running", input_data=input_data, error="", started=True)
-    step_name = agent_step_name(step_key)
-    append_agent_event(
-        run_id,
-        step_key,
-        "status",
-        agent_message("step_started", step=step_name),
-        {"status": "running"},
+    script_preparation_agent_adapter.start_agent_step_atomic(
+        sys.modules[__name__], run_id, step_key, input_data
     )
 
 
@@ -8308,7 +8342,7 @@ def agent_generate_plan_for_module(
         )
     finally:
         agent_set_current_job(run_id, "")
-    if result.get("ok") is False or result.get("status") == "failed":
+    if not script_preparation_agent_adapter.plan_source_ready(result):
         raise AgentItemFailure(
             result.get("error") or f"生成计划失败：{module_name}",
             job_id=result.get("job_id") or job_id,
@@ -8774,7 +8808,7 @@ def agent_generate_script_for_plan(
         )
     finally:
         agent_set_current_job(run_id, "")
-    if result.get("ok") is False or result.get("status") == "failed":
+    if not script_preparation_agent_adapter.terminal_operation_succeeded(result):
         partial_artifacts = [
             str(path)
             for path in (candidate_file, target_file)
@@ -8982,7 +9016,7 @@ def agent_execute_generated_script(run_id, step_key, script):
         "execution_run_id": result.get("run_id"),
         "execution_job_id": result.get("job_id"),
     }
-    if result.get("ok") is False or result.get("status") == "failed":
+    if not script_preparation_agent_adapter.terminal_operation_succeeded(result):
         item["error"] = result.get("error") or "脚本执行失败。"
     return item
 
@@ -9171,7 +9205,7 @@ def build_agent_script_repair_prompt(item, failure=None):
             if get_current_project_language() == "en"
             else "\n\n上次失败信息：\n"
         ) + json.dumps(
-            failure, ensure_ascii=False, indent=2
+            agent_failure_handling.redact_agent_failure_value(failure), ensure_ascii=False, indent=2
         )
     return prompt
 
@@ -9250,7 +9284,7 @@ def agent_repair_script(
         )
     finally:
         agent_set_current_job(run_id, "")
-    if result.get("ok") is False or result.get("status") == "failed":
+    if not script_preparation_agent_adapter.terminal_operation_succeeded(result):
         raise AgentItemFailure(
             result.get("error") or f"修复脚本失败：{module_name}/{filename}",
             job_id=result.get("job_id") or job_id,
@@ -9428,88 +9462,39 @@ def agent_execute_single_script_for_review(run_id, step_key, script):
         step_key,
         stream_script_execution(module_name, filename, context, agent_stream=True),
     )
-    if result.get("ok") is False or result.get("status") == "failed":
+    if not script_preparation_agent_adapter.terminal_operation_succeeded(result):
         raise RuntimeError(result.get("error") or "脚本验证失败。")
     return result
 
 
 def get_agent_script_preparation_output(run_id, step_key):
-    row = get_agent_step_row(run_id, step_key)
-    if not row:
-        return None
-    output = load_json_column(row.get("output_json"), None)
-    return output if isinstance(output, dict) else None
+    return script_preparation_agent_adapter.load_step_output(
+        sys.modules[__name__], run_id, step_key
+    )
 
 
 def get_agent_script_preparation_item_for_web(run_id, item_id):
-    item = agent_script_preparation.get_script_preparation_item(run_id, item_id)
-    script = item.get("current_script") if isinstance(item.get("current_script"), dict) else None
-    if script:
-        script_file = get_script_file(item["module_name"], item["filename"])
-        if script_file.is_file():
-            item["current_script"] = {
-                **script,
-                "content": script_file.read_text(encoding="utf-8"),
-            }
-    return item
+    return script_preparation_agent_adapter.get_item_for_web(
+        sys.modules[__name__], run_id, item_id
+    )
 
 
 def save_agent_prepared_script(run_id, item, content, expected_revision_id=None):
-    del run_id, expected_revision_id
-    module_name = validate_module_name(item["module_name"])
-    filename = validate_script_filename(item["filename"])
-    script_file = get_script_file(module_name, filename)
-    script_file.parent.mkdir(parents=True, exist_ok=True)
-    script_file.write_text(str(content), encoding="utf-8", newline="")
-    asset = sync_script_asset(
-        module_name,
-        script_file,
-        change_source="manual",
-        message=f"agent manual edit: {module_name}/{filename}",
+    return script_preparation_agent_adapter.save_script(
+        sys.modules[__name__], run_id, item, content, expected_revision_id
     )
-    return {
-        "module_name": module_name,
-        "plan_filename": item.get("plan_filename") or "",
-        "filename": filename,
-        "path": str(script_file),
-        "asset": serialize_asset(asset),
-    }
 
 
 def analyze_agent_script_preparation_failure(run_id, step_key, payload):
-    return call_agent_failure_analyst(
-        run_id,
-        step_key,
-        agent_message("failure_analysis_instruction"),
-        payload,
+    return script_preparation_agent_adapter.analyze_failure(
+        sys.modules[__name__], run_id, step_key, payload
     )
 
 
 def resolve_agent_script_preparation_dependency(name):
-    dependencies = {
-        "load_step_output": get_agent_script_preparation_output,
-        "get_agent_run": get_agent_run_row,
-        "update_agent_step": update_agent_step,
-        "update_agent_run": update_agent_run,
-        "append_agent_event": append_agent_event,
-        "generate_script": agent_generate_script_for_plan,
-        "execute_script": agent_execute_generated_script,
-        "repair_script": agent_repair_script,
-        "analyze_failure": analyze_agent_script_preparation_failure,
-        "save_script": save_agent_prepared_script,
-        "build_generation_prompt": build_agent_script_generation_prompt,
-        "build_repair_prompt": build_agent_script_repair_prompt,
-        "resolve_script_filename": lambda plan: get_generated_script_filename_from_plan_filename(
-            plan["plan_filename"]
-        ),
-        "current_time_ms": current_time_ms,
-        "redact_value": lambda value: value,
-        "is_cancelled_error": lambda error: isinstance(error, OpencodeTaskCancelled),
-        "make_id": lambda prefix: f"{prefix}-{uuid.uuid4().hex}",
-        "waiting_run_status": "awaiting_script_action",
-        "get_project_language": agent_project_language,
-    }
-    return dependencies[name]
+    return script_preparation_agent_adapter.resolve_dependency(
+        sys.modules[__name__], name
+    )
 
 
 agent_script_preparation.configure_script_preparation(
@@ -9533,7 +9518,6 @@ def agent_create_suite(run_id, requirement, scripts):
     title = re.sub(r"\s+", "-", (requirement.get("title") or requirement.get("filename") or "requirement").strip())
     title = re.sub(r"[^\w\u4e00-\u9fff.-]+", "-", title).strip("-")[:48] or "requirement"
     suite_name = f"Agent-{title}-{time.strftime('%Y%m%d-%H%M')}"
-    suite = create_test_suite_in_mysql(suite_name, f"Agent run {run_id} 自动创建。")
     items = [
         {
             "module_name": module_name,
@@ -9543,7 +9527,7 @@ def agent_create_suite(run_id, requirement, scripts):
         }
         for module_name, filename in unique
     ]
-    suite = add_test_suite_items_in_mysql(suite["id"], items)
+    suite = script_preparation_agent_adapter.find_or_create_agent_suite(sys.modules[__name__], run_id, suite_name, items)
     update_agent_run(run_id, suite_uid=suite.get("id"))
     counts = {"scripts": len(items), "suite_count": 1}
     append_agent_event(run_id, step_key, "decision", agent_message("suite_created", name=suite.get("name"), count=len(items)), {"suite": suite})
@@ -9586,31 +9570,23 @@ def agent_run_suite(run_id, suite):
         "unknown": summary.get("unknown", 0),
     }
     output = {"result": result, "summary": summary}
-    if result.get("ok") is False or result.get("status") == "failed":
-        agent_finish_step(run_id, step_key, output, counts)
-        raise RuntimeError(result.get("error") or "测试集执行失败。")
+    if not script_preparation_agent_adapter.suite_execution_succeeded(output):
+        raise script_preparation_agent_adapter.fail_agent_suite_execution(sys.modules[__name__], run_id, output, counts, result.get("error"))
     agent_finish_step(run_id, step_key, output, counts)
     return output
 
 
-def finish_agent_after_script_preparation(
-    run_id,
-    requirement,
-    modules,
-    plans,
-    scripts,
-    preparation,
-    *,
-    suite=None,
-    resumed_from_step="",
-):
+def _finish_agent_after_script_preparation(run_id, requirement, modules, plans, scripts, preparation, *, suite=None, resumed_from_step="", execution=None):
     counts = preparation.get("counts") if isinstance(preparation, dict) else {}
     if scripts:
+        if suite and (get_agent_step_row(run_id, "create_suite") or {}).get("status") != "succeeded":
+            agent_finish_step(run_id, "create_suite", {"suite": suite}, {"scripts": len(scripts), "suite_count": 1})
         suite = suite or agent_create_suite(run_id, requirement, scripts)
-        execution = agent_run_suite(run_id, suite)
+        execution = execution or agent_run_suite(run_id, suite)
         execution_summary = execution.get("summary") or {}
         final_status = "succeeded"
     else:
+        script_preparation_agent_adapter.clear_agent_suite(sys.modules[__name__], run_id)
         skip_reason = "所有脚本均已放弃，没有脚本进入测试集。"
         for step_key, output, skipped_counts in (
             ("create_suite", {"suite": None}, {"scripts": 0, "skipped": 1}),
@@ -9637,16 +9613,14 @@ def finish_agent_after_script_preparation(
     }
     if resumed_from_step:
         final_summary["resumed_from_step"] = resumed_from_step
-    append_agent_event(run_id, "run_suite", "status", "Agent 全流程执行完成。", final_summary)
-    update_agent_run(
-        run_id,
-        status=final_status,
-        current_step="run_suite",
-        summary=final_summary,
-        error="",
-        finished=True,
-    )
+    script_preparation_agent_adapter.complete_agent_workflow(sys.modules[__name__], run_id, final_status, final_summary)
 
+def finish_agent_after_script_preparation(*args, **kwargs):
+    return script_preparation_agent_adapter.finish_with_script_preparation_barrier(
+        sys.modules[__name__], args[0], lambda latest: _finish_agent_after_script_preparation(
+            *args[:4], get_prepared_scripts(latest), latest, **kwargs
+        )
+    )
 
 def claim_agent_script_preparation_continue(run_id):
     config = require_platform_database()
@@ -9659,7 +9633,6 @@ def claim_agent_script_preparation_continue(run_id):
         now_ms=current_time_ms(),
     )
 
-
 def get_prepared_scripts(preparation):
     return [
         item["current_script"]
@@ -9669,35 +9642,26 @@ def get_prepared_scripts(preparation):
         and isinstance(item.get("current_script"), dict)
     ]
 
-
 def mark_agent_workflow_cancelled(run_id, error):
-    steps = [serialize_agent_step(row) for row in list_agent_steps(run_id)]
-    for step in steps:
-        if step.get("status") == "running":
-            update_agent_step(
-                run_id,
-                step["step_key"],
-                status="cancelled",
-                error=str(error),
-                finished=True,
-            )
-    append_agent_event(run_id, "", "status", "Agent 任务已取消。", {"error": str(error)})
-    update_agent_run(run_id, status="cancelled", error=str(error), finished=True)
-
+    applied, _run = script_preparation_agent_adapter.publish_agent_terminal(sys.modules[__name__], run_id, expected_status="cancelling", terminal_status="cancelled", error=error)
+    return applied
 
 def mark_agent_workflow_failed(run_id, error, fallback_step=""):
-    current_step = (get_agent_run_row(run_id) or {}).get("current_step") or fallback_step
-    if current_step:
-        agent_fail_step(run_id, current_step, error)
-    append_agent_event(
-        run_id,
-        current_step,
-        "error",
-        f"Agent 任务失败：{error}",
-        {"error": str(error)},
+    run = get_agent_run_row(run_id) or {}
+    observed_status = run.get("status")
+    if observed_status == "cancelling":
+        script_preparation_agent_adapter.finalize_agent_cancellation(sys.modules[__name__], run_id, str(error))
+        return False
+    if observed_status not in {"queued", "running", "awaiting_script_action"}:
+        return False
+    applied, current = script_preparation_agent_adapter.publish_agent_terminal(
+        sys.modules[__name__], run_id, expected_status=observed_status, terminal_status="failed", error=error, fallback_step=fallback_step,
     )
-    update_agent_run(run_id, status="failed", error=str(error), finished=True)
-
+    if not applied:
+        if (current or {}).get("status") == "cancelling":
+            script_preparation_agent_adapter.finalize_agent_cancellation(sys.modules[__name__], run_id, str(error))
+        return False
+    return True
 
 def restore_agent_run_project_language(project, run):
     language = load_json_column((run or {}).get("summary_json"), {}).get("language")
@@ -9708,9 +9672,9 @@ def restore_agent_run_project_language(project, run):
         }
     return agent_project_language()
 
-
 def run_agent_workflow(run_id, project, author):
-    agent_register_task(run_id)
+    if not agent_register_task(run_id):
+        return
     with use_project_context(project), use_author_context(f"agent:{author or 'platform'}"):
         try:
             run = get_agent_run_row(run_id)
@@ -9720,7 +9684,8 @@ def run_agent_workflow(run_id, project, author):
             requirement = get_requirement_by_uid(run.get("requirement_uid"))
             if not requirement:
                 raise RuntimeError("需求不存在。")
-            update_agent_run(run_id, status="running", current_step="upload_requirement")
+            if not script_preparation_agent_adapter.claim_agent_workflow_start(sys.modules[__name__], run_id, "upload_requirement"):
+                return
             update_agent_step(
                 run_id,
                 "upload_requirement",
@@ -9743,7 +9708,7 @@ def run_agent_workflow(run_id, project, author):
                 agent_analyze_requirement(run_id, requirement),
             )
             plans = agent_generate_plans(run_id, requirement, modules)
-            preparation = agent_script_preparation.run_agent_script_preparation(run_id, plans)
+            preparation = script_preparation_agent_adapter.run_agent_script_preparation_with_barrier(sys.modules[__name__], run_id, plans)
             if preparation.get("paused"):
                 return
             finish_agent_after_script_preparation(
@@ -9756,15 +9721,17 @@ def run_agent_workflow(run_id, project, author):
             )
         except OpencodeTaskCancelled as exc:
             mark_agent_workflow_cancelled(run_id, exc)
+        except ScriptTargetBusy:
+            return
         except Exception as exc:
             mark_agent_workflow_failed(run_id, exc)
         finally:
             agent_set_current_job(run_id, "")
             agent_cleanup_task(run_id)
 
-
 def run_agent_script_preparation_continue_workflow(run_id, project, author):
-    agent_register_task(run_id)
+    if not agent_register_task(run_id):
+        return
     with use_project_context(project), use_author_context(f"agent:{author or 'platform'}"):
         try:
             run = get_agent_run_row(run_id)
@@ -9777,7 +9744,10 @@ def run_agent_script_preparation_continue_workflow(run_id, project, author):
             modules = require_agent_step_list_output(run_id, "review_modules", "modules")
             plans = require_agent_step_list_output(run_id, "generate_plans", "plans")
             preparation = agent_script_preparation.get_script_preparation_snapshot(run_id)
-            update_agent_run(run_id, status="running", current_step="create_suite", error="")
+            suite = (get_agent_step_output(run_id, "create_suite") or {}).get("suite")
+            suite = suite if isinstance(suite, dict) else get_test_suite_payload(run.get("suite_uid")) if run.get("suite_uid") else None
+            run_suite_row = get_agent_step_row(run_id, "run_suite") or {}
+            execution = get_agent_step_output(run_id, "run_suite") if run_suite_row.get("status") == "succeeded" else None
             finish_agent_after_script_preparation(
                 run_id,
                 requirement,
@@ -9785,25 +9755,32 @@ def run_agent_script_preparation_continue_workflow(run_id, project, author):
                 plans,
                 get_prepared_scripts(preparation),
                 preparation,
+                suite=suite,
+                execution=execution,
             )
         except OpencodeTaskCancelled as exc:
             mark_agent_workflow_cancelled(run_id, exc)
+        except ScriptTargetBusy:
+            return
         except Exception as exc:
             mark_agent_workflow_failed(run_id, exc, "prepare_scripts")
         finally:
             agent_set_current_job(run_id, "")
             agent_cleanup_task(run_id)
 
-
 def run_agent_resume_workflow(run_id, project, author, from_step, resume_context=None):
     from_step = validate_agent_step_key(from_step)
     resume_context = resume_context if isinstance(resume_context, dict) else {}
     resume_index = AGENT_STEP_INDEX_BY_KEY[from_step]
-    agent_register_task(run_id)
+    registered = False
     with use_project_context(project), use_author_context(f"agent:{author or 'platform'}"):
         try:
             run = get_agent_run_row(run_id)
             if not run:
+                return
+            if not script_preparation_agent_adapter.claim_agent_resume(sys.modules[__name__], run_id, from_step):
+                return
+            if not (registered := bool(agent_register_task(run_id, replace=True))):
                 return
             restore_agent_run_project_language(project, run)
             requirement = get_requirement_by_uid(run.get("requirement_uid"), True)
@@ -9817,7 +9794,6 @@ def run_agent_resume_workflow(run_id, project, author, from_step, resume_context
                 {"from_step": from_step},
             )
             if resume_index == 0:
-                update_agent_run(run_id, status="running", current_step="upload_requirement")
                 update_agent_step(
                     run_id,
                     "upload_requirement",
@@ -9847,7 +9823,7 @@ def run_agent_resume_workflow(run_id, project, author, from_step, resume_context
                 else require_agent_step_list_output(run_id, "generate_plans", "plans")
             )
             if resume_index <= AGENT_STEP_INDEX_BY_KEY["prepare_scripts"]:
-                preparation = agent_script_preparation.run_agent_script_preparation(run_id, plans)
+                preparation = script_preparation_agent_adapter.run_agent_script_preparation_with_barrier(sys.modules[__name__], run_id, plans)
                 scripts = preparation.get("final_scripts") or []
             else:
                 preparation = agent_script_preparation.get_script_preparation_snapshot(run_id)
@@ -9874,8 +9850,9 @@ def run_agent_resume_workflow(run_id, project, author, from_step, resume_context
         except Exception as exc:
             mark_agent_workflow_failed(run_id, exc, from_step)
         finally:
-            agent_set_current_job(run_id, "")
-            agent_cleanup_task(run_id)
+            if registered:
+                agent_set_current_job(run_id, "")
+                agent_cleanup_task(run_id)
 
 
 def start_agent_thread(run_id, project, author):
@@ -14274,41 +14251,15 @@ def get_agent_run_api(run_id):
         payload = agent_run_response(run_id, include_events=False)
         if not payload:
             return jsonify({"error": "Agent 任务不存在。"}), 404
+        start_agent_script_preparation_continuation(sys.modules[__name__], run_id, recover=True)
         return jsonify({**payload, "error": None})
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
     except Exception as exc:
         return jsonify({"error": f"读取 Agent 任务失败：{exc}"}), 500
 
-
-app.register_blueprint(
-    create_agent_script_preparation_blueprint(
-        AgentScriptPreparationWebServices(
-            get_script_preparation_snapshot=(
-                agent_script_preparation.get_script_preparation_snapshot
-            ),
-            get_script_preparation_item=(
-                get_agent_script_preparation_item_for_web
-            ),
-            apply_script_preparation_action=(
-                agent_script_preparation.apply_script_preparation_action
-            ),
-            apply_script_preparation_batch_action=(
-                agent_script_preparation.apply_script_preparation_batch_action
-            ),
-            start_script_preparation_continue=lambda run_id: (
-                start_agent_script_preparation_continue_thread(
-                    run_id,
-                    get_current_project(),
-                    current_platform_author(),
-                )
-            ),
-            claim_script_preparation_continue=(
-                claim_agent_script_preparation_continue
-            ),
-            conflict_type=agent_script_preparation.ScriptPreparationConflict,
-        )
-    )
+MODULE_SCRIPT_PREPARATION_MANAGER = register_script_preparation_blueprints(
+    app, sys.modules[__name__]
 )
 
 
@@ -14637,29 +14588,11 @@ def cancel_agent_run_api(run_id):
         if run.get("status") in AGENT_TERMINAL_STATUSES:
             return jsonify({"run": serialize_agent_run(run), "cancelled": False, "error": None})
         if run.get("status") == "awaiting_script_action":
-            update_agent_step(
-                run_id,
-                "prepare_scripts",
-                status="cancelled",
-                error="用户请求取消。",
-                finished=True,
-            )
-            append_agent_event(
-                run_id,
-                "prepare_scripts",
-                "status",
-                "用户已取消脚本准备。",
-                {"cancelled": True},
-            )
-            update_agent_run(run_id, status="cancelled", error="用户请求取消。", finished=True)
-            return jsonify(
-                {
-                    "run": serialize_agent_run(get_agent_run_row(run_id)),
-                    "cancelled": True,
-                    "error": None,
-                }
-            )
-        update_agent_run(run_id, status="cancelling", error="用户请求取消。")
+            accepted, current, result = script_preparation_agent_adapter.cancel_awaiting_agent_workflow(sys.modules[__name__], run_id, run.get("status"))
+            return jsonify({"run": serialize_agent_run(current), "cancelled": accepted, **result, "error": None})
+        accepted, current = script_preparation_agent_adapter.request_agent_workflow_cancel(sys.modules[__name__], run_id, run.get("status"))
+        if not accepted:
+            return jsonify({"run": serialize_agent_run(current), "cancelled": False, "error": None})
         result = agent_request_cancel(run_id)
         append_agent_event(run_id, run.get("current_step") or "", "status", "用户请求取消 Agent 任务。", result)
         return jsonify({"run": serialize_agent_run(get_agent_run_row(run_id)), "cancelled": True, **result, "error": None})
@@ -14704,7 +14637,7 @@ def resume_agent_run_api(run_id):
         plan_resume_output = get_agent_plan_resume_output(run_id) if from_step == "generate_plans" else None
         resume_context = {"generate_plans": plan_resume_output} if plan_resume_output else {}
 
-        reset_agent_run_for_resume(run_id, from_step)
+        reset_agent_run_for_resume(run_id, from_step, run.get("status"), run.get("updated_at"))
         project = get_current_project()
         author = current_platform_author()
         start_agent_resume_thread(run_id, project, author, from_step, resume_context=resume_context)
@@ -15569,18 +15502,19 @@ def create_script_generation_stream():
         return jsonify({"error": f"测试计划不存在：{plan_file}"}), 404
 
     generation_language = agent_project_language()
-    existing_script_names = set()
-    if script_dir.exists():
-        existing_script_names = {item.name for item in script_dir.glob("*.spec.ts") if item.is_file()}
-
     script_filename = get_generated_script_filename_from_plan_filename(
         plan_filename,
         language=generation_language,
     )
     target_file = get_script_file(module_name, script_filename)
-    plan_asset = sync_plan_asset(module_name, plan_file, change_source="manual", message=f"sync plan: {module_name}/{plan_filename}")
+    target_lease = acquire_script_target_lease(sys.modules[__name__], module_name, script_filename)
     job_id = sanitize_job_id(str(payload.get("job_id") or f"generator-{uuid.uuid4().hex}").strip())
     try:
+        target_lease.acquire()
+        existing_script_names = set()
+        if script_dir.exists():
+            existing_script_names = {item.name for item in script_dir.glob("*.spec.ts") if item.is_file()}
+        plan_asset = sync_plan_asset(module_name, plan_file, change_source="manual", message=f"sync plan: {module_name}/{plan_filename}")
         create_test_job(
             "generator",
             job_id=job_id,
@@ -15588,18 +15522,19 @@ def create_script_generation_stream():
             source_asset_id=plan_asset.get("asset_id") if plan_asset else None,
             prompt=prompt,
         )
+        candidate_file = get_script_generation_candidate_file(
+            module_name, plan_filename, job_id, language=generation_language,
+        )
+        candidate_file.parent.mkdir(parents=True, exist_ok=True)
+        snapshot = managed_file_snapshot(collect_generation_managed_files(module_name, plan_file, target_file))
+        target_snapshot = snapshot.get(str(target_file.resolve(strict=False)), {})
+        original_target_hash = target_snapshot.get("hash", "")
+    except ScriptTargetBusy as exc:
+        target_lease.release()
+        return jsonify({"error": f"创建测试脚本生成任务失败：{exc}"}), 409
     except Exception as exc:
+        target_lease.release()
         return jsonify({"error": f"创建测试脚本生成任务失败：{exc}"}), 500
-    candidate_file = get_script_generation_candidate_file(
-        module_name,
-        plan_filename,
-        job_id,
-        language=generation_language,
-    )
-    candidate_file.parent.mkdir(parents=True, exist_ok=True)
-    snapshot = managed_file_snapshot(collect_generation_managed_files(module_name, plan_file, target_file))
-    target_snapshot = snapshot.get(str(target_file.resolve(strict=False)), {})
-    original_target_hash = target_snapshot.get("hash", "")
 
     def has_generated_script_output():
         if candidate_file.exists() and candidate_file.is_file() and candidate_file.stat().st_size > 0:
@@ -15641,11 +15576,21 @@ def create_script_generation_stream():
         cleanup_new_generated_script_files(script_dir, existing_script_names)
         cleanup_new_managed_files(snapshot)
         candidate_file.unlink(missing_ok=True)
+        if target_file.is_file():
+            sync_script_asset(module_name, target_file, change_source="rollback", message=f"cancel rollback: {module_name}/{script_filename}")
+        else:
+            created_asset = get_test_asset_by_path("script", target_file)
+            if created_asset:
+                mark_test_asset_deleted(created_asset)
 
-    full_prompt = build_script_generation_prompt(prompt, module_name, plan_file, script_dir, target_file, candidate_file)
+    try:
+        full_prompt = build_script_generation_prompt(prompt, module_name, plan_file, script_dir, target_file, candidate_file)
+    except Exception:
+        target_lease.release()
+        raise
     response = Response(
         stream_with_context(
-            stream_plan_generation(
+            release_script_target_lease_after(target_lease, stream_plan_generation(
                 module_name,
                 full_prompt,
                 target_file,
@@ -15662,12 +15607,13 @@ def create_script_generation_stream():
                 cancel_job_id=job_id,
                 job_id=job_id,
                 cancel_cleanup=cleanup_cancelled_generation,
-            )
+            ))
         ),
         mimetype="text/event-stream",
     )
     response.headers["Cache-Control"] = "no-cache"
     response.headers["X-Accel-Buffering"] = "no"
+    response.call_on_close(target_lease.release)
     return response
 
 
@@ -15690,9 +15636,11 @@ def create_script_run_stream():
     if not script_file.exists():
         return jsonify({"error": f"Script file not found: {script_file}"}), 404
 
-    script_asset = sync_script_asset(module_name, script_file, change_source="manual", message=f"sync script: {module_name}/{filename}")
+    target_lease = acquire_script_target_lease(sys.modules[__name__], module_name, filename)
     job_id = sanitize_job_id(job_id or f"healer-{uuid.uuid4().hex}")
     try:
+        target_lease.acquire()
+        script_asset = sync_script_asset(module_name, script_file, change_source="manual", message=f"sync script: {module_name}/{filename}")
         create_test_job(
             "healer",
             job_id=job_id,
@@ -15700,11 +15648,19 @@ def create_script_run_stream():
             target_asset_id=script_asset.get("asset_id") if script_asset else None,
             prompt=prompt,
         )
+    except ScriptTargetBusy as exc:
+        target_lease.release()
+        return jsonify({"error": f"创建脚本修复任务失败：{exc}"}), 409
     except Exception as exc:
+        target_lease.release()
         return jsonify({"error": f"创建脚本修复任务失败：{exc}"}), 500
 
     started_at = time.time()
     repair_snapshot = managed_file_snapshot([script_file])
+
+    def cleanup_cancelled_repair():
+        restore_snapshot_files(repair_snapshot)
+        sync_script_asset(module_name, script_file, change_source="rollback", message=f"cancel rollback: {module_name}/{filename}")
 
     def finalize_healer_payload():
         result = build_run_video_result(started_at)
@@ -15723,10 +15679,14 @@ def create_script_run_stream():
         )
         return result
 
-    full_prompt = build_script_run_prompt(prompt, module_name, filename, script_file)
+    try:
+        full_prompt = build_script_run_prompt(prompt, module_name, filename, script_file)
+    except Exception:
+        target_lease.release()
+        raise
     response = Response(
         stream_with_context(
-            stream_plan_generation(
+            release_script_target_lease_after(target_lease, stream_plan_generation(
                 module_name,
                 full_prompt,
                 script_file,
@@ -15743,13 +15703,14 @@ def create_script_run_stream():
                 ),
                 cancel_job_id=job_id,
                 job_id=job_id,
-                cancel_cleanup=lambda: restore_snapshot_files(repair_snapshot),
-            )
+                cancel_cleanup=cleanup_cancelled_repair,
+            ))
         ),
         mimetype="text/event-stream",
     )
     response.headers["Cache-Control"] = "no-cache"
     response.headers["X-Accel-Buffering"] = "no"
+    response.call_on_close(target_lease.release)
     return response
 
 
@@ -15784,7 +15745,6 @@ def execute_test_script():
     payload = request.get_json(silent=True) or {}
     module_name = str(payload.get("module_name", "")).strip()
     filename = str(payload.get("filename", "")).strip()
-
     try:
         setup_targets = build_setup_targets(module_name=module_name, filename=filename)
         setup_resolution = resolve_setup_profile(setup_targets)
@@ -15797,20 +15757,24 @@ def execute_test_script():
         return jsonify({"error": str(exc)}), 400
     except OSError as exc:
         return jsonify({"error": f"创建 Playwright 视频配置失败：{exc}"}), 500
-
     started_at = time.time()
-
     result = {
         "status": "running",
         "module_name": module_name,
         "filename": filename,
         "target_path": str(context["script_file"]),
         "command": context["command_text"],
-        "returncode": None,
-        "output": "",
-        "error": None,
+        "returncode": None, "output": "", "error": None,
     }
-
+    execution_lease = acquire_script_target_lease(sys.modules[__name__], module_name, filename)
+    try:
+        execution_lease.acquire()
+    except ScriptTargetBusy as exc:
+        try:
+            context["video_config"].unlink(missing_ok=True)
+        except OSError:
+            pass
+        return jsonify({"error": str(exc)}), 409
     try:
         try:
             setup_logs = []
@@ -15892,10 +15856,12 @@ def execute_test_script():
             context["video_config"].unlink(missing_ok=True)
         except OSError:
             pass
-
-    result.update(build_run_video_result(started_at, context["results_dir"]))
-    result.update(build_playwright_report_result(started_at, context["report_dir"]))
-    return jsonify(result)
+    try:
+        result.update(build_run_video_result(started_at, context["results_dir"]))
+        result.update(build_playwright_report_result(started_at, context["report_dir"]))
+        return jsonify(result)
+    finally:
+        execution_lease.release()
 
 
 def _BufferedExecutionOutput(job_id, *, agent_stream=False, project_root=None):
@@ -15917,7 +15883,6 @@ def execute_test_script_stream():
     payload = request.get_json(silent=True) or {}
     module_name = str(payload.get("module_name", "")).strip()
     filename = str(payload.get("filename", "")).strip()
-
     try:
         setup_targets = build_setup_targets(module_name=module_name, filename=filename)
         setup_resolution = resolve_setup_profile(setup_targets)
@@ -15932,7 +15897,10 @@ def execute_test_script_stream():
         return jsonify({"error": f"创建 Playwright 视频配置失败：{exc}"}), 500
 
     response = Response(
-        stream_with_context(stream_script_execution(module_name, filename, context)),
+        stream_with_context(hold_script_target_lease(
+            sys.modules[__name__], module_name, filename,
+            stream_script_execution(module_name, filename, context),
+        )),
         mimetype="text/event-stream",
     )
     response.headers["Cache-Control"] = "no-cache"
@@ -15973,7 +15941,10 @@ def execute_module_test_scripts_stream():
         return jsonify({"error": f"创建 Playwright 批量执行配置失败：{exc}"}), 500
 
     response = Response(
-        stream_with_context(stream_module_script_execution(module_name, context["filenames"], context)),
+        stream_with_context(hold_script_target_lease(
+            sys.modules[__name__], module_name, context["filenames"][0],
+            stream_module_script_execution(module_name, context["filenames"], context),
+        )),
         mimetype="text/event-stream",
     )
     response.headers["Cache-Control"] = "no-cache"
@@ -16017,7 +15988,7 @@ def execute_test_suite_stream():
         return jsonify({"error": f"创建 Playwright 测试集执行配置失败：{exc}"}), 500
 
     response = Response(
-        stream_with_context(stream_test_suite_execution(suite_id, suite_name, context["items"], context)),
+        stream_with_context(hold_script_module_leases(sys.modules[__name__], [(item["module_name"], item["filename"]) for item in context["items"]], stream_test_suite_execution(suite_id, suite_name, context["items"], context))),
         mimetype="text/event-stream",
     )
     response.headers["Cache-Control"] = "no-cache"
@@ -16053,7 +16024,7 @@ def execute_persisted_test_suite_stream(suite_uid):
         return jsonify({"error": f"创建 Playwright 测试集执行配置失败：{exc}"}), 500
 
     response = Response(
-        stream_with_context(stream_test_suite_execution(suite["suite_uid"], suite["name"], context["items"], context)),
+        stream_with_context(hold_script_module_leases(sys.modules[__name__], [(item["module_name"], item["filename"]) for item in context["items"]], stream_test_suite_execution(suite["suite_uid"], suite["name"], context["items"], context))),
         mimetype="text/event-stream",
     )
     response.headers["Cache-Control"] = "no-cache"
@@ -16073,19 +16044,19 @@ def record_test_script():
         return jsonify({"error": str(exc)}), 404
     except (RuntimeError, ValueError) as exc:
         return jsonify({"error": str(exc)}), 400
-
+    recording_lease = acquire_script_target_lease(sys.modules[__name__], module_name, filename)
+    try:
+        recording_lease.acquire()
+    except ScriptTargetBusy as exc:
+        return jsonify({"error": str(exc)}), 409
     result = {
         "status": "running",
         "module_name": module_name,
         "filename": filename,
         "path": str(context["script_file"]),
         "command": context["command_text"],
-        "returncode": None,
-        "output": "",
-        "error": None,
-        "content": None,
+        "returncode": None, "output": "", "error": None, "content": None,
     }
-
     try:
         completed = subprocess.run(
             context["command"],
@@ -16131,7 +16102,8 @@ def record_test_script():
                 "error": f"脚本录制失败：{exc}",
             }
         )
-
+    except Exception as exc:
+        result.update({"status": "failed", "error": f"脚本录制失败：{exc}"})
     try:
         result["content"] = context["script_file"].read_text(encoding="utf-8")
         if result["status"] == "succeeded":
@@ -16158,8 +16130,10 @@ def record_test_script():
     except Exception as exc:
         result["error"] = result["error"] or f"保存录制脚本版本失败：{exc}"
         result["status"] = "failed"
-
-    return jsonify(result)
+    try:
+        return jsonify(result)
+    finally:
+        recording_lease.release()
 
 
 @app.post("/api/plan-generation-jobs")
@@ -16355,37 +16329,41 @@ def get_asset_revision_diff(asset_id, revision_id):
         }
     )
 
-
 @app.post("/api/assets/<int:asset_id>/revisions/<int:revision_id>/restore")
 def restore_asset_revision(asset_id, revision_id):
+    payload = request.get_json(silent=True) or {}
     try:
-        asset = get_test_asset_by_id(asset_id)
-        revision = get_asset_revision(asset_id, revision_id)
+        asset, revision = get_test_asset_by_id(asset_id), get_asset_revision(asset_id, revision_id)
         if not asset or not revision:
             return jsonify({"error": "Revision not found."}), 404
-
-        content = git_show_file(revision["git_commit_sha"], revision["file_path"])
-        target_file = Path(asset["current_path"])
-        target_file.write_text(content, encoding="utf-8", newline="")
-        if asset["asset_type"] == "plan":
-            updated_asset = sync_plan_asset(
-                asset["module_name"],
-                target_file,
-                change_source="manual",
-                message=f"restore: {asset['module_name']}/{target_file.name} to v{revision['version_no']}",
-            )
+        if asset["asset_type"] == "script" and "expected_revision_id" not in payload:
+            return jsonify({"error": "expected_revision_id is required."}), 400
+        def restore_locked():
+            current_asset = get_test_asset_by_id(asset_id)
+            current_revision = get_asset_revision(asset_id, revision_id)
+            expected = payload.get("expected_revision_id")
+            if "expected_revision_id" in payload and str(expected) != str(current_asset.get("current_revision_id")):
+                raise agent_script_preparation.ScriptPreparationConflict("脚本版本已变化，请刷新后重试。")
+            content, target_file = git_show_file(current_revision["git_commit_sha"], current_revision["file_path"]), Path(current_asset["current_path"])
+            if current_asset["asset_type"] == "plan":
+                target_file.write_text(content, encoding="utf-8", newline="")
+                updated = sync_plan_asset(current_asset["module_name"], target_file, change_source="manual", message=f"restore: {current_asset['module_name']}/{target_file.name} to v{current_revision['version_no']}")
+            else:
+                def sync(message):
+                    return sync_script_asset(current_asset["module_name"], target_file, change_source="manual", from_plan_asset_id=current_asset.get("from_plan_asset_id"), message=message)
+                updated = save_asset_content_with_rollback(target_file, content,
+                    lambda: sync(f"restore: {current_asset['module_name']}/{target_file.name} to v{current_revision['version_no']}"),
+                    lambda: sync(f"rollback restore: {current_asset['module_name']}/{target_file.name}"),
+                    rollback_message=f"rollback failed restore: {current_asset['module_name']}/{target_file.name}")
+            return updated, list_asset_revisions(updated["asset_id"], 20) if updated else []
+        if asset["asset_type"] == "script":
+            updated_asset, revisions = call_with_script_target_lease(sys.modules[__name__], asset["module_name"], Path(asset["current_path"]).name, restore_locked)
         else:
-            updated_asset = sync_script_asset(
-                asset["module_name"],
-                target_file,
-                change_source="manual",
-                from_plan_asset_id=asset.get("from_plan_asset_id"),
-                message=f"restore: {asset['module_name']}/{target_file.name} to v{revision['version_no']}",
-            )
-        revisions = list_asset_revisions(updated_asset["asset_id"], 20) if updated_asset else []
+            updated_asset, revisions = restore_locked()
+    except (agent_script_preparation.ScriptPreparationConflict, ScriptTargetBusy) as exc:
+        return jsonify({"error": str(exc)}), 409
     except Exception as exc:
         return jsonify({"error": f"恢复版本失败：{exc}"}), 500
-
     return jsonify(
         {
             "ok": True,
@@ -16460,11 +16438,13 @@ def get_test_script(module_name, filename):
         return jsonify({"error": f"Script file not found: {script_file}"}), 404
 
     try:
-        content = script_file.read_text(encoding="utf-8")
-        asset = sync_script_asset(module_name, script_file, change_source="manual", message=f"sync script: {module_name}/{filename}")
-        revisions = list_asset_revisions(asset["asset_id"], 20) if asset else []
-        source_plan = get_plan_asset_for_script_asset(asset)
-        recent_results = list_recent_script_results(asset["asset_id"], 20) if asset else []
+        def read_locked():
+            content = script_file.read_text(encoding="utf-8")
+            asset = sync_script_asset(module_name, script_file, change_source="manual", message=f"sync script: {module_name}/{filename}")
+            return content, asset, list_asset_revisions(asset["asset_id"], 20) if asset else [], get_plan_asset_for_script_asset(asset), list_recent_script_results(asset["asset_id"], 20) if asset else []
+        content, asset, revisions, source_plan, recent_results = call_with_script_target_lease(sys.modules[__name__], module_name, filename, read_locked)
+    except ScriptTargetBusy as exc:
+        return jsonify({"error": str(exc)}), 409
     except UnicodeDecodeError:
         return jsonify({"error": f"File is not valid UTF-8: {script_file}"}), 422
     except OSError as exc:
@@ -16491,6 +16471,8 @@ def get_test_script(module_name, filename):
 def delete_test_script(module_name, filename):
     try:
         result = delete_script_asset(module_name, filename)
+    except ScriptTargetBusy as exc:
+        return jsonify({"error": str(exc)}), 409
     except (RuntimeError, ValueError) as exc:
         return jsonify({"error": str(exc)}), 400
     except FileNotFoundError as exc:
@@ -16541,6 +16523,8 @@ def save_test_script(module_name, filename):
     payload = request.get_json(silent=True) or {}
     if "content" not in payload or not isinstance(payload["content"], str):
         return jsonify({"error": "Request body must include content as a string."}), 400
+    if "expected_revision_id" not in payload:
+        return jsonify({"error": "expected_revision_id is required."}), 400
 
     try:
         script_file = get_script_file(module_name, filename)
@@ -16563,18 +16547,19 @@ def save_test_script(module_name, filename):
             saved_recent_results = list_recent_script_results(saved_asset["asset_id"], 20) if saved_asset else []
             return saved_asset, saved_revisions, saved_source_plan, saved_recent_results
 
-        asset, revisions, source_plan, recent_results = save_asset_content_with_rollback(
-            script_file,
-            payload["content"],
-            save_script_asset,
-            lambda: sync_script_asset(
-                module_name,
-                script_file,
-                change_source="manual",
-                message=f"rollback: {module_name}/{filename}",
-            ),
-            rollback_message=f"rollback failed save: {module_name}/{filename}",
-        )
+        def save_locked():
+            current = get_test_asset_by_path("script", script_file) or {}
+            expected = payload.get("expected_revision_id")
+            if str(expected) != str(current.get("current_revision_id")):
+                raise agent_script_preparation.ScriptPreparationConflict("脚本版本已变化，请刷新后重试。")
+            return save_asset_content_with_rollback(
+                script_file, payload["content"], save_script_asset,
+                lambda: sync_script_asset(module_name, script_file, change_source="manual", message=f"rollback: {module_name}/{filename}"),
+                rollback_message=f"rollback failed save: {module_name}/{filename}",
+            )
+        asset, revisions, source_plan, recent_results = call_with_script_target_lease(sys.modules[__name__], module_name, filename, save_locked)
+    except (agent_script_preparation.ScriptPreparationConflict, ScriptTargetBusy) as exc:
+        return jsonify({"error": str(exc)}), 409
     except OSError as exc:
         return jsonify({"error": f"Failed to save file: {exc}"}), 500
     except Exception as exc:
@@ -16595,50 +16580,20 @@ def save_test_script(module_name, filename):
     )
 
 
-app.register_blueprint(
-    create_auth_blueprint(_auth_web_services())
-)
-app.register_blueprint(
-    create_platform_records_blueprint(
-        PlatformRecordServices(
-            get_database_config=lambda: get_platform_database_config(),
-            load_records=lambda: load_platform_records_from_mysql(),
-            save_record=lambda bucket, record_key, record: save_platform_record_to_mysql(
-                bucket,
-                record_key,
-                record,
-            ),
-        )
-    )
-)
-app.register_blueprint(
-    create_projects_blueprint(_project_web_services())
-)
-app.register_blueprint(
-    create_seed_blueprint(_seed_web_services())
-)
-app.register_blueprint(
-    create_project_archive_blueprint(_project_archive_web_services())
-)
-app.register_blueprint(
-    create_setup_blueprint(_setup_web_services())
-)
-app.register_blueprint(
-    create_requirements_blueprint(
-        _requirement_web_services()
-    )
-)
-app.register_blueprint(
-    create_page_inventory_blueprint(
-        _page_inventory_web_services()
-    )
-)
-app.register_blueprint(
-    create_plan_workbook_blueprint(_plan_workbook_web_services())
-)
-app.register_blueprint(
-    create_test_suites_blueprint(_test_suite_web_services())
-)
+app.register_blueprint(create_auth_blueprint(_auth_web_services()))
+app.register_blueprint(create_platform_records_blueprint(PlatformRecordServices(
+    get_database_config=lambda: get_platform_database_config(),
+    load_records=lambda: load_platform_records_from_mysql(),
+    save_record=lambda bucket, record_key, record: save_platform_record_to_mysql(bucket, record_key, record),
+)))
+app.register_blueprint(create_projects_blueprint(_project_web_services()))
+app.register_blueprint(create_seed_blueprint(_seed_web_services()))
+app.register_blueprint(create_project_archive_blueprint(_project_archive_web_services()))
+app.register_blueprint(create_setup_blueprint(_setup_web_services()))
+app.register_blueprint(create_requirements_blueprint(_requirement_web_services()))
+app.register_blueprint(create_page_inventory_blueprint(_page_inventory_web_services()))
+app.register_blueprint(create_plan_workbook_blueprint(_plan_workbook_web_services()))
+app.register_blueprint(create_test_suites_blueprint(_test_suite_web_services()))
 
 
 if __name__ == "__main__":

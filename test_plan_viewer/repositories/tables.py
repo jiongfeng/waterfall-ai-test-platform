@@ -51,6 +51,10 @@ def get_agent_item_retry_flows_table(config):
     return platform_table_sql(config, "agent_item_retry_flows")
 
 
+def get_script_preparation_runs_table(config):
+    return platform_table_sql(config, "script_preparation_runs")
+
+
 def get_test_assets_table(config):
     return platform_table_sql(config, "test_assets")
 

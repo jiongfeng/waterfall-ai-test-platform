@@ -1,6 +1,7 @@
 """HTTP delivery for the Agent script-preparation workspace."""
 
 from dataclasses import dataclass
+from contextlib import nullcontext
 from typing import Any, Callable
 
 from flask import Blueprint, jsonify, request
@@ -32,6 +33,11 @@ class AgentScriptPreparationWebServices:
     apply_script_preparation_batch_action: Callable[..., Any]
     start_script_preparation_continue: Callable[[str], Any]
     claim_script_preparation_continue: Callable[[str], bool] = lambda _run_id: True
+    reconcile_script_preparation_items: Callable[[str, list], Any] = (
+        lambda _run_id, _item_ids: None
+    )
+    script_preparation_barrier: Callable[[str], Any] = lambda _run_id: nullcontext()
+    recover_script_preparation_continue: Callable[[str], Any] = lambda _run_id: None
     conflict_type: type[Exception] = AgentScriptPreparationConflict
 
 
@@ -58,6 +64,16 @@ def _action_parameters(payload):
         for field in SCRIPT_PREPARATION_ACTION_FIELDS
         if field in payload
     }
+
+
+def _require_expected_revision(payload, action, items=None):
+    if action == "abandon" or "expected_revision_id" in payload:
+        return
+    if items and all(
+        isinstance(item, dict) and "expected_revision_id" in item for item in items
+    ):
+        return
+    raise ValueError("expected_revision_id 是必填字段。")
 
 
 def _error_response(services, exc, operation):
@@ -125,6 +141,7 @@ def create_agent_script_preparation_blueprint(services):
             snapshot = services.get_script_preparation_snapshot(run_id)
             if snapshot is None:
                 return jsonify({"error": "Agent 任务不存在。"}), 404
+            services.recover_script_preparation_continue(run_id)
             return jsonify({"snapshot": snapshot, "error": None})
         except Exception as exc:
             return _error_response(services, exc, "读取脚本准备阶段失败")
@@ -146,25 +163,36 @@ def create_agent_script_preparation_blueprint(services):
         try:
             payload = _json_object()
             action = _action_name(payload)
-            result = services.apply_script_preparation_action(
-                run_id,
-                item_id,
-                action=action,
-                **_action_parameters(payload),
-            )
-            if result is None:
-                return jsonify({"error": "脚本项不存在。"}), 404
-            item, should_continue = _normalize_action_result(result)
-            if item is None:
-                return jsonify({"error": "脚本项不存在。"}), 404
-            if should_continue:
-                continuation_claimed = bool(
-                    services.claim_script_preparation_continue(run_id)
+            _require_expected_revision(payload, action)
+            with services.script_preparation_barrier(run_id):
+                services.reconcile_script_preparation_items(run_id, [item_id])
+                result = services.apply_script_preparation_action(
+                    run_id,
+                    item_id,
+                    action=action,
+                    **_action_parameters(payload),
                 )
-                if continuation_claimed:
-                    services.start_script_preparation_continue(run_id)
-            else:
-                continuation_claimed = False
+                if result is None:
+                    return jsonify({"error": "脚本项不存在。"}), 404
+                item, should_continue = _normalize_action_result(result)
+                if item is None:
+                    return jsonify({"error": "脚本项不存在。"}), 404
+                if should_continue:
+                    services.reconcile_script_preparation_items(run_id, [])
+                    latest = services.get_script_preparation_snapshot(run_id) or {}
+                    counts = latest.get("counts") or {}
+                    if "total" in counts:
+                        should_continue = bool(counts.get("total")) and counts.get(
+                            "terminal"
+                        ) == counts.get("total")
+                if should_continue:
+                    continuation_claimed = bool(
+                        services.claim_script_preparation_continue(run_id)
+                    )
+                else:
+                    continuation_claimed = False
+            if continuation_claimed:
+                services.start_script_preparation_continue(run_id)
             response = jsonify(
                 {
                     "accepted": True,
@@ -190,23 +218,34 @@ def create_agent_script_preparation_blueprint(services):
                 items = payload.get("item_ids")
             if not isinstance(items, list) or not items:
                 raise ValueError("items 必须是非空列表。")
-            result = services.apply_script_preparation_batch_action(
-                run_id,
-                items,
-                action=action,
-                **_action_parameters(payload),
-            )
-            accepted, rejected, should_continue = _normalize_batch_result(
-                result
-            )
-            if should_continue:
-                continuation_claimed = bool(
-                    services.claim_script_preparation_continue(run_id)
+            _require_expected_revision(payload, action, items)
+            with services.script_preparation_barrier(run_id):
+                services.reconcile_script_preparation_items(run_id, items)
+                result = services.apply_script_preparation_batch_action(
+                    run_id,
+                    items,
+                    action=action,
+                    **_action_parameters(payload),
                 )
-                if continuation_claimed:
-                    services.start_script_preparation_continue(run_id)
-            else:
-                continuation_claimed = False
+                accepted, rejected, should_continue = _normalize_batch_result(
+                    result
+                )
+                if should_continue:
+                    services.reconcile_script_preparation_items(run_id, [])
+                    latest = services.get_script_preparation_snapshot(run_id) or {}
+                    counts = latest.get("counts") or {}
+                    if "total" in counts:
+                        should_continue = bool(counts.get("total")) and counts.get(
+                            "terminal"
+                        ) == counts.get("total")
+                if should_continue:
+                    continuation_claimed = bool(
+                        services.claim_script_preparation_continue(run_id)
+                    )
+                else:
+                    continuation_claimed = False
+            if continuation_claimed:
+                services.start_script_preparation_continue(run_id)
             response = jsonify(
                 {
                     "accepted": accepted,

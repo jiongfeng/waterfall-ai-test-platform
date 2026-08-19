@@ -221,6 +221,8 @@ for (const filename of [
   "static/js/features/plan-transfer.js",
   "static/js/features/project-settings.js",
   "static/js/features/setup-preparation.js",
+  "static/js/features/agent-script-preparation.js",
+  "static/js/features/module-script-preparation.js",
   "static/js/features/agent-progress.js",
   "static/js/features/agent.js",
   "static/app.js",

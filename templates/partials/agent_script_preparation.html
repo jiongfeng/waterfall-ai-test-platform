@@ -1,12 +1,14 @@
+{% set script_preparation_prefix = script_preparation_prefix|default("agent") %}
 <section
-  class="artifact-panel script-preparation-panel hidden"
+  class="artifact-panel script-preparation-host script-preparation-panel hidden"
   data-script-preparation-id="root"
-  aria-labelledby="agentScriptPreparationTitle"
+  data-script-preparation-scope="{{ script_preparation_scope|default('agent') }}"
+  aria-labelledby="{{ script_preparation_prefix }}ScriptPreparationTitle"
 >
   <header class="script-preparation-header">
     <div class="script-preparation-heading">
       <p class="path-label" data-script-preparation-id="stageMeta">脚本准备</p>
-      <h2 id="agentScriptPreparationTitle" data-script-preparation-id="stageTitle">脚本准备</h2>
+      <h2 id="{{ script_preparation_prefix }}ScriptPreparationTitle" data-script-preparation-id="stageTitle">脚本准备</h2>
       <p data-script-preparation-id="stageSummary">系统依次完成生成、执行和一次自动修复；待人工脚本不阻塞后续处理。</p>
     </div>
     <div class="script-preparation-header-actions">
@@ -137,7 +139,7 @@
     role="dialog"
     aria-modal="true"
     aria-hidden="true"
-    aria-labelledby="agentScriptPreparationDetailTitle"
+    aria-labelledby="{{ script_preparation_prefix }}ScriptPreparationDetailTitle"
   >
     <button
       class="script-preparation-modal-backdrop"
@@ -151,7 +153,7 @@
       <header class="script-preparation-detail-header">
         <div>
           <p data-script-preparation-id="detailMeta">脚本准备</p>
-          <h2 id="agentScriptPreparationDetailTitle" data-script-preparation-id="detailTitle">脚本详情</h2>
+          <h2 id="{{ script_preparation_prefix }}ScriptPreparationDetailTitle" data-script-preparation-id="detailTitle">脚本详情</h2>
           <div data-script-preparation-id="detailBadges"></div>
         </div>
         <button
@@ -180,7 +182,7 @@
     role="dialog"
     aria-modal="true"
     aria-hidden="true"
-    aria-labelledby="agentScriptPreparationEditorTitle"
+    aria-labelledby="{{ script_preparation_prefix }}ScriptPreparationEditorTitle"
   >
     <button
       class="script-preparation-modal-backdrop"
@@ -194,7 +196,7 @@
       <header class="script-preparation-detail-header">
         <div>
           <p data-script-preparation-id="editorMeta">脚本准备</p>
-          <h2 id="agentScriptPreparationEditorTitle" data-script-preparation-id="editorTitle">编辑脚本</h2>
+          <h2 id="{{ script_preparation_prefix }}ScriptPreparationEditorTitle" data-script-preparation-id="editorTitle">编辑脚本</h2>
           <p data-script-preparation-id="editorDescription"></p>
         </div>
         <button

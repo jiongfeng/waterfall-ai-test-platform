@@ -9,7 +9,7 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}" />
     <link rel="stylesheet" href="{{ url_for('static', filename='css/features/projects.css') }}" />
     <link rel="stylesheet" href="{{ url_for('static', filename='css/features/agent.css') }}" />
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/features/agent-script-preparation.css', v=5) }}" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/features/agent-script-preparation.css', v=6) }}" />
   </head>
   <body>
     <div class="app-shell i18n-pending" id="appShell">
@@ -168,9 +168,13 @@
 {% include "partials/agent_panel.html" %}
           <div class="script-tabs hidden" id="scriptTabs" role="tablist" aria-label="测试脚本内容">
             <button class="content-tab active" id="scriptContentTab" type="button" role="tab" aria-selected="true">脚本</button>
+            <button class="content-tab" id="scriptPreparationTab" type="button" role="tab" aria-selected="false">脚本准备</button>
             <button class="content-tab" id="executionRecordTab" type="button" role="tab" aria-selected="false">执行记录</button>
             <button class="content-tab" id="repairRecordTab" type="button" role="tab" aria-selected="false">修复记录</button>
           </div>
+          {% with script_preparation_prefix="module", script_preparation_scope="module" %}
+            {% include "partials/agent_script_preparation.html" %}
+          {% endwith %}
           <div class="script-tabs hidden" id="planTabs" role="tablist" aria-label="测试计划内容">
             <button class="content-tab active" id="planContentTab" type="button" role="tab" aria-selected="true">计划</button>
             <button class="content-tab" id="planGenerationRecordTab" type="button" role="tab" aria-selected="false">生成测试计划记录</button>
@@ -338,7 +342,7 @@
               <div class="module-script-actions hidden" id="modulePlanBulkActions">
                 <span class="module-selection-count" id="modulePlanSelectionCount">已选择 0 条</span>
                 <button class="secondary-button" id="modulePlanBulkCancel" type="button">取消</button>
-                <button class="primary-button" id="modulePlanBulkGenerate" type="button" disabled>批量生成脚本</button>
+                <button class="primary-button" id="modulePlanBulkGenerate" type="button" disabled>批量生成并准备</button>
                 <button class="secondary-button danger-button" id="modulePlanBulkDelete" type="button" disabled>批量删除</button>
               </div>
             </div>
@@ -604,7 +608,8 @@
     <script src="{{ url_for('static', filename='js/features/plan-transfer.js') }}"></script>
     <script src="{{ url_for('static', filename='js/features/project-settings.js') }}"></script>
     <script src="{{ url_for('static', filename='js/features/setup-preparation.js') }}"></script>
-    <script src="{{ url_for('static', filename='js/features/agent-script-preparation.js', v=4) }}"></script>
+    <script src="{{ url_for('static', filename='js/features/agent-script-preparation.js', v=5) }}"></script>
+    <script src="{{ url_for('static', filename='js/features/module-script-preparation.js', v=1) }}"></script>
     <script src="{{ url_for('static', filename='js/features/agent-progress.js', v=1) }}"></script>
     <script src="{{ url_for('static', filename='js/features/agent.js', v=4) }}"></script>
     <script src="{{ url_for('static', filename='js/i18n/zh-CN.js') }}"></script>

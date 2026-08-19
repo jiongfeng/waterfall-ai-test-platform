@@ -1820,6 +1820,83 @@ class MultiplePlanFinalizationTests(unittest.TestCase):
 
 
 class AgentPlanRecoveryTests(unittest.TestCase):
+    def test_normal_plan_generation_accepts_source_ready_split_handoff(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "计划索引.md"
+            module = {
+                "module_uid": "module-1",
+                "module_name": "登录",
+                "plan_name": "计划索引",
+                "planner_prompt": "生成登录计划",
+            }
+            normalized = {
+                "coverage_profile": "core",
+                "coverage_prompt": "",
+                "prompt_customized": False,
+            }
+            split_result = {
+                "plans": [{"module_name": "登录", "plan_filename": "登录成功.md"}],
+                "split": {"created": [{"filename": "登录成功.md"}]},
+                "deleted_source": {},
+                "asset": {"asset_id": 9},
+            }
+
+            def consume(_run_id, _step_key, _generator, **_kwargs):
+                target.write_text(valid_plan_markdown(), encoding="utf-8")
+                return {
+                    "status": "running",
+                    "source_ready": True,
+                    "plan_phase": "splitting",
+                    "plan_filename": target.name,
+                }
+
+            with (
+                patch.object(app, "validate_module_name", side_effect=lambda value: value),
+                patch.object(
+                    app,
+                    "get_agent_run_row",
+                    return_value={"plan_generation_json": '{"coverage_profile":"core"}'},
+                ),
+                patch.object(
+                    app,
+                    "serialize_agent_run",
+                    return_value={"plan_generation": {}},
+                ),
+                patch.object(
+                    app, "normalize_plan_generation_request", return_value=normalized
+                ),
+                patch.object(app, "compose_editable_plan_prompt", return_value="prompt"),
+                patch.object(app, "get_current_project_language", return_value="en"),
+                patch.object(app, "get_plan_filename_from_name", return_value=target.name),
+                patch.object(app, "get_plan_target_path", return_value=target),
+                patch.object(app, "build_multiple_plan_generation_prompt", return_value="full"),
+                patch.object(app, "build_plan_prompt_context", return_value={}),
+                patch.object(app, "create_test_job"),
+                patch.object(app, "agent_set_current_job"),
+                patch.object(app, "append_agent_artifact_progress"),
+                patch.object(app, "build_setup_targets", return_value=[]),
+                patch.object(app, "stream_plan_generation", return_value=iter(())) as stream,
+                patch.object(app, "consume_agent_sse_generator", side_effect=consume),
+                patch.object(
+                    app, "finalize_multiple_plan_files", return_value=split_result
+                ) as finalize,
+                patch.object(app, "finish_test_job") as finish,
+            ):
+                result = app.agent_generate_plan_for_module(
+                    "agent-1", "generate_plans", {"id": 1}, module
+                )
+
+        self.assertEqual(result["status"], "succeeded")
+        self.assertEqual(result["plans"], split_result["plans"])
+        self.assertFalse(stream.call_args.kwargs["finish_job_on_success"])
+        finalize.assert_called_once()
+        self.assertEqual(finish.call_args.args[1], "succeeded")
+        self.assertFalse(
+            app.script_preparation_agent_adapter.plan_source_ready(
+                {"status": "running", "logs": "stream ended early"}
+            )
+        )
+
     def test_recovery_rejects_filesystem_equivalent_case_filenames(self):
         scenarios = (
             ("en", "case-index.md", "Login.md", "login.md"),

@@ -66,6 +66,7 @@ let SCRIPT_PROMPT_NOTE_DEFAULT = "注意：每个Step下面尽量生成实际代
 
 const SCRIPT_VIEW_TAB = {
   SCRIPT: "script",
+  PREPARATION: "preparation",
   EXECUTION: "execution",
   REPAIR: "repair",
 };
@@ -507,6 +508,9 @@ function normalizeViewStateRecord(parsed) {
     scriptModule: typeof parsed.scriptModule === "string" ? parsed.scriptModule : null,
     scriptFile: typeof parsed.scriptFile === "string" ? parsed.scriptFile : null,
     scriptActiveTab: activeTab,
+    preparationRunId: typeof parsed.preparationRunId === "string" ? parsed.preparationRunId : "",
+    preparationModule: typeof parsed.preparationModule === "string" ? parsed.preparationModule : "",
+    preparationRuns: normalizeModuleScriptPreparationRuns(parsed.preparationRuns, parsed.preparationModule, parsed.preparationRunId),
     testSuiteId: typeof parsed.testSuiteId === "string" ? parsed.testSuiteId : null,
     testSuiteModule:
       typeof parsed.testSuiteModule === "string" && parsed.testSuiteModule
@@ -722,7 +726,11 @@ const state = {
     sourcePlan: null,
     recentResults: [],
     selectedExecutionRunId: "",
+    editBaselineRevisionId: null,
     activeTab: initialViewState.scriptActiveTab || SCRIPT_VIEW_TAB.SCRIPT,
+    preparationRunId: initialViewState.preparationRunId || "",
+    preparationModule: initialViewState.preparationModule || "",
+    preparationRuns: initialViewState.preparationRuns || {},
     runRecords: loadScriptRunRecordsFromStorage(),
     repairRecords: loadScriptRepairRecordsFromStorage(),
     moduleExecutionRecords: loadModuleExecutionRecordsFromStorage(),
@@ -786,6 +794,9 @@ function persistViewState() {
     scriptModule: state.scripts.selectedModule,
     scriptFile: state.scripts.selectedFile,
     scriptActiveTab: state.scripts.activeTab,
+    preparationRunId: state.scripts.preparationRunId,
+    preparationModule: state.scripts.preparationModule,
+    preparationRuns: state.scripts.preparationRuns,
     expandedModules: Array.from(state.scripts.expandedModules),
     testSuiteId: state.testSuites.selectedSuiteId,
     testSuiteModule: state.testSuites.selectedModule,
@@ -950,6 +961,7 @@ const elements = {
   planScriptGenerationRecordTab: document.getElementById("planScriptGenerationRecordTab"),
   planRelatedScriptsTab: document.getElementById("planRelatedScriptsTab"),
   scriptContentTab: document.getElementById("scriptContentTab"),
+  scriptPreparationTab: document.getElementById("scriptPreparationTab"),
   executionRecordTab: document.getElementById("executionRecordTab"),
   repairRecordTab: document.getElementById("repairRecordTab"),
   preview: document.getElementById("preview"),
@@ -1086,6 +1098,7 @@ const elements = {
   scriptPreview: document.getElementById("scriptPreview"),
   scriptCode: document.getElementById("scriptCode"),
   moduleScriptPanel: document.getElementById("moduleScriptPanel"),
+  moduleScriptPreparationPanel: document.querySelector('[data-script-preparation-scope="module"]'),
   moduleScriptSummary: document.getElementById("moduleScriptSummary"),
   moduleScriptActions: document.getElementById("moduleScriptActions"),
   moduleBulkToggle: document.getElementById("moduleBulkToggle"),
@@ -1961,7 +1974,6 @@ const planTransferFeature = createPlanTransferFeature({
 });
 planTransferFeature.bind();
 
-
 function isPlainObject(value) {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
@@ -1981,6 +1993,9 @@ function applyViewStateRecord(record) {
   state.scripts.selectedModule = next.scriptModule || null;
   state.scripts.selectedFile = next.scriptFile || null;
   state.scripts.activeTab = next.scriptActiveTab || state.scripts.activeTab;
+  state.scripts.preparationRunId = next.preparationRunId || "";
+  state.scripts.preparationModule = next.preparationModule || "";
+  state.scripts.preparationRuns = next.preparationRuns || {};
   state.scripts.expandedModules = new Set(next.expandedModules || []);
   state.testSuites.selectedSuiteId = next.testSuiteId || null;
   state.testSuites.selectedModule = next.testSuiteModule || TEST_SUITE_ALL_MODULE;
@@ -2063,7 +2078,6 @@ async function hydratePlatformRecords() {
     ],
   });
 }
-
 
 const generationFeature = createGenerationFeature({
   state,
@@ -2246,7 +2260,6 @@ const {
   renderScriptRepairRecord,
 } = moduleExecutionFeature;
 
-
 async function recordSelectedScript() {
   const moduleName = state.scripts.selectedModule;
   const filename = state.scripts.selectedFile;
@@ -2303,9 +2316,6 @@ async function recordSelectedScript() {
     renderContent();
   }
 }
-
-
-
 
 function switchPlanViewTab(nextTab) {
   if (
@@ -2368,11 +2378,11 @@ function filteredPlanModules() {
 
 function filteredScriptModules() {
   const query = getSearchQuery();
+  const modules = moduleScriptPreparationFeature.withModulePlaceholders(state.scripts.modules);
   if (!query) {
-    return state.scripts.modules;
+    return modules;
   }
-
-  return state.scripts.modules
+  return modules
     .map((moduleItem) => {
       const moduleMatches = moduleItem.name.toLowerCase().includes(query);
       const scripts = moduleMatches
@@ -2382,10 +2392,9 @@ function filteredScriptModules() {
             const displayName = (script.display_name || stripSpecSuffix(script.name)).toLowerCase();
             return scriptName.includes(query) || displayName.includes(query);
           });
-
       return { ...moduleItem, scripts };
     })
-    .filter((moduleItem) => moduleItem.scripts.length > 0);
+    .filter((moduleItem) => moduleItem.scripts.length > 0 || moduleItem.preparationPlaceholder && moduleItem.name.toLowerCase().includes(query));
 }
 
 function renderSideList() {
@@ -2625,14 +2634,15 @@ function renderAssetInfoPanel() {
     restoreButton.className = "secondary-button";
     restoreButton.textContent = "恢复";
     restoreButton.disabled = revision.revision_id === asset.current_revision_id || isAnyScriptJobRunning();
-    restoreButton.addEventListener("click", () => restoreAssetRevision(asset.asset_id, revision.revision_id));
+    const expectedRevisionId = asset.current_revision_id;
+    restoreButton.addEventListener("click", () => restoreAssetRevision(asset.asset_id, revision.revision_id, expectedRevisionId));
     item.append(main, commit, restoreButton);
     list.appendChild(item);
   });
   elements.assetInfoPanel.appendChild(list);
 }
 
-async function restoreAssetRevision(assetId, revisionId) {
+async function restoreAssetRevision(assetId, revisionId, expectedRevisionId) {
   if (!assetId || !revisionId || isAnyScriptJobRunning()) {
     return;
   }
@@ -2641,7 +2651,7 @@ async function restoreAssetRevision(assetId, revisionId) {
     return;
   }
   try {
-    await requestJson(`/api/assets/${assetId}/revisions/${revisionId}/restore`, { method: "POST" });
+    await requestJson(`/api/assets/${assetId}/revisions/${revisionId}/restore`, { method: "POST", body: JSON.stringify({ expected_revision_id: expectedRevisionId }) });
     setNotice("版本已恢复。", "success");
     if (state.activeSection === SECTION.PLANS && state.plans.selectedModule && state.plans.selectedPlanFile) {
       await selectPlan(state.plans.selectedModule, state.plans.selectedPlanFile, true);
@@ -2724,7 +2734,6 @@ function renderPlanRelatedScripts() {
   });
 }
 
-
 function renderPlanTabs() {
   const showTabs = state.activeSection === SECTION.PLANS && hasSelection();
   elements.planTabs.classList.toggle("hidden", !showTabs);
@@ -2748,12 +2757,15 @@ function renderPlanTabs() {
 function renderScriptTabs() {
   const showTabs = state.activeSection === SECTION.SCRIPTS && hasSelection();
   elements.scriptTabs.classList.toggle("hidden", !showTabs);
-
   const isScriptTab = state.scripts.activeTab === SCRIPT_VIEW_TAB.SCRIPT;
+  const isPreparationTab = state.scripts.activeTab === SCRIPT_VIEW_TAB.PREPARATION;
   const isExecutionTab = state.scripts.activeTab === SCRIPT_VIEW_TAB.EXECUTION;
   const isRepairTab = state.scripts.activeTab === SCRIPT_VIEW_TAB.REPAIR;
   elements.scriptContentTab.classList.toggle("active", isScriptTab);
   elements.scriptContentTab.setAttribute("aria-selected", String(isScriptTab));
+  elements.scriptPreparationTab.classList.toggle("hidden", Boolean(state.scripts.selectedFile));
+  elements.scriptPreparationTab.classList.toggle("active", isPreparationTab);
+  elements.scriptPreparationTab.setAttribute("aria-selected", String(isPreparationTab));
   elements.executionRecordTab.classList.toggle("active", isExecutionTab);
   elements.executionRecordTab.setAttribute("aria-selected", String(isExecutionTab));
   elements.repairRecordTab.classList.toggle("active", isRepairTab);
@@ -2848,8 +2860,8 @@ const {
   executeSelectedTestSuite,
   loadTestSuites,
 } = testSuitesFeature;
-
-
+const moduleScriptPreparationFeature = createModuleScriptPreparationFeature({ root: elements.moduleScriptPreparationPanel,
+  state, SECTION, SCRIPT_VIEW_TAB, requestJson, encodePathPart, persistViewState, renderSideList, renderContent, refreshScriptTree: loadScriptTree, window, document });
 const modulePlanGenerationFeature = createModulePlanGenerationFeature({
   state,
   elements,
@@ -2885,6 +2897,8 @@ const modulePlanGenerationFeature = createModulePlanGenerationFeature({
   createStatusBadge,
   getGenerationStatusInfo,
   getPlanRecordKey,
+  openScriptPreparationRun: moduleScriptPreparationFeature.openRun,
+  canOpenScriptPreparation: () => hasMenu(SECTION.SCRIPTS),
 });
 const {
   getCurrentModulePlans,
@@ -2908,7 +2922,6 @@ const {
   renderModulePlanScriptBatchRecord,
 } = modulePlanGenerationFeature;
 
-
 function escapeHtml(value) {
   return String(value ?? "")
     .replace(/&/g, "&amp;")
@@ -2917,7 +2930,6 @@ function escapeHtml(value) {
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
 }
-
 
 const projectSettingsFeature = createProjectSettingsFeature({
   state,
@@ -3106,6 +3118,7 @@ function renderContent() {
   elements.testSuiteDetailPanel.classList.add("hidden");
   elements.agentPanel.classList.add("hidden");
   elements.moduleScriptPanel.classList.add("hidden");
+  elements.moduleScriptPreparationPanel.classList.add("hidden");
   elements.moduleExecutionRecord.classList.add("hidden");
   elements.moduleRepairRecord.classList.add("hidden");
   elements.executionRecord.classList.add("hidden");
@@ -3117,6 +3130,7 @@ function renderContent() {
   elements.editor.classList.add("hidden");
   elements.editor.classList.toggle("code-editor", state.activeSection === SECTION.SCRIPTS);
   elements.editor.wrap = state.activeSection === SECTION.SCRIPTS ? "off" : "soft";
+  moduleScriptPreparationFeature.render();
   const showPlanTabs = renderPlanTabs();
   const showScriptTabs = renderScriptTabs();
   elements.viewerArea.classList.toggle("with-tabs", showPlanTabs || showScriptTabs);
@@ -3291,7 +3305,7 @@ function renderContent() {
         elements.moduleExecutionRecord.classList.remove("hidden");
       } else if (state.scripts.activeTab === SCRIPT_VIEW_TAB.REPAIR) {
         elements.moduleRepairRecord.classList.remove("hidden");
-      } else {
+      } else if (state.scripts.activeTab === SCRIPT_VIEW_TAB.SCRIPT) {
         elements.moduleScriptPanel.classList.remove("hidden");
       }
     } else {
@@ -3536,15 +3550,19 @@ async function selectPlan(moduleName, planFilename, skipConfirm = false) {
 async function loadScriptTree() {
   setNotice("");
   setLoading(true);
-
+  const preservePreparation = state.scripts.activeTab === SCRIPT_VIEW_TAB.PREPARATION &&
+    Boolean(state.scripts.preparationRunId && state.scripts.selectedModule);
   try {
     const data = await requestJson("/api/test-scripts");
     state.scripts.modules = data.modules || [];
-
     const selectedModule = state.scripts.modules.find((item) => item.name === state.scripts.selectedModule);
     const selectedScript = selectedModule?.scripts.find((item) => item.name === state.scripts.selectedFile);
-
     if (!state.scripts.modules.length) {
+      if (preservePreparation) {
+        renderSideList();
+        renderContent();
+        return;
+      }
       state.scripts.selectedModule = null;
       state.scripts.selectedFile = null;
       state.scripts.currentContent = "";
@@ -3559,9 +3577,13 @@ async function loadScriptTree() {
       setNotice("没有找到符合 tests/<模块名>/*.spec.ts 规则的测试脚本。");
       return;
     }
-
     const nextModule = selectedModule || state.scripts.modules[0];
     const nextScript = selectedScript || null;
+    if (preservePreparation) {
+      renderSideList();
+      renderContent();
+      return;
+    }
     state.scripts.expandedModules.add(nextModule.name);
     renderSideList();
     if (nextScript) {
@@ -3571,6 +3593,12 @@ async function loadScriptTree() {
     }
   } catch (error) {
     state.scripts.modules = [];
+    if (preservePreparation) {
+      renderSideList();
+      renderContent();
+      setNotice(error.message, "error");
+      return;
+    }
     state.scripts.selectedModule = null;
     state.scripts.selectedFile = null;
     state.scripts.currentContent = "";
@@ -3607,7 +3635,6 @@ function selectScriptModule(moduleName, skipConfirm = false, { preserveTab = fal
   if (!skipConfirm && !sameSelection && !confirmDiscardEdit()) {
     return;
   }
-
   state.activeSection = SECTION.SCRIPTS;
   state.scripts.selectedModule = moduleName;
   state.scripts.selectedFile = null;
@@ -3642,6 +3669,7 @@ async function selectScript(moduleName, filename, skipConfirm = false) {
   state.scripts.selectedFiles.clear();
   state.scripts.selectedExecutionRunId = "";
   state.scripts.activeTab = sameSelection ? state.scripts.activeTab : SCRIPT_VIEW_TAB.SCRIPT;
+  moduleScriptPreparationFeature.render();
   state.isEditing = false;
   persistViewState();
   setNotice("");
@@ -3693,7 +3721,6 @@ async function saveCurrentItem() {
   if (!canEditSelection()) {
     return;
   }
-
   state.isSaving = true;
   elements.editSaveButton.textContent = "保存中";
   elements.editSaveButton.disabled = true;
@@ -3726,7 +3753,7 @@ async function saveCurrentItem() {
         )}`,
         {
           method: "PUT",
-          body: JSON.stringify({ content: nextContent }),
+          body: JSON.stringify({ content: nextContent, expected_revision_id: state.scripts.editBaselineRevisionId }),
         },
       );
       state.scripts.currentContent = data.content || "";
@@ -3738,6 +3765,7 @@ async function saveCurrentItem() {
     }
 
     state.isEditing = false;
+    state.scripts.editBaselineRevisionId = null;
     renderContent();
     setNotice("保存成功。", "success");
   } catch (error) {
@@ -3754,8 +3782,8 @@ function toggleEditSave() {
   if (!canEditSelection()) {
     return;
   }
-
   if (!state.isEditing) {
+    state.scripts.editBaselineRevisionId = state.activeSection === SECTION.SCRIPTS ? state.scripts.asset?.current_revision_id ?? null : null;
     state.isEditing = true;
     renderContent();
     return;
@@ -3766,6 +3794,7 @@ function toggleEditSave() {
 
 function cancelEdit() {
   state.isEditing = false;
+  state.scripts.editBaselineRevisionId = null;
   renderContent();
   setNotice("");
 }
@@ -3949,6 +3978,7 @@ elements.planGenerationRecordTab.addEventListener("click", () => switchPlanViewT
 elements.planScriptGenerationRecordTab.addEventListener("click", () => switchPlanViewTab(PLAN_VIEW_TAB.SCRIPT_GENERATION));
 elements.planRelatedScriptsTab.addEventListener("click", () => switchPlanViewTab(PLAN_VIEW_TAB.RELATED_SCRIPTS));
 elements.scriptContentTab.addEventListener("click", () => switchScriptViewTab(SCRIPT_VIEW_TAB.SCRIPT));
+elements.scriptPreparationTab.addEventListener("click", () => switchScriptViewTab(SCRIPT_VIEW_TAB.PREPARATION));
 elements.executionRecordTab.addEventListener("click", () => switchScriptViewTab(SCRIPT_VIEW_TAB.EXECUTION));
 elements.repairRecordTab.addEventListener("click", () => switchScriptViewTab(SCRIPT_VIEW_TAB.REPAIR));
 elements.moduleBulkToggle.addEventListener("click", enterModuleBulkMode);

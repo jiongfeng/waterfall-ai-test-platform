@@ -167,6 +167,10 @@ function resetProjectScopedState() {
   state.scripts.sourcePlan = null;
   state.scripts.recentResults = [];
   state.scripts.selectedExecutionRunId = "";
+  state.scripts.editBaselineRevisionId = null;
+  state.scripts.preparationRunId = "";
+  state.scripts.preparationModule = "";
+  state.scripts.preparationRuns = {};
   state.scripts.runRecords = {};
   state.scripts.repairRecords = {};
   state.scripts.moduleExecutionRecords = {};

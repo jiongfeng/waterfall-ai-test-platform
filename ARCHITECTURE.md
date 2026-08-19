@@ -57,7 +57,7 @@ flowchart LR
 
 兼容包装必须只做参数转发、依赖装配或返回值适配。新业务规则不应继续写入包装函数。
 
-当前仍是渐进迁移期，而不是“入口已经完全清空”的状态。Agent 主工作流装配、其余生成/执行 SSE、项目数据库基线操作、测试资产编辑及部分执行记录接口仍暂留在 `app.py`；它们是后续迁移边界，不是新增代码的默认落点。项目 Seed 生成的 HTTP/SSE 边界已迁至 `web/seed.py`，固定模板、模式识别、完成判定、并发租约和产物收口由 `generation/seed.py` 负责。逐脚本的生成、执行、一次自动修复、复验、模型分析和人工操作状态机由 `agent/script_preparation.py` 拥有，`web/agent_script_preparation.py` 只负责 HTTP 交付。装配根只注入持久化、模型、脚本操作和时间等外部能力。已抽出的诊断、脚本准备、验证、Prompt 和结果解析能力不能回填到入口。
+当前仍是渐进迁移期，而不是“入口已经完全清空”的状态。Agent 主工作流装配、其余生成/执行 SSE、项目数据库基线操作、测试资产编辑及部分执行记录接口仍暂留在 `app.py`；它们是后续迁移边界，不是新增代码的默认落点。项目 Seed 生成的 HTTP/SSE 边界已迁至 `web/seed.py`，固定模板、模式识别、完成判定、并发租约和产物收口由 `generation/seed.py` 负责。逐脚本的生成、执行、一次自动修复、复验、模型分析和人工操作状态机由 `agent/script_preparation.py` 拥有；`script_preparation/` 通过独立仓储、任务原子和模块适配器在普通脚本页复用该状态机，不创建或修改 Agent run。`web/agent_script_preparation.py` 和 `web/module_script_preparation.py` 分别交付两种业务语义。装配根只注入持久化、模型、脚本操作和时间等外部能力。已抽出的诊断、脚本准备、验证、Prompt 和结果解析能力不能回填到入口。
 
 ### `test_plan_viewer/web/`
 
@@ -86,6 +86,7 @@ Blueprint 的 endpoint 名称不是外部契约；URL、method、状态码、JSO
 | `page_inventory` | 页面清单 CRUD 与文档导入（5 条） |
 | `test_suites` | 测试集及测试集条目的非执行接口（8 条） |
 | `agent_script_preparation` | Agent 脚本准备快照、详情、单项操作和批量操作（4 条） |
+| `module_script_preparation` | 普通模块脚本准备运行、详情、单项/批量操作与取消（6 条） |
 
 同一路由族中除脚本准备外仍留在 `app.py` 的 Agent HTTP、项目 Seed 测试与数据库测试、需求分析与计划生成流、计划/脚本生成执行流、测试集执行、jobs 和 assets 接口不应被误认为已迁移；迁移时继续使用独立 Blueprint，并先补齐 SSE 与失败状态 parity 测试。
 
@@ -105,6 +106,7 @@ test_plan_viewer/
 ├── projects/           # 项目模型、仓储、工作区、归档校验与导入/导出
 ├── repositories/       # 跨领域表名与基础仓储能力
 ├── requirements/       # 需求文件、候选模块、仓储和非流式服务
+├── script_preparation/ # 普通模块脚本准备适配、原子操作、仓储与装配
 ├── setup/              # 准备脚本、绑定、执行器和编排服务
 ├── test_suites/        # 测试集模型、仓储和业务服务
 ├── web/                # Flask application factory 与 Blueprints
@@ -150,6 +152,7 @@ class ExampleDependencies:
 - 后台线程启动时要复制项目/作者上下文，结束时清理进程内任务状态。
 - SSE 终态必须与数据库终态一致；失败和取消也必须发出可解析的最终事件。
 - Agent 进入 `awaiting_script_action` 时属于持久化暂停点；SSE 必须发送 `paused` 后结束连接，不能把等待人工处理误报为失败或让流无限保持。
+- 普通模块脚本准备写入 `script_preparation_runs`；运行、动作队列、最新脚本修订和外部 job 都必须有服务端持久化与并发保护，不得仅依赖浏览器状态或进程内锁。
 
 ### Agent 七阶段主流程
 
@@ -166,6 +169,8 @@ class ExampleDependencies:
 `prepare_scripts` 是一个主阶段，不再把生成、执行、修复和失败处置展示为四个平级阶段。每个脚本在该阶段中独立运行唯一状态机：生成后执行；首次执行失败后自动修复并复验；复验仍失败时调用模型生成分析、建议动作和补充 Prompt，然后进入 `awaiting_human`。一个脚本等待人工时不阻塞其余脚本继续准备。
 
 人工处理支持人工编辑、重新执行、放弃、重新生成和重新修复。每次操作都追加不可变历史节点；人工编辑和重新修复继承当前最新脚本版本，重新执行使用最新版本，重新生成继承原始 Prompt 与可编辑补充 Prompt 但不继承代码内容，放弃脚本不得进入测试集。批量操作按脚本分别使用各自 Prompt，并以 `accepted` / `rejected` 返回逐项结果。
+
+普通计划页的“批量生成并准备”不再由浏览器串行调用生成 SSE，而是一次创建模块脚本准备 run，然后立即进入脚本页的“脚本准备” Tab。服务端继续处理生成→执行→一次修复→复验→人工的同一历史；即使尚未生成任何脚本，页面也以 run 中的模块上下文展示。普通 run 成功后只标记准备完成，不创建测试集；“忽略”仅跳过本次准备，不删除脚本资产。
 
 ## 4. 前端装配
 
@@ -187,7 +192,7 @@ api-client → sse → timers
 → generation → script-repair → module-execution
 → module-plan-generation → admin → projects
 → project-settings → setup-preparation
-→ agent-script-preparation → agent
+→ agent-script-preparation → module-script-preparation → agent
 → app.js
 ```
 
@@ -224,11 +229,12 @@ function createExampleFeature(deps) {
 | `features/requirements.js` | 需求列表、解析和需求计划生成 |
 | `features/test-suites.js` | 测试集列表、详情、执行和记录 |
 | `features/generation.js` | 计划与脚本生成流 |
-| `features/module-plan-generation.js` | 模块计划选择、批量生成脚本和记录 |
+| `features/module-plan-generation.js` | 模块计划选择、创建脚本准备 run 和导航 |
 | `features/script-repair.js` | 单脚本执行、取消和修复 |
 | `features/module-execution.js` | 模块批量执行与批量修复 |
 | `features/setup-preparation.js` | 准备脚本和绑定配置 |
-| `features/agent-script-preparation.js` | 脚本列表、动态历史、人工操作编辑器和逐项批量操作 |
+| `features/agent-script-preparation.js` | Agent/普通模块共用的脚本列表、动态历史、人工操作编辑器和逐项批量操作 |
+| `features/module-script-preparation.js` | 普通模块脚本准备 API、轮询、Tab 导航与业务文案适配 |
 | `features/agent.js` | Agent 任务、事件、七阶段时间线及脚本准备功能装配 |
 
 功能文件通过 `tests/js/*.vm.js` 在 Node VM 中测试。测试应覆盖工厂装配、状态转换、SSE 分片、终态清理和持久化 adapter，而不依赖真实浏览器。
@@ -242,7 +248,7 @@ function createExampleFeature(deps) {
 以下内容属于稳定浏览器契约：
 
 - 现有 `id`；
-- Agent 使用的 `data-agent-id`；
+- Agent 使用的 `data-agent-id` 以及脚本准备宿主内按 scope 唯一的 `data-script-preparation-id`；
 - 表单字段名和按钮事件 hook；
 - 脚本与样式 URL 的相对顺序。
 
@@ -261,7 +267,7 @@ styles.css
 └── css/features/project-settings.css
 
 css/features/agent.css  # 独立 link，后加载
-css/features/agent-script-preparation.css  # 脚本准备列表与详情弹窗
+css/features/agent-script-preparation.css  # Agent/模块共用的脚本准备列表与详情弹窗
 ```
 
 移动规则时必须保持原选择器文本、同特异性规则的相对顺序和媒体查询语义。相关测试会比较选择器所有权、重复/泄漏和关键级联顺序。
@@ -283,6 +289,7 @@ css/features/agent-script-preparation.css  # 脚本准备列表与详情弹窗
 - 脚本准备历史按真实操作动态追加；成功、失败和待人工状态不能覆盖已有节点。
 - 自动流程最多执行一次自动修复；复验仍失败必须进入人工处理，不能无限重试。
 - 只有 `ready` 脚本可以进入测试集，`abandoned` 脚本必须排除；全部脚本均放弃时跳过测试集和执行阶段，以 `succeeded_with_unresolved` 安全结束，禁止创建空测试集。
+- 普通模块脚本准备使用 `/api/script-preparation-runs`；创建请求必须幂等，单项/批量动作必须保留逐项结果并以修订 CAS 防止覆盖人工更新。
 
 契约由不同层次的测试共同维护：
 

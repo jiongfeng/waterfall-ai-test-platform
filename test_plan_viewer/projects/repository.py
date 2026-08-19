@@ -31,6 +31,7 @@ class ProjectRepositoryDependencies:
 
 
 PROJECT_SCOPED_TABLES_DELETE_ORDER = (
+    "script_preparation_runs",
     "agent_item_retry_flows",
     "agent_run_attempts",
     "agent_run_events",
@@ -55,6 +56,13 @@ PROJECT_SCOPED_TABLES_DELETE_ORDER = (
 )
 
 PROJECT_ACTIVE_STATUS_TABLES = {
+    "script_preparation_runs": (
+        "queued",
+        "running",
+        "failing",
+        "cancelling",
+        "awaiting_action",
+    ),
     "platform_jobs": ("queued", "running", "cancelling"),
     "test_jobs": ("queued", "running", "cancelling"),
     "test_runs": ("queued", "running", "cancelling"),

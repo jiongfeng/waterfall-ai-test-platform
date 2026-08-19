@@ -1,5 +1,5 @@
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, call
 
 from flask import Flask
 
@@ -32,6 +32,7 @@ def make_services(**overrides):
         ),
         "start_script_preparation_continue": Mock(),
         "claim_script_preparation_continue": Mock(return_value=True),
+        "recover_script_preparation_continue": Mock(),
     }
     values.update(overrides)
     return AgentScriptPreparationWebServices(**values)
@@ -65,6 +66,9 @@ class AgentScriptPreparationBlueprintTests(unittest.TestCase):
         services.get_script_preparation_snapshot.assert_called_once_with(
             "agent-1"
         )
+        services.recover_script_preparation_continue.assert_called_once_with(
+            "agent-1"
+        )
         services.get_script_preparation_item.assert_called_once_with(
             "agent-1", "script-1"
         )
@@ -84,7 +88,7 @@ class AgentScriptPreparationBlueprintTests(unittest.TestCase):
             )
             action = client.post(
                 "/api/agent/runs/agent-1/script-items/missing/actions",
-                json={"action": "execute"},
+                json={"action": "execute", "expected_revision_id": 1},
             )
 
         self.assertEqual(snapshot.status_code, 404)
@@ -139,6 +143,30 @@ class AgentScriptPreparationBlueprintTests(unittest.TestCase):
                     expected_revision_id=7,
                 )
                 services.start_script_preparation_continue.assert_not_called()
+
+    def test_actions_reconcile_external_versions_before_mutation(self):
+        reconcile = Mock()
+        services = make_services(
+            reconcile_script_preparation_items=reconcile
+        )
+        with make_app(services).test_client() as client:
+            action = client.post(
+                "/api/agent/runs/agent-1/script-items/script-1/actions",
+                json={"action": "execute", "expected_revision_id": 1},
+            )
+            batch = client.post(
+                "/api/agent/runs/agent-1/script-items/batch-actions",
+                json={"action": "abandon", "item_ids": ["script-1"]},
+            )
+        self.assertEqual(action.status_code, 200)
+        self.assertEqual(batch.status_code, 200)
+        self.assertEqual(
+            reconcile.call_args_list,
+            [
+                call("agent-1", ["script-1"]),
+                call("agent-1", ["script-1"]),
+            ],
+        )
 
     def test_action_rejects_unknown_action_and_non_object_json(self):
         services = make_services()
@@ -246,6 +274,7 @@ class AgentScriptPreparationBlueprintTests(unittest.TestCase):
                 json={
                     "action": "execute",
                     "item_ids": ["script-1", "script-2"],
+                    "expected_revision_id": 1,
                 },
             )
 
@@ -271,7 +300,7 @@ class AgentScriptPreparationBlueprintTests(unittest.TestCase):
         with make_app(services).test_client() as client:
             response = client.post(
                 "/api/agent/runs/agent-1/script-items/script-1/actions",
-                json={"action": "execute"},
+                json={"action": "execute", "expected_revision_id": 1},
             )
 
         self.assertEqual(response.status_code, 202)
@@ -282,6 +311,59 @@ class AgentScriptPreparationBlueprintTests(unittest.TestCase):
             "agent-1"
         )
         start_continue.assert_called_once_with("agent-1")
+
+    def test_continue_worker_starts_only_after_revision_barrier_releases(self):
+        events = []
+
+        class Barrier:
+            def __enter__(inner_self):
+                events.append("enter")
+                return inner_self
+
+            def __exit__(inner_self, *_args):
+                events.append("exit")
+
+        services = make_services(
+            apply_script_preparation_action=Mock(
+                return_value={
+                    "item": {"item_id": "script-1", "status": "ready"},
+                    "should_continue": True,
+                }
+            ),
+            script_preparation_barrier=lambda _run_id: Barrier(),
+            claim_script_preparation_continue=Mock(
+                side_effect=lambda _run_id: events.append("claim") or True
+            ),
+            start_script_preparation_continue=Mock(
+                side_effect=lambda _run_id: events.append("start")
+            ),
+        )
+        with make_app(services).test_client() as client:
+            response = client.post(
+                "/api/agent/runs/agent-1/script-items/script-1/actions",
+                json={"action": "execute", "expected_revision_id": 1},
+            )
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(events, ["enter", "claim", "exit", "start"])
+
+    def test_mutating_action_requires_revision_key_but_preserves_explicit_null(self):
+        services = make_services()
+        with make_app(services).test_client() as client:
+            missing = client.post(
+                "/api/agent/runs/agent-1/script-items/script-1/actions",
+                json={"action": "execute"},
+            )
+            explicit_null = client.post(
+                "/api/agent/runs/agent-1/script-items/script-1/actions",
+                json={"action": "execute", "expected_revision_id": None},
+            )
+        self.assertEqual(missing.status_code, 400)
+        self.assertEqual(explicit_null.status_code, 200)
+        self.assertIsNone(
+            services.apply_script_preparation_action.call_args.kwargs[
+                "expected_revision_id"
+            ]
+        )
 
     def test_batch_action_starts_continue_worker_only_when_requested(self):
         start_continue = Mock()
@@ -327,7 +409,7 @@ class AgentScriptPreparationBlueprintTests(unittest.TestCase):
         with make_app(services).test_client() as client:
             response = client.post(
                 "/api/agent/runs/agent-1/script-items/script-1/actions",
-                json={"action": "execute"},
+                json={"action": "execute", "expected_revision_id": 1},
             )
 
         self.assertEqual(response.status_code, 202)
@@ -356,7 +438,11 @@ class AgentScriptPreparationBlueprintTests(unittest.TestCase):
         with make_app(invalid_services).test_client() as client:
             invalid = client.post(
                 "/api/agent/runs/agent-1/script-items/batch-actions",
-                json={"action": "execute", "items": ["script-1"]},
+                json={
+                    "action": "execute",
+                    "items": ["script-1"],
+                    "expected_revision_id": 1,
+                },
             )
 
         self.assertEqual(invalid.status_code, 500)
@@ -384,7 +470,7 @@ class AgentScriptPreparationBlueprintTests(unittest.TestCase):
                     response = client.post(
                         "/api/agent/runs/agent-1/"
                         "script-items/script-1/actions",
-                        json={"action": "execute"},
+                        json={"action": "execute", "expected_revision_id": 1},
                     )
 
                 self.assertEqual(response.status_code, expected_status)
