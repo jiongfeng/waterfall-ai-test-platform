@@ -868,11 +868,16 @@ function createScriptPreparationFeature(root, options = {}) {
   function renderStageHeader() {
     const counts = state.counts;
     const title = translate("scriptPreparation.title", {}, "脚本准备");
+    const contextualSummary = contextText("summary", "", {
+      status: state.status,
+      counts,
+      sourceSummary: state.summary,
+    });
     elements.stageTitle.textContent = title;
-    markDynamic(elements.stageSummary, state.summaryDynamic);
-    elements.stageSummary.textContent = state.summaryDynamic
+    markDynamic(elements.stageSummary, !contextualSummary && state.summaryDynamic);
+    elements.stageSummary.textContent = contextualSummary || (state.summaryDynamic
       ? state.summary
-      : translate("scriptPreparation.summary", {}, "系统依次完成生成、执行和一次自动修复；待人工脚本不阻塞后续处理。");
+      : translate("scriptPreparation.summary", {}, "系统依次完成生成、执行和一次自动修复；待人工脚本不阻塞后续处理。"));
     if (state.runId) setMixedText(elements.stageMeta, [{ text: state.runId, dynamic: true }, { text: title }]);
     else {
       markDynamic(elements.stageMeta, false);

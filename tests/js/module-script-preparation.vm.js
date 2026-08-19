@@ -157,6 +157,9 @@ const moduleFeature = context.window.createScriptPreparationFeature(
     api: moduleApi,
     context: {
       footerHint: moduleFooter,
+      summary({ status, counts }) {
+        return `${status}: ${counts.total} total`;
+      },
       abandonItemMessage({ title }) {
         return `忽略模块准备项“${title}”吗？已有脚本不会被删除。`;
       },
@@ -198,6 +201,7 @@ const agentFeature = context.window.createAgentScriptPreparationFeature(
     "the compatibility factory must preserve the Agent endpoint fallback",
   );
   assert.strictEqual(moduleHarness.elements.tableFooterHint.textContent, moduleFooter);
+  assert.strictEqual(moduleHarness.elements.stageSummary.textContent, "awaiting_action: 1 total");
   assert.deepStrictEqual(
     Array.from(moduleFeature.getState().items, (item) => item.script_item_id),
     ["module-item"],

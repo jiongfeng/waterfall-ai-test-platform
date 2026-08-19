@@ -43,6 +43,10 @@ function createModulePlanGenerationFeature(deps) {
     openScriptGenerationModal,
   } = generation;
   const { formatModuleRepairDuration } = moduleExecution;
+  const translate = (key, params = {}, fallback = key) => {
+    const translated = window.WaterfallI18n?.t?.(key, params);
+    return translated && translated !== key ? translated : fallback;
+  };
 
 function getCurrentModulePlans() {
   return (getSelectedPlanModule()?.plans || []).filter((plan) => !plan.is_index);
@@ -349,7 +353,11 @@ async function generateSelectedModulePlanScripts() {
     return;
   }
   if (!canOpenScriptPreparation()) {
-    setNotice("当前账号没有访问“脚本”菜单的权限，无法启动脚本准备任务。", "error");
+    setNotice(translate(
+      "moduleScriptPreparation.permissionDenied",
+      {},
+      "当前账号没有访问“脚本”菜单的权限，无法启动脚本准备任务。",
+    ), "error");
     return null;
   }
   if (typeof openScriptPreparationRun !== "function") {
@@ -357,7 +365,11 @@ async function generateSelectedModulePlanScripts() {
   }
   state.scriptGeneration.isRunning = true;
   renderModulePlanList();
-  setNotice("正在创建脚本准备任务，创建后会自动生成、执行并修复失败脚本。");
+  setNotice(translate(
+    "moduleScriptPreparation.creatingNotice",
+    {},
+    "正在创建脚本准备任务，创建后会自动生成、执行并修复失败脚本。",
+  ));
   try {
     const result = await requestJson("/api/script-preparation-runs", {
       method: "POST",
@@ -370,10 +382,18 @@ async function generateSelectedModulePlanScripts() {
     state.plans.bulkSelectionMode = false;
     state.plans.selectedPlanFiles.clear();
     await openScriptPreparationRun(result, moduleName);
-    setNotice("脚本准备任务已创建，正在自动生成并验证脚本。", "success");
+    setNotice(translate(
+      "moduleScriptPreparation.createdNotice",
+      {},
+      "脚本准备任务已创建，正在自动生成并验证脚本。",
+    ), "success");
     return result;
   } catch (error) {
-    setNotice(error.message || "创建脚本准备任务失败。", "error");
+    setNotice(error.message || translate(
+      "moduleScriptPreparation.createFailed",
+      {},
+      "创建脚本准备任务失败。",
+    ), "error");
     return null;
   } finally {
     state.scriptGeneration.isRunning = false;
@@ -503,7 +523,13 @@ function renderModulePlanList() {
   elements.modulePlanSelectionCount.textContent = `已选择 ${selectedCount} 条`;
   elements.modulePlanBulkToggle.disabled = !plans.length || isBusy;
   elements.modulePlanBulkGenerate.disabled = selectedCount === 0 || isBusy || !canOpenScriptPreparation();
-  elements.modulePlanBulkGenerate.title = canOpenScriptPreparation() ? "" : "需要“脚本”菜单权限";
+  elements.modulePlanBulkGenerate.title = canOpenScriptPreparation()
+    ? ""
+    : translate(
+        "moduleScriptPreparation.permissionRequired",
+        {},
+        "需要“脚本”菜单权限",
+      );
   elements.modulePlanBulkDelete.disabled = selectedCount === 0 || isBusy;
   elements.modulePlanSelectAll.disabled = !plans.length || isBusy;
   elements.modulePlanSelectAll.checked = Boolean(plans.length && selectedCount === plans.length);

@@ -13,6 +13,15 @@ vm.runInContext(
   ),
   context,
 );
+vm.runInContext(
+  fs.readFileSync(path.join(appDir, "static/js/i18n/en.js"), "utf8"),
+  context,
+);
+const english = context.window.WaterfallTranslations.en;
+const translate = (key, params = {}) => Object.entries(params).reduce(
+  (value, [name, replacement]) => value.replaceAll(`{${name}}`, String(replacement)),
+  english[key] || key,
+);
 
 function domElement() {
   return {
@@ -99,6 +108,7 @@ let fetchImpl = async () => {
   throw new Error("focused VM paths must not fetch");
 };
 const windowMock = {
+  WaterfallI18n: { t: translate },
   confirm: () => true,
   requestAnimationFrame: (callback) => callback(),
   setInterval: () => 1,
@@ -111,7 +121,7 @@ const getPlanRecordKey = (
   planFilename = state.plans.selectedPlanFile,
 ) => `${moduleName}/${planFilename}`;
 
-const feature = context.window.createModulePlanGenerationFeature({
+const featureDeps = {
   state,
   elements,
   SECTION: { PLANS: "plans" },
@@ -173,7 +183,8 @@ const feature = context.window.createModulePlanGenerationFeature({
   createStatusBadge: () => domElement(),
   getGenerationStatusInfo: (record) => ({ status: record?.status || "idle" }),
   getPlanRecordKey,
-});
+};
+const feature = context.window.createModulePlanGenerationFeature(featureDeps);
 
 const cancelledStreamResult = feature.handleModulePlanScriptStreamEvent(
   { event: "done", data: { ok: false, status: "cancelled", error: "用户终止" } },
@@ -331,9 +342,75 @@ async function testEnglishBulkScriptGeneration() {
   });
 }
 
+async function testEnglishScriptPreparationWorkflow() {
+  const notices = [];
+  const requests = [];
+  const openedRuns = [];
+  const result = {
+    run: { run_id: "module-preparation-1", module_name: "Authentication", status: "queued" },
+    snapshot: { run_id: "module-preparation-1", status: "queued", items: [] },
+  };
+  const preparationFeature = context.window.createModulePlanGenerationFeature({
+    ...featureDeps,
+    requestJson: async (url, options) => {
+      requests.push({ url, body: JSON.parse(options.body) });
+      return result;
+    },
+    setNotice: (message, type = "") => notices.push({ message, type }),
+    openScriptPreparationRun: async (...args) => openedRuns.push(args),
+    canOpenScriptPreparation: () => true,
+  });
+  state.activeSection = "plans";
+  state.plans.selectedModule = "Authentication";
+  state.plans.selectedPlanFile = null;
+  state.plans.selectedPlanFiles = new Set(["Successful Login.md"]);
+  state.plans.bulkSelectionMode = true;
+  state.plans.modules = [{
+    name: "Authentication",
+    plans: [{ filename: "Successful Login.md", name: "Successful Login" }],
+  }];
+
+  await preparationFeature.generateSelectedModulePlanScripts();
+
+  assert.deepStrictEqual(requests, [{
+    url: "/api/script-preparation-runs",
+    body: {
+      module_name: "Authentication",
+      plan_filenames: ["Successful Login.md"],
+      client_request_id: "generator-test",
+    },
+  }]);
+  assert.deepStrictEqual(openedRuns, [[result, "Authentication"]]);
+  assert.strictEqual(
+    notices[0].message,
+    "Creating a script-preparation task. The platform will then generate, run, and repair failed scripts automatically.",
+  );
+  assert.deepStrictEqual(notices.at(-1), {
+    message: "Script-preparation task created. Scripts are being generated and verified automatically.",
+    type: "success",
+  });
+
+  const deniedNotices = [];
+  const deniedFeature = context.window.createModulePlanGenerationFeature({
+    ...featureDeps,
+    setNotice: (message, type = "") => deniedNotices.push({ message, type }),
+    openScriptPreparationRun: async () => {},
+    canOpenScriptPreparation: () => false,
+  });
+  state.plans.selectedPlanFiles = new Set(["Successful Login.md"]);
+  deniedFeature.renderModulePlanList();
+  assert.strictEqual(elements.modulePlanBulkGenerate.title, "Requires access to the Scripts menu");
+  await deniedFeature.generateSelectedModulePlanScripts();
+  assert.deepStrictEqual(deniedNotices, [{
+    message: "This account cannot access the Scripts menu, so it cannot start script preparation.",
+    type: "error",
+  }]);
+}
+
 testEnglishBulkScriptGeneration()
+  .then(testEnglishScriptPreparationWorkflow)
   .then(() => {
-    process.stdout.write("module plan generation English bulk scripts: ok\n");
+    process.stdout.write("module plan generation English workflows: ok\n");
   })
   .catch((error) => {
     process.stderr.write(`${error.stack || error}\n`);

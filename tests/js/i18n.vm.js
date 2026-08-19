@@ -91,6 +91,20 @@ assert.strictEqual(sourceCatalog["未上传需求"], "No requirements uploaded")
 assert.strictEqual(sourceCatalog["角色列表"], "Role list");
 assert.strictEqual(sourceCatalog["搜索模块或计划"], "Search modules or plans");
 assert.strictEqual(sourceCatalog["暂无角色。"], "No roles yet.");
+assert.strictEqual(english["moduleScriptPreparation.bulkGenerate"], "Generate and prepare");
+assert.strictEqual(
+  english["moduleScriptPreparation.createdNotice"],
+  "Script-preparation task created. Scripts are being generated and verified automatically.",
+);
+assert.strictEqual(
+  english["moduleScriptPreparation.footerHint"],
+  "Passed scripts remain in the current module; ignoring applies only to this preparation task",
+);
+assert.match(
+  fs.readFileSync(path.join(appDir, "templates/index.html"), "utf8"),
+  /data-i18n-key="moduleScriptPreparation\.bulkGenerate"/,
+  "The module preparation button must use its semantic translation key.",
+);
 assert.match(
   fs.readFileSync(path.join(appDir, "static/js/i18n.js"), "utf8"),
   /scripts total/,

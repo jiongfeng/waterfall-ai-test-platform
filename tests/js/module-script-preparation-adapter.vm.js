@@ -9,6 +9,17 @@ const {
 
 const appDir = path.resolve(__dirname, "../..");
 const harness = createScriptPreparationHarness();
+const translationContext = { window: {} };
+vm.createContext(translationContext);
+vm.runInContext(
+  fs.readFileSync(path.join(appDir, "static/js/i18n/en.js"), "utf8"),
+  translationContext,
+);
+const english = translationContext.window.WaterfallTranslations.en;
+const translate = (key, params = {}) => Object.entries(params).reduce(
+  (value, [name, replacement]) => value.replaceAll(`{${name}}`, String(replacement)),
+  english[key] || key,
+);
 let sharedOptions = null;
 let workbenchState = {
   active: false,
@@ -65,6 +76,7 @@ const workbench = {
 };
 
 const windowRef = {
+  WaterfallI18n: { t: translate },
   setTimeout(callback) {
     nextTimeoutId += 1;
     timeouts.set(nextTimeoutId, callback);
@@ -178,6 +190,37 @@ const feature = context.window.createModuleScriptPreparationFeature({
     "the module adapter delegates polling to the shared workbench",
   );
   assert.strictEqual(sharedOptions.revealOnActivate, false, "background refresh must never reveal the hidden host");
+  assert.strictEqual(sharedOptions.context.emptyMeta(), "No script-preparation task exists for this module");
+  assert.strictEqual(
+    sharedOptions.context.footerHint(),
+    "Passed scripts remain in the current module; ignoring applies only to this preparation task",
+  );
+  assert.strictEqual(sharedOptions.context.abandonLabel(), "Ignore for this preparation");
+  assert.strictEqual(sharedOptions.context.abandonedStatusLabel(), "Ignored");
+  assert.strictEqual(sharedOptions.context.abandonedProgress(), "Ignored for this preparation");
+  assert.strictEqual(sharedOptions.context.participationLabel(), "Available for this preparation");
+  assert.strictEqual(
+    sharedOptions.context.abandonItemMessage({ title: "Checkout" }),
+    "Ignore “Checkout” for this preparation? Existing scripts will not be deleted.",
+  );
+  assert.strictEqual(
+    sharedOptions.context.abandonBatchMessage({ count: 2 }),
+    "Ignore the selected 2 scripts for this preparation? Existing scripts will not be deleted.",
+  );
+  assert.strictEqual(
+    sharedOptions.context.summary({
+      status: "running",
+      counts: { total: 3, ready: 1, abandoned: 1 },
+    }),
+    "Preparing scripts: 3 total, 1 passed, 1 ignored",
+  );
+  assert.strictEqual(
+    sharedOptions.context.summary({
+      status: "cancelled",
+      counts: { total: 3, ready: 1, abandoned: 2 },
+    }),
+    "Cancelled: 3 total, 1 passed, 2 ignored",
+  );
 
   const runId = await feature.openRun(
     {
