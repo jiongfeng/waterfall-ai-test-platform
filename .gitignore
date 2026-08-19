@@ -40,3 +40,13 @@ playwright-report/
 *.db
 *.sqlite
 *.sqlite3
+
+# Generated release/offline artifacts belong in GitHub Releases or artifact storage.
+/artifacts/
+/deploy-packages/
+/offline-packages/
+/*.tar
+/*.tar.gz
+/*.tar.zst
+/*.tgz
+/*.zip
