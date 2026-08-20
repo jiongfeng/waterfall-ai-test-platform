@@ -12,6 +12,7 @@ from pathlib import Path
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 DEPLOY_DIR = REPOSITORY_ROOT / "deploy"
 CONFIG_CONTROL = DEPLOY_DIR / "configctl.py"
+NATIVE_OPENCODE_CONTROL = DEPLOY_DIR / "native-opencode.py"
 PLATFORM_COMPOSE = DEPLOY_DIR / "platform-compose"
 
 
@@ -86,6 +87,45 @@ class DeployRuntimeContractTests(unittest.TestCase):
             destination,
         )
         self.assertEqual(runtime_result.returncode, 0, runtime_result.stderr)
+
+    def test_configctl_stages_native_mac_runtime_overrides_without_mutating_source(self):
+        source = self.temp_path / "config.json"
+        destination = self.temp_path / "runtime/secrets/platform-config.json"
+        projects_root = self.temp_path / "runtime/data/playwright-projects"
+        workspaces_root = self.temp_path / "runtime/data/playwright-workspaces"
+        original = self.valid_config()
+        self.write_source_config(source, original)
+
+        result = self.run_configctl(
+            "stage",
+            "--source",
+            source,
+            "--destination",
+            destination,
+            "--projects-root",
+            projects_root,
+            "--workspaces-root",
+            workspaces_root,
+            "--opencode-url",
+            "http://host.docker.internal:4096",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        staged = json.loads(destination.read_text(encoding="utf-8"))
+        self.assertEqual(
+            staged["opencode_server_url"],
+            "http://host.docker.internal:4096",
+        )
+        self.assertEqual(staged["project_workspace_root"], str(workspaces_root))
+        self.assertEqual(
+            staged["project_template_dependency_source_root"],
+            str(projects_root / "default"),
+        )
+        self.assertEqual(
+            staged["projects"][0]["playwright_project_root"],
+            str(projects_root / "default"),
+        )
+        self.assertEqual(json.loads(source.read_text(encoding="utf-8")), original)
 
     def test_configctl_rejects_source_permissions_without_leaking_content(self):
         source = self.temp_path / "config.json"
@@ -257,6 +297,7 @@ class DeployRuntimeContractTests(unittest.TestCase):
                 "PLATFORM_CONFIG_FILE": str(source),
                 "PLATFORM_ENV_FILE": str(environment_file),
                 "PLATFORM_RUNTIME_DIR": str(runtime),
+                "PLATFORM_OPENCODE_MODE": "container",
             }
         )
 
@@ -406,8 +447,24 @@ class DeployRuntimeContractTests(unittest.TestCase):
         self.assertEqual(compose.count("- ALL"), 2)
         self.assertEqual(
             wrapper.count("run_compose exec --no-TTY --interactive=false"),
-            2,
+            3,
         )
+        self.assertIn("profiles:", compose)
+        self.assertIn("container-opencode", compose)
+        self.assertIn("PLATFORM_PROJECTS_MOUNT_TYPE", compose)
+        self.assertIn("PLATFORM_WORKSPACES_MOUNT_TYPE", compose)
+        self.assertIn("http://host.docker.internal:4096", wrapper)
+
+    def test_native_opencode_is_isolated_and_rejects_an_unmanaged_listener(self):
+        helper = NATIVE_OPENCODE_CONTROL.read_text(encoding="utf-8")
+
+        self.assertIn('HOST = "127.0.0.1"', helper)
+        self.assertIn('LABEL = "com.waterfall-ai.native-opencode"', helper)
+        self.assertIn('"XDG_CONFIG_HOME": str(paths["config"])', helper)
+        self.assertIn('"XDG_DATA_HOME": str(paths["data"])', helper)
+        self.assertIn("port {PORT} is occupied by an unmanaged OpenCode process", helper)
+        self.assertIn("native OpenCode LaunchAgent has no live process", helper)
+        self.assertNotIn("0.0.0.0", helper)
 
     def test_release_runtime_forces_no_build_and_no_pull(self):
         release_root = self.temp_path / "release"
@@ -451,6 +508,7 @@ class DeployRuntimeContractTests(unittest.TestCase):
                 "PLATFORM_CONFIG_FILE": str(source),
                 "PLATFORM_ENV_FILE": str(environment_file),
                 "PLATFORM_RUNTIME_DIR": str(runtime),
+                "PLATFORM_OPENCODE_MODE": "container",
             }
         )
         packaged_wrapper = release_deploy / "platform-compose"
@@ -536,7 +594,7 @@ if args and args[0] == "compose":
     if "--force-recreate" in args and os.environ.get("FAKE_COMPOSE_RECREATE_FAIL") == "1":
         raise SystemExit(1)
     if "config" in args:
-        print(json.dumps({"services": {"opencode": {"image": "test:image"}}}))
+        print(json.dumps({"services": {"platform": {"image": "test:image"}}}))
     elif "ps" in args:
         print("opencode-container")
     raise SystemExit(0)
@@ -578,6 +636,7 @@ raise SystemExit(1)
                 "PLATFORM_CONFIG_FILE": str(source),
                 "PLATFORM_ENV_FILE": str(environment_file),
                 "PLATFORM_RUNTIME_DIR": str(runtime),
+                "PLATFORM_OPENCODE_MODE": "container",
             }
         )
 

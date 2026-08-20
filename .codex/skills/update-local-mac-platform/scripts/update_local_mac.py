@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Safely update only the local Waterfall AI platform container on macOS."""
+"""Safely update the local platform while preserving native macOS OpenCode."""
 
 from __future__ import annotations
 
@@ -30,14 +30,6 @@ TOPOLOGY_PATHS = (
     "deploy/compose.build.yaml",
     "deploy/platform-compose",
 )
-CONFIG_DESTINATIONS = (
-    "/home/pwuser/.config/opencode",
-    "/home/pwuser/.local/share/opencode",
-    "/home/pwuser/.cache/opencode",
-    "/home/pwuser/.local/state",
-)
-
-
 class UpdateError(RuntimeError):
     """A fail-closed deployment error."""
 
@@ -137,17 +129,17 @@ def digest_text(text: str) -> str:
 
 
 @dataclass(frozen=True)
-class OpenCodeManifest:
-    container_id: str
-    mounts: tuple[tuple[str, str, str], ...]
-    config_hashes: tuple[str, ...]
-    provider_shape_hash: str
+class NativeOpenCodeManifest:
+    digest: str
+    version: str
+    machine: str
+    binary: str
 
 
 @dataclass(frozen=True)
 class DeploymentState:
     platform_container: str
-    opencode: OpenCodeManifest
+    opencode: NativeOpenCodeManifest
     platform_image_id: str
     target_image: str
     image_revision: str
@@ -159,6 +151,9 @@ class LocalUpdater:
         self.repo = repo.resolve()
         self.wait_seconds = wait_seconds
         self.wrapper = self.repo / "deploy" / "platform-compose"
+        self.native_opencode = self.repo / "deploy" / "native-opencode.py"
+        self.runtime_root = self.repo / "deploy" / ".runtime"
+        self.env_file = self.repo / ".env"
         self.head = ""
 
     def check_environment(self) -> None:
@@ -166,6 +161,8 @@ class LocalUpdater:
             raise UpdateError("This project Skill is restricted to local macOS deployments.")
         if not self.wrapper.is_file():
             raise UpdateError(f"Missing deployment wrapper: {self.wrapper}")
+        if not self.native_opencode.is_file():
+            raise UpdateError(f"Missing native OpenCode control: {self.native_opencode}")
         top = Path(output(["git", "rev-parse", "--show-toplevel"], cwd=self.repo)).resolve()
         if top != self.repo:
             raise UpdateError(f"Expected Git root {self.repo}, received {top}")
@@ -184,74 +181,33 @@ class LocalUpdater:
         kind = "image" if image else "container"
         return output(["docker", kind, "inspect", "--format", template, target], cwd=self.repo)
 
-    def opencode_manifest(self, container: str) -> OpenCodeManifest:
-        mounts_json = self.inspect_format(container, "{{json .Mounts}}")
-        mounts_data = json.loads(mounts_json)
-        mounts: list[tuple[str, str, str]] = []
-        for mount in mounts_data:
-            destination = str(mount.get("Destination", ""))
-            if destination not in CONFIG_DESTINATIONS:
-                continue
-            mounts.append(
-                (
-                    destination,
-                    str(mount.get("Type", "")),
-                    str(mount.get("Name", "")),
-                )
-            )
-        if {item[0] for item in mounts} != set(CONFIG_DESTINATIONS):
-            raise UpdateError("OpenCode is missing one or more expected persistent mounts.")
-
-        hash_script = r'''
-set -eu
-for file in \
-  /home/pwuser/.config/opencode/opencode.json \
-  /home/pwuser/.config/opencode/opencode.jsonc; do
-  if test -f "$file" && test ! -L "$file"; then
-    sha256sum "$file" | sed "s#  .*#  ${file##*/}#"
-  fi
-done
-'''.strip()
-        hash_result = output(
-            ["docker", "exec", container, "/bin/sh", "-ceu", hash_script],
+    def opencode_manifest(self) -> NativeOpenCodeManifest:
+        raw = output(
+            [
+                sys.executable,
+                str(self.native_opencode),
+                "manifest",
+                "--runtime-root",
+                str(self.runtime_root),
+                "--env-file",
+                str(self.env_file),
+            ],
             cwd=self.repo,
         )
-        config_hashes = tuple(sorted(line for line in hash_result.splitlines() if line))
-        if not config_hashes:
-            raise UpdateError("No regular OpenCode provider config file was found in its volume.")
-
-        shape_script = r'''
-import json
-from pathlib import Path
-
-path = Path("/home/pwuser/.local/share/opencode/auth.json")
-if not path.is_file() or path.is_symlink():
-    raise SystemExit("OpenCode auth.json is missing or not a regular file")
-data = json.loads(path.read_text(encoding="utf-8"))
-if not isinstance(data, dict) or not data:
-    raise SystemExit("OpenCode auth.json has no providers")
-shape = {}
-for provider, value in sorted(data.items()):
-    if isinstance(value, dict):
-        shape[provider] = sorted(value.keys())
-    else:
-        shape[provider] = type(value).__name__
-print(json.dumps(shape, ensure_ascii=True, sort_keys=True, separators=(",", ":")))
-'''.strip()
-        provider_shape = output(
-            ["docker", "exec", container, "python3", "-c", shape_script],
-            cwd=self.repo,
-        )
-        return OpenCodeManifest(
-            container_id=container,
-            mounts=tuple(sorted(mounts)),
-            config_hashes=config_hashes,
-            provider_shape_hash=digest_text(provider_shape),
+        payload = json.loads(raw)
+        if not payload.get("config") or not payload.get("provider_shape"):
+            raise UpdateError("Native OpenCode provider manifest is incomplete.")
+        if payload.get("machine") != "arm64":
+            raise UpdateError("Native OpenCode is not running from an ARM64 installation.")
+        return NativeOpenCodeManifest(
+            digest=digest_text(raw),
+            version=str(payload.get("version", "")),
+            machine=str(payload.get("machine", "")),
+            binary=str(payload.get("binary", "")),
         )
 
     def state(self) -> DeploymentState:
         platform_container = self.service_container("platform")
-        opencode_container = self.service_container("opencode")
         image_id = self.inspect_format(platform_container, "{{.Image}}")
         target_image = self.inspect_format(platform_container, "{{.Config.Image}}")
         revision = self.inspect_format(
@@ -277,7 +233,7 @@ print(json.dumps(shape, ensure_ascii=True, sort_keys=True, separators=(",", ":")
             )
         return DeploymentState(
             platform_container=platform_container,
-            opencode=self.opencode_manifest(opencode_container),
+            opencode=self.opencode_manifest(),
             platform_image_id=image_id,
             target_image=target_image,
             image_revision=revision,
@@ -285,7 +241,7 @@ print(json.dumps(shape, ensure_ascii=True, sort_keys=True, separators=(",", ":")
         )
 
     def verify_health_readonly(self) -> None:
-        for service in ("mysql", "opencode", "platform"):
+        for service in ("mysql", "platform"):
             container = self.service_container(service)
             running = self.inspect_format(container, "{{.State.Running}}")
             health = self.inspect_format(
@@ -310,9 +266,10 @@ print(json.dumps(shape, ensure_ascii=True, sort_keys=True, separators=(",", ":")
             )
 
         topology = changed_paths(self.repo, old_revision, self.head, TOPOLOGY_PATHS)
-        if topology:
+        if topology and not full_build:
             raise UpdateError(
-                "Deployment topology/safety files changed since the running image; manual review is required: "
+                "Deployment topology/safety files changed since the running image; "
+                "review them and re-run with --full-build: "
                 + ", ".join(topology)
             )
         dependencies = changed_paths(self.repo, old_revision, self.head, DEPENDENCY_PATHS)
@@ -479,12 +436,13 @@ HEALTHCHECK --interval=15s --timeout=8s --start-period=20s --retries=8 \\
         )
         return self.wait_for_platform()
 
-    def assert_opencode_unchanged(self, before: OpenCodeManifest) -> OpenCodeManifest:
-        after_container = self.service_container("opencode")
-        after = self.opencode_manifest(after_container)
+    def assert_opencode_unchanged(
+        self, before: NativeOpenCodeManifest
+    ) -> NativeOpenCodeManifest:
+        after = self.opencode_manifest()
         if after != before:
             raise UpdateError(
-                "OpenCode preservation check failed: container, mounts, config digest, or provider shape changed."
+                "Native OpenCode preservation check failed: binary, version, provider config, or auth shape changed."
             )
         return after
 
@@ -517,7 +475,10 @@ HEALTHCHECK --interval=15s --timeout=8s --start-period=20s --retries=8 \\
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Update only the existing local macOS platform container from committed Git HEAD."
+        description=(
+            "Update the local macOS platform container from committed Git HEAD "
+            "while preserving native OpenCode."
+        )
     )
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument("--dry-run", action="store_true", help="Run read-only preflight and print the selected build mode.")
@@ -557,7 +518,8 @@ def main() -> int:
                 "Verified existing local stack: "
                 f"platform={state.platform_container[:12]} "
                 f"image_revision={state.image_revision or 'unknown'} "
-                f"opencode={state.opencode.container_id[:12]} provider_manifest=preserved"
+                f"opencode={state.opencode.version} machine={state.opencode.machine} "
+                "provider_manifest=preserved"
             )
             return 0
 
@@ -572,7 +534,8 @@ def main() -> int:
             print("Local worktree changes are present and will be excluded by git archive HEAD.")
         print(
             "Protected OpenCode:        "
-            f"container={state.opencode.container_id[:12]} provider_manifest={state.opencode.provider_shape_hash[:12]}"
+            f"native={state.opencode.version} machine={state.opencode.machine} "
+            f"provider_manifest={state.opencode.digest[:12]}"
         )
         if args.dry_run:
             print("Dry run complete; no image was built and no container was recreated.")
@@ -585,7 +548,7 @@ def main() -> int:
         print(
             "Local platform update verified: "
             f"revision={updater.head} mode={mode} image={new_image} "
-            f"platform={platform_container[:12]} opencode={state.opencode.container_id[:12]} "
+            f"platform={platform_container[:12]} opencode={state.opencode.version} "
             "provider_manifest=preserved"
         )
         return 0
