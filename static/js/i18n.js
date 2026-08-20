@@ -5,6 +5,7 @@
   const CHINESE = "zh-CN";
   const DYNAMIC_CONTENT_ATTRIBUTE = "data-i18n-dynamic";
   const DYNAMIC_ATTRIBUTES_ATTRIBUTE = "data-i18n-dynamic-attributes";
+  const LOCALIZABLE_TEXT_KEY_ATTRIBUTE = "data-i18n-key";
   const LOCALIZABLE_ATTRIBUTES = ["title", "placeholder", "aria-label", "aria-description"];
   const TEXT_SKIPPED_SELECTOR = [
     "pre",
@@ -67,6 +68,10 @@
     [/^共\s*(\d+)\s*个角色$/, (count) => `${count} roles total`],
     [/^共\s*(\d+)\s*条相关脚本$/, (count) => `${count} related scripts total`],
     [/^已选择\s*(\d+)\s*[个条]$/, (count) => `${count} selected`],
+    [/^已导出\s*(\d+)\s*条测试计划。$/, (count) => `${count} test plans exported.`],
+    [/^测试计划导入完成：新增\s*(\d+)\s*条，覆盖\s*(\d+)\s*条，跳过\s*(\d+)\s*条。$/, (created, overwritten, skipped) => `Test-plan import completed: ${created} created, ${overwritten} overwritten, ${skipped} skipped.`],
+    [/^导出测试计划失败：(\d+)$/, (status) => `Could not export test plans: ${status}`],
+    [/^导入测试计划失败：(\d+)$/, (status) => `Could not import test plans: ${status}`],
     [/^拆分完成：新增\s*(\d+)\s*个单用例计划。$/, (count) => `Split complete: ${count} single-case plans created.`],
     [/^跳过\s*(\d+)\s*个已存在或无效计划。$/, (count) => `Skipped ${count} existing or invalid plans.`],
     [/^任务失败：?\s*(.*)$/, (error) => error ? `Task failed: ${error}` : "Task failed"],
@@ -218,6 +223,11 @@
 
   function localizeElement(element) {
     if (isAttributeExcluded(element)) return;
+    if (element.hasAttribute(LOCALIZABLE_TEXT_KEY_ATTRIBUTE)) {
+      const key = element.getAttribute(LOCALIZABLE_TEXT_KEY_ATTRIBUTE);
+      const translated = translate(key);
+      if (translated !== key) element.textContent = translated;
+    }
     LOCALIZABLE_ATTRIBUTES.forEach((attribute) => {
       if (!element.hasAttribute(attribute)) return;
       const value = element.getAttribute(attribute);
@@ -233,7 +243,9 @@
     while (walker.nextNode()) textNodes.push(walker.currentNode);
     textNodes.forEach(localizeTextNode);
     if (root.nodeType === Node.ELEMENT_NODE) localizeElement(root);
-    root.querySelectorAll?.("[title], [placeholder], [aria-label], [aria-description]").forEach(localizeElement);
+    root.querySelectorAll?.(
+      `[${LOCALIZABLE_TEXT_KEY_ATTRIBUTE}], [title], [placeholder], [aria-label], [aria-description]`,
+    ).forEach(localizeElement);
   }
 
   function setDynamicContent(element, enabled = true) {

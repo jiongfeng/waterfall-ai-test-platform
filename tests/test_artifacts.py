@@ -48,6 +48,60 @@ class ArtifactNamingTests(unittest.TestCase):
         self.assertTrue(naming.is_plan_index_filename("登录-用例索引.md"))
         self.assertFalse(naming.is_plan_index_filename("登录流程.md"))
 
+    def test_generated_script_filename_validation_uses_project_language(self):
+        self.assertEqual(
+            naming.validate_generated_script_filename(
+                "Successful Login.spec.ts",
+                "en",
+            ),
+            "Successful Login.spec.ts",
+        )
+        self.assertEqual(
+            naming.validate_generated_script_filename(
+                "登录成功.spec.ts",
+                "zh-CN",
+            ),
+            "登录成功.spec.ts",
+        )
+        with self.assertRaisesRegex(
+            ValueError,
+            "测试脚本文件名必须使用中文名称",
+        ):
+            naming.validate_generated_script_filename(
+                "Successful Login.spec.ts",
+                "zh-CN",
+            )
+
+    def test_generated_script_filename_validation_defaults_unknown_to_chinese(self):
+        for language in (None, "", "fr"):
+            with self.subTest(language=language), self.assertRaisesRegex(
+                ValueError,
+                "测试脚本文件名必须使用中文名称",
+            ):
+                naming.validate_generated_script_filename(
+                    "Successful Login.spec.ts",
+                    language,
+                )
+
+    def test_generated_script_filename_validation_rejects_unsafe_paths(self):
+        unsafe_filenames = (
+            "../Successful Login.spec.ts",
+            "nested/Successful Login.spec.ts",
+            "nested\\Successful Login.spec.ts",
+            "Successful Login.ts",
+            "Successful Login.spec.ts\x00",
+        )
+        for language in ("en", "zh-CN"):
+            for filename in unsafe_filenames:
+                with (
+                    self.subTest(language=language, filename=filename),
+                    self.assertRaises(ValueError),
+                ):
+                    naming.validate_generated_script_filename(
+                        filename,
+                        language,
+                    )
+
 
 class ArtifactPathTests(unittest.TestCase):
     def setUp(self):
@@ -170,6 +224,112 @@ class ArtifactSnapshotTests(unittest.TestCase):
                 files,
                 {specs_dir / "计划.md", tests_dir / "脚本.spec.ts"},
             )
+
+
+class ScriptGenerationFinalizerLanguageTests(unittest.TestCase):
+    VALID_SCRIPT = (
+        "import { test, expect } from '@playwright/test';\n"
+        "test('business flow', async () => {\n"
+        "  expect(true).toBe(true);\n"
+        "});\n"
+    )
+
+    def test_finalizer_accepts_filenames_for_the_captured_project_language(self):
+        scenarios = (
+            ("en", "Successful Login.spec.ts"),
+            ("zh-CN", "登录成功.spec.ts"),
+        )
+        for language, filename in scenarios:
+            with self.subTest(language=language), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                plan_file = root / "specs" / "Authentication" / "plan.md"
+                script_dir = root / "tests" / "Authentication"
+                target_file = script_dir / filename
+                candidate_file = root / "candidates" / filename
+                plan_file.parent.mkdir(parents=True)
+                script_dir.mkdir(parents=True)
+                candidate_file.parent.mkdir(parents=True)
+                plan_file.write_text("# Plan\n", encoding="utf-8")
+                snapshot = app.managed_file_snapshot([plan_file, target_file])
+                candidate_file.write_text(self.VALID_SCRIPT, encoding="utf-8")
+
+                with (
+                    patch.object(app, "get_script_module_dir", return_value=script_dir),
+                    patch.object(
+                        app,
+                        "iter_generation_managed_files",
+                        side_effect=lambda: iter(
+                            path
+                            for path in (plan_file, target_file)
+                            if path.exists()
+                        ),
+                    ),
+                ):
+                    result = app.finalize_script_generation(
+                        "Authentication",
+                        plan_file.name,
+                        plan_file,
+                        target_file,
+                        candidate_file,
+                        snapshot,
+                        set(),
+                        language=language,
+                    )
+
+                self.assertEqual(result["script_filename"], filename)
+                self.assertEqual(
+                    target_file.read_text(encoding="utf-8"),
+                    self.VALID_SCRIPT,
+                )
+
+    def test_failed_language_validation_restores_and_cleans_generated_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            plan_file = root / "specs" / "Authentication" / "plan.md"
+            script_dir = root / "tests" / "Authentication"
+            target_file = script_dir / "Successful Login.spec.ts"
+            candidate_file = root / "candidates" / target_file.name
+            stray_file = script_dir / "Unexpected.spec.ts"
+            plan_file.parent.mkdir(parents=True)
+            script_dir.mkdir(parents=True)
+            candidate_file.parent.mkdir(parents=True)
+            plan_file.write_text("# Plan\n", encoding="utf-8")
+            target_file.write_text("original", encoding="utf-8")
+            snapshot = app.managed_file_snapshot([plan_file, target_file])
+            candidate_file.write_text(self.VALID_SCRIPT, encoding="utf-8")
+            stray_file.write_text(self.VALID_SCRIPT, encoding="utf-8")
+
+            with (
+                patch.object(app, "get_script_module_dir", return_value=script_dir),
+                patch.object(
+                    app,
+                    "iter_generation_managed_files",
+                    side_effect=lambda: iter(
+                        path
+                        for path in (plan_file, target_file, stray_file)
+                        if path.exists()
+                    ),
+                ),
+                self.assertRaisesRegex(
+                    ValueError,
+                    "测试脚本文件名必须使用中文名称",
+                ),
+            ):
+                app.finalize_script_generation(
+                    "Authentication",
+                    plan_file.name,
+                    plan_file,
+                    target_file,
+                    candidate_file,
+                    snapshot,
+                    {target_file.name},
+                    language="zh-CN",
+                )
+
+            self.assertEqual(target_file.read_text(encoding="utf-8"), "original")
+            self.assertEqual(plan_file.read_text(encoding="utf-8"), "# Plan\n")
+            self.assertFalse(candidate_file.exists())
+            self.assertFalse(stray_file.exists())
 
 
 class AppArtifactCompatibilityTests(unittest.TestCase):

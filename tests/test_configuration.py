@@ -51,6 +51,42 @@ class ConfigurationTests(unittest.TestCase):
         self.assertEqual(config["default_project_key"], "default")
         self.assertFalse(config["platform_database"]["enabled"])
         self.assertFalse(config["auth"]["enabled"])
+        self.assertEqual(config["default_project_language"], "en")
+        self.assertEqual(config["projects"][0]["language"], "en")
+
+    def test_default_project_language_is_normalized_for_config_projects(self):
+        projects, default_key = parse_projects_config(
+            {
+                "default_project_language": "zh-cn",
+                "projects": [
+                    {
+                        "key": "demo",
+                        "name": "Demo",
+                        "playwright_project_root": "D:/tests",
+                    }
+                ],
+            }
+        )
+
+        self.assertEqual(default_key, "demo")
+        self.assertEqual(projects[0]["language"], "zh-CN")
+
+    def test_invalid_default_project_language_is_a_config_error(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "playwright_project_root": "D:/tests",
+                        "default_project_language": "fr",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            config = load_config(config_path)
+
+        self.assertIn("Unsupported project language", config["error"])
 
     def test_auth_secrets_prefer_environment_over_file_values(self):
         with patch.dict(

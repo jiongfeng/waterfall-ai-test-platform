@@ -1,0 +1,4 @@
+interface:
+  display_name: "Update Local Mac Platform"
+  short_description: "Safely update the local Mac test platform"
+  default_prompt: "Use $update-local-mac-platform to deploy committed platform code to my local Mac, preserve OpenCode, and UI-test the affected features."

@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 
 from test_plan_viewer.artifacts import naming
-from test_plan_viewer.generation import cases, prompts
+from test_plan_viewer.generation import cases, opencode, prompts
 
 
 # These small reference functions intentionally preserve the behavior that was
@@ -149,6 +149,56 @@ def make_case_dependencies(specs_dir, *, language="zh-CN"):
         ),
         get_project_language=lambda: language,
     )
+
+
+class OpenCodeErrorLocalizationTests(unittest.TestCase):
+    TOOL_STATUS_ERROR_PATTERN = re.compile(r"tool(?:Name)?[=: ]+([\w.-]+)")
+
+    def test_tls_diagnostic_uses_the_requested_project_language(self):
+        source = "Error: unknown certificate verification error"
+
+        english = opencode.format_opencode_execution_error(
+            source,
+            self.TOOL_STATUS_ERROR_PATTERN,
+            language="en",
+        )
+        chinese = opencode.format_opencode_execution_error(
+            source,
+            self.TOOL_STATUS_ERROR_PATTERN,
+            language="zh-CN",
+        )
+
+        self.assertIn("TLS certificate verification failed", english)
+        self.assertNotRegex(english, r"[\u3400-\u9fff]")
+        self.assertIn("TLS 证书校验失败", chinese)
+
+    def test_provider_compatibility_diagnostic_uses_english(self):
+        source = (
+            'Type validation failed: toolName=browser_click '
+            '"choices" "error" "status"'
+        )
+
+        result = opencode.format_opencode_execution_error(
+            source,
+            self.TOOL_STATUS_ERROR_PATTERN,
+            language="en",
+        )
+
+        self.assertIn("OpenCode provider compatibility error", result)
+        self.assertIn("Triggering tool: browser_click", result)
+        self.assertNotRegex(result, r"[\u3400-\u9fff]")
+
+    def test_unknown_provider_errors_remain_verbatim(self):
+        source = "Provider connection reset by peer"
+
+        self.assertEqual(
+            opencode.format_opencode_execution_error(
+                source,
+                self.TOOL_STATUS_ERROR_PATTERN,
+                language="en",
+            ),
+            source,
+        )
 
 
 class PromptNoticeParityTests(unittest.TestCase):

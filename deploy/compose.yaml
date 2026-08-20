@@ -26,6 +26,8 @@ services:
       - backend
 
   opencode:
+    profiles:
+      - container-opencode
     image: ${PLATFORM_IMAGE:-waterfall-ai-test-platform:local}
     command:
       - opencode
@@ -38,8 +40,12 @@ services:
       PLAYWRIGHT_BROWSERS_PATH: /ms-playwright
       TZ: ${TZ:-UTC}
     volumes:
-      - platform_projects:/data/playwright-projects
-      - platform_workspaces:/data/playwright-workspaces
+      - type: ${PLATFORM_PROJECTS_MOUNT_TYPE:-volume}
+        source: ${PLATFORM_PROJECTS_MOUNT_SOURCE:-platform_projects}
+        target: ${PLATFORM_PROJECTS_MOUNT_TARGET:-/data/playwright-projects}
+      - type: ${PLATFORM_WORKSPACES_MOUNT_TYPE:-volume}
+        source: ${PLATFORM_WORKSPACES_MOUNT_SOURCE:-platform_workspaces}
+        target: ${PLATFORM_WORKSPACES_MOUNT_TARGET:-/data/playwright-workspaces}
       - opencode_config:/home/pwuser/.config/opencode
       - opencode_data:/home/pwuser/.local/share/opencode
       - opencode_cache:/home/pwuser/.cache/opencode
@@ -72,8 +78,6 @@ services:
     depends_on:
       mysql:
         condition: service_healthy
-      opencode:
-        condition: service_healthy
     environment:
       PLATFORM_AUTH_ENABLED: "true"
       PLATFORM_ALLOW_HOST_SCRIPT_EXECUTION: ${PLATFORM_ALLOW_HOST_SCRIPT_EXECUTION:-true}
@@ -81,6 +85,8 @@ services:
       PLATFORM_CONFIG_PATH: /run/secrets/platform-config.json
       PLATFORM_COOKIE_SECURE: ${PLATFORM_COOKIE_SECURE:-false}
       PLATFORM_PORT: "5000"
+      PLATFORM_PROJECTS_ROOT: ${PLATFORM_PROJECTS_MOUNT_TARGET:-/data/playwright-projects}
+      PLATFORM_WORKSPACES_ROOT: ${PLATFORM_WORKSPACES_MOUNT_TARGET:-/data/playwright-workspaces}
       PLATFORM_SESSION_SECRET: ${PLATFORM_SESSION_SECRET:?Set PLATFORM_SESSION_SECRET}
       PLATFORM_ADMIN_PASSWORD: ${PLATFORM_ADMIN_PASSWORD:?Set PLATFORM_ADMIN_PASSWORD}
       PLAYWRIGHT_BROWSERS_PATH: /ms-playwright
@@ -91,8 +97,12 @@ services:
       - source: platform_config
         target: platform-config.json
     volumes:
-      - platform_projects:/data/playwright-projects
-      - platform_workspaces:/data/playwright-workspaces
+      - type: ${PLATFORM_PROJECTS_MOUNT_TYPE:-volume}
+        source: ${PLATFORM_PROJECTS_MOUNT_SOURCE:-platform_projects}
+        target: ${PLATFORM_PROJECTS_MOUNT_TARGET:-/data/playwright-projects}
+      - type: ${PLATFORM_WORKSPACES_MOUNT_TYPE:-volume}
+        source: ${PLATFORM_WORKSPACES_MOUNT_SOURCE:-platform_workspaces}
+        target: ${PLATFORM_WORKSPACES_MOUNT_TARGET:-/data/playwright-workspaces}
     tmpfs:
       - /tmp:size=1g,mode=1777
     shm_size: 1gb

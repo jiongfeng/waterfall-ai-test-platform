@@ -12,6 +12,32 @@
       </div>
     </div>
 
+    <div class="modal-backdrop hidden" id="requirementDeleteModal" role="dialog" aria-modal="true" aria-labelledby="requirementDeleteTitle">
+      <div class="modal compact-modal">
+        <div class="modal-header">
+          <div>
+            <p class="modal-label">危险操作</p>
+            <h2 id="requirementDeleteTitle">确认删除需求</h2>
+            <p class="modal-description">删除后，需求和候选模块将不再显示；已生成的测试计划、脚本、测试集和执行记录会保留。</p>
+          </div>
+          <button class="modal-close" id="requirementDeleteClose" type="button" aria-label="关闭">×</button>
+        </div>
+        <div class="modal-body">
+          <div class="requirement-delete-warning">
+            <strong id="requirementDeleteName"></strong>
+          </div>
+          <label class="form-field">
+            <span>请输入完整需求名称以确认删除</span>
+            <input id="requirementDeleteConfirmation" type="text" autocomplete="off" />
+          </label>
+        </div>
+        <div class="modal-footer">
+          <button class="secondary-button" id="requirementDeleteCancel" type="button">取消</button>
+          <button class="secondary-button danger-button" id="requirementDeleteSubmit" type="button" disabled>删除需求</button>
+        </div>
+      </div>
+    </div>
+
     <div class="modal-backdrop hidden" id="planGenerationModal" role="dialog" aria-modal="true" aria-labelledby="planGenerationTitle">
       <div class="modal">
         <div class="modal-header">

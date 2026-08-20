@@ -13,6 +13,10 @@ function createAdminFeature(deps) {
   } = deps;
   const { renderProjectSelect } = projects;
   const t = (value) => window.WaterfallI18n?.source(value) || value;
+  const translate = (key, fallback = key) => {
+    const localized = window.WaterfallI18n?.t?.(key);
+    return localized && localized !== key ? localized : fallback;
+  };
 
 function getMenuItem(section) {
   return MENU_ITEMS.find((item) => item.section === section) || null;
@@ -135,14 +139,16 @@ function formatAuthDate(timestamp) {
 }
 
 function getStatusText(status) {
-  return status === "active" ? "启用" : "禁用";
+  return status === "active"
+    ? translate("auth.status.active", "启用")
+    : translate("auth.status.disabled", "禁用");
 }
 
 function getRoleSummary(roles) {
   if (!Array.isArray(roles) || !roles.length) {
     return "-";
   }
-  return roles.map(getRoleDisplayName).join("、");
+  return roles.map(getRoleDisplayName).join(window.WaterfallI18n?.getLocale?.() === "en" ? ", " : "、");
 }
 
 function getRoleDisplayName(role) {
@@ -154,8 +160,17 @@ function getRoleDisplayName(role) {
 }
 
 function getPermissionSummary(permissionCodes) {
-  const names = new Map(state.admin.permissions.map((permission) => [permission.code, permission.name]));
-  return (permissionCodes || []).map((code) => names.get(code) || code).join("、") || "-";
+  const permissions = new Map(state.admin.permissions.map((permission) => [permission.code, permission]));
+  const separator = window.WaterfallI18n?.getLocale?.() === "en" ? ", " : "、";
+  return (permissionCodes || []).map((code) => getPermissionDisplayName(permissions.get(code) || { code })).join(separator) || "-";
+}
+
+function getPermissionDisplayName(permission) {
+  const code = permission?.code || "";
+  if (!code) {
+    return permission?.name || "";
+  }
+  return translate(`auth.permission.${code}`, permission?.name || code);
 }
 
 async function loadAdminPermissions() {
@@ -245,7 +260,7 @@ function renderPermissionCheckboxes(selectedPermissionCodes, disabled = false) {
           <input type="checkbox" name="rolePermission" value="${escapeHtml(permission.code)}" ${checked} ${
             disabled ? "disabled" : ""
           } />
-          <span>${escapeHtml(permission.name)}</span>
+          <span>${escapeHtml(getPermissionDisplayName(permission))}</span>
         </label>
       `;
     })
@@ -283,14 +298,14 @@ function renderUserAdminForm() {
         <label class="form-field">
           <span>状态</span>
           <select id="adminUserStatus">
-            <option value="active" ${user?.status !== "disabled" ? "selected" : ""}>启用</option>
-            <option value="disabled" ${user?.status === "disabled" ? "selected" : ""}>禁用</option>
+            <option value="active" ${user?.status !== "disabled" ? "selected" : ""}>${escapeHtml(translate("auth.status.active", "启用"))}</option>
+            <option value="disabled" ${user?.status === "disabled" ? "selected" : ""}>${escapeHtml(translate("auth.status.disabled", "禁用"))}</option>
           </select>
         </label>
         ${
           isNew
             ? `<label class="form-field">
-                <span>初始密码</span>
+                <span>${escapeHtml(translate("auth.initialPassword", "初始密码"))}</span>
                 <input id="adminPassword" type="password" autocomplete="new-password" />
               </label>`
             : ""
@@ -319,23 +334,23 @@ function renderPasswordResetForm() {
     <form class="admin-form" id="passwordResetForm">
       <div class="admin-form-header">
         <div>
-          <h3>重置密码</h3>
+          <h3>${escapeHtml(translate("auth.resetPassword", "重置密码"))}</h3>
           <p data-i18n-dynamic>${escapeHtml(user?.username || "")}</p>
         </div>
         <button class="secondary-button" id="cancelPasswordReset" type="button">取消</button>
       </div>
       <div class="admin-form-grid">
         <label class="form-field">
-          <span>新密码</span>
+          <span>${escapeHtml(translate("auth.newPassword", "新密码"))}</span>
           <input id="adminResetPassword" type="password" minlength="8" autocomplete="new-password" required />
         </label>
         <label class="form-field">
-          <span>确认新密码</span>
+          <span>${escapeHtml(translate("auth.confirmNewPassword", "确认新密码"))}</span>
           <input id="adminResetPasswordConfirm" type="password" minlength="8" autocomplete="new-password" required />
         </label>
       </div>
       <div class="admin-form-actions">
-        <button class="primary-button" type="submit">确认重置</button>
+        <button class="primary-button" type="submit">${escapeHtml(translate("auth.confirmReset", "确认重置"))}</button>
       </div>
     </form>
   `;
@@ -381,7 +396,7 @@ function renderUserAdminPanel() {
                         <td>
                           <div class="module-row-actions">
                             <button class="secondary-button" type="button" data-user-edit="${user.id}">编辑</button>
-                            <button class="secondary-button" type="button" data-user-reset="${user.id}">重置密码</button>
+                            <button class="secondary-button" type="button" data-user-reset="${user.id}">${escapeHtml(translate("auth.resetPassword", "重置密码"))}</button>
                           </div>
                         </td>
                       </tr>
@@ -514,8 +529,8 @@ function renderRoleAdminForm() {
         <label class="form-field">
           <span>状态</span>
           <select id="adminRoleStatus" ${isAdminRole ? "disabled" : ""}>
-            <option value="active" ${role?.status !== "disabled" ? "selected" : ""}>启用</option>
-            <option value="disabled" ${role?.status === "disabled" ? "selected" : ""}>禁用</option>
+            <option value="active" ${role?.status !== "disabled" ? "selected" : ""}>${escapeHtml(translate("auth.status.active", "启用"))}</option>
+            <option value="disabled" ${role?.status === "disabled" ? "selected" : ""}>${escapeHtml(translate("auth.status.disabled", "禁用"))}</option>
           </select>
         </label>
       </div>
@@ -567,7 +582,7 @@ function renderRoleAdminPanel() {
                       <tr>
                         <td data-i18n-dynamic>${escapeHtml(role.code)}</td>
                         <td><span data-i18n-dynamic>${escapeHtml(getRoleDisplayName(role))}</span>${
-                          role.is_system ? '<span class="system-tag">系统</span>' : ""
+                          role.is_system ? `<span class="system-tag">${escapeHtml(translate("auth.systemRoleTag", "系统"))}</span>` : ""
                         }</td>
                         <td><span class="status-badge ${role.status === "active" ? "success" : "failed"}">${getStatusText(
                           role.status,
@@ -653,6 +668,7 @@ return {
   formatAuthDate,
   getStatusText,
   getRoleSummary,
+  getPermissionDisplayName,
   getPermissionSummary,
   loadAdminPermissions,
   loadAdminRoles,

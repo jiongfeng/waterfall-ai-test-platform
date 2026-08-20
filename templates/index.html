@@ -7,8 +7,9 @@
     <meta name="description" content="Waterfall AI — Agent-driven test automation platform" />
     <title>Waterfall AI — Agent-driven test automation platform</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/features/projects.css') }}" />
     <link rel="stylesheet" href="{{ url_for('static', filename='css/features/agent.css') }}" />
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/features/agent-script-preparation.css', v=5) }}" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/features/agent-script-preparation.css', v=6) }}" />
   </head>
   <body>
     <div class="app-shell i18n-pending" id="appShell">
@@ -22,9 +23,7 @@
           <span class="topbar-label">当前项目</span>
           <div class="project-picker">
             <select class="project-select" id="projectSelect" title="当前项目" aria-label="当前项目"></select>
-            <button class="secondary-button compact-button" id="createProjectButton" type="button">新增项目</button>
-            <button class="secondary-button compact-button hidden" id="exportProjectButton" type="button">导出项目</button>
-            <button class="secondary-button compact-button hidden" id="importProjectButton" type="button">导入项目</button>
+            <button class="secondary-button compact-button hidden" id="manageProjectButton" type="button">管理项目</button>
           </div>
         </div>
 
@@ -124,6 +123,10 @@
           </div>
           <div class="sidebar-action" id="planCreateWrap">
             <button class="create-module-button" id="createModuleButton" type="button">新增计划</button>
+            <div class="plan-transfer-sidebar-actions">
+              <button class="secondary-button" id="exportPlansButton" type="button">导出</button>
+              <button class="secondary-button" id="importPlansButton" type="button">导入</button>
+            </div>
           </div>
           <div class="sidebar-action hidden" id="requirementUploadWrap">
             <button class="create-module-button" id="uploadRequirementButton" type="button">上传需求</button>
@@ -165,9 +168,13 @@
 {% include "partials/agent_panel.html" %}
           <div class="script-tabs hidden" id="scriptTabs" role="tablist" aria-label="测试脚本内容">
             <button class="content-tab active" id="scriptContentTab" type="button" role="tab" aria-selected="true">脚本</button>
+            <button class="content-tab" id="scriptPreparationTab" type="button" role="tab" aria-selected="false">脚本准备</button>
             <button class="content-tab" id="executionRecordTab" type="button" role="tab" aria-selected="false">执行记录</button>
             <button class="content-tab" id="repairRecordTab" type="button" role="tab" aria-selected="false">修复记录</button>
           </div>
+          {% with script_preparation_prefix="module", script_preparation_scope="module" %}
+            {% include "partials/agent_script_preparation.html" %}
+          {% endwith %}
           <div class="script-tabs hidden" id="planTabs" role="tablist" aria-label="测试计划内容">
             <button class="content-tab active" id="planContentTab" type="button" role="tab" aria-selected="true">计划</button>
             <button class="content-tab" id="planGenerationRecordTab" type="button" role="tab" aria-selected="false">生成测试计划记录</button>
@@ -293,6 +300,10 @@
                 <code id="planRecordTargetPath"></code>
               </div>
 
+              <div class="script-repair-actions">
+                <button class="danger-primary-button hidden" id="planGenerationCancelButton" type="button">终止生成</button>
+              </div>
+
               <div class="job-output hidden" id="planRecordJobOutput">
                 <div class="job-status" id="planRecordJobStatus">任务进行中</div>
                 <pre id="planRecordJobLogs"></pre>
@@ -331,7 +342,7 @@
               <div class="module-script-actions hidden" id="modulePlanBulkActions">
                 <span class="module-selection-count" id="modulePlanSelectionCount">已选择 0 条</span>
                 <button class="secondary-button" id="modulePlanBulkCancel" type="button">取消</button>
-                <button class="primary-button" id="modulePlanBulkGenerate" type="button" disabled>批量生成脚本</button>
+                <button class="primary-button" id="modulePlanBulkGenerate" type="button" disabled data-i18n-key="moduleScriptPreparation.bulkGenerate">批量生成并准备</button>
                 <button class="secondary-button danger-button" id="modulePlanBulkDelete" type="button" disabled>批量删除</button>
               </div>
             </div>
@@ -355,6 +366,7 @@
           <section class="module-repair-record hidden" id="modulePlanScriptBatchRecord">
             <div class="module-repair-record-header hidden" id="modulePlanScriptBatchHeader">
               <div class="module-repair-summary" id="modulePlanScriptBatchSummary">批量生成脚本进行中</div>
+              <button class="danger-primary-button" id="modulePlanScriptBatchCancelButton" type="button">终止生成</button>
             </div>
             <div class="execution-empty" id="modulePlanScriptBatchEmpty">
               <h3>暂无批量生成脚本记录</h3>
@@ -400,7 +412,10 @@
                     <h3>需求预览</h3>
                     <p id="requirementMeta">未选择需求</p>
                   </div>
-                  <a class="secondary-button requirement-download-link" id="requirementDownloadLink" href="#" target="_blank" rel="noreferrer">下载</a>
+                  <div class="requirement-pane-actions">
+                    <a class="secondary-button requirement-download-link" id="requirementDownloadLink" href="#" target="_blank" rel="noreferrer">下载</a>
+                    <button class="secondary-button danger-button" id="requirementDeleteButton" type="button">删除</button>
+                  </div>
                 </div>
                 <article class="markdown-preview requirement-preview" id="requirementPreview"></article>
               </section>
@@ -427,6 +442,7 @@
                 <div class="module-repair-record requirement-plan-batch-record" id="requirementPlanGenerationBatchRecord">
                   <div class="module-repair-record-header hidden" id="requirementPlanGenerationBatchHeader">
                     <div class="module-repair-summary" id="requirementPlanGenerationBatchSummary">批量生成计划进行中</div>
+                    <button class="danger-primary-button" id="requirementPlanGenerationBatchCancelButton" type="button">终止生成</button>
                   </div>
                   <div class="execution-empty" id="requirementPlanGenerationBatchEmpty">
                     <h3>暂无批量生成计划记录</h3>
@@ -487,7 +503,7 @@
                 <span>Playwright Report</span>
                 <a id="moduleExecutionReportLink" href="#" target="_blank" rel="noreferrer">新窗口打开</a>
               </div>
-              <iframe class="execution-report-frame" id="moduleExecutionReportFrame" title="Module Playwright Test Report" sandbox="allow-scripts allow-downloads" referrerpolicy="no-referrer"></iframe>
+              <iframe class="execution-report-frame" id="moduleExecutionReportFrame" title="Module Playwright Test Report" sandbox="allow-scripts allow-downloads allow-same-origin" referrerpolicy="no-referrer"></iframe>
               <p class="execution-report-path" id="moduleExecutionReportPath"></p>
             </div>
           </section>
@@ -538,7 +554,7 @@
                 <span>Playwright Report</span>
                 <a id="executionReportLink" href="#" target="_blank" rel="noreferrer">新窗口打开</a>
               </div>
-              <iframe class="execution-report-frame" id="executionReportFrame" title="Playwright Test Report" sandbox="allow-scripts allow-downloads" referrerpolicy="no-referrer"></iframe>
+              <iframe class="execution-report-frame" id="executionReportFrame" title="Playwright Test Report" sandbox="allow-scripts allow-downloads allow-same-origin" referrerpolicy="no-referrer"></iframe>
               <p class="execution-report-path" id="executionReportPath"></p>
             </div>
             <div class="execution-video-wrap hidden" id="executionVideoWrap">
@@ -573,6 +589,8 @@
 
 {% include "partials/project_modals.html" %}
 
+{% include "partials/plan_transfer_modals.html" %}
+
 {% include "partials/test_suite_modals.html" %}
 
     <script src="{{ url_for('static', filename='js/core/api-client.js') }}"></script>
@@ -587,9 +605,11 @@
     <script src="{{ url_for('static', filename='js/features/module-plan-generation.js') }}"></script>
     <script src="{{ url_for('static', filename='js/features/admin.js') }}"></script>
     <script src="{{ url_for('static', filename='js/features/projects.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/features/plan-transfer.js') }}"></script>
     <script src="{{ url_for('static', filename='js/features/project-settings.js') }}"></script>
     <script src="{{ url_for('static', filename='js/features/setup-preparation.js') }}"></script>
-    <script src="{{ url_for('static', filename='js/features/agent-script-preparation.js', v=4) }}"></script>
+    <script src="{{ url_for('static', filename='js/features/agent-script-preparation.js', v=5) }}"></script>
+    <script src="{{ url_for('static', filename='js/features/module-script-preparation.js', v=1) }}"></script>
     <script src="{{ url_for('static', filename='js/features/agent-progress.js', v=1) }}"></script>
     <script src="{{ url_for('static', filename='js/features/agent.js', v=4) }}"></script>
     <script src="{{ url_for('static', filename='js/i18n/zh-CN.js') }}"></script>

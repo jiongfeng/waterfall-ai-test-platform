@@ -97,6 +97,7 @@ REQUIRED_ROUTE_CONTRACTS = {
     ("DELETE", "/api/test-suites/<suite_uid>/items/<int:item_id>"),
     ("PUT", "/api/test-suites/<suite_uid>/items/reorder"),
     ("GET", "/api/jobs/<job_id>"),
+    ("POST", "/api/jobs/<job_id>/cancel"),
     ("GET", "/api/jobs/<job_id>/log"),
     ("GET", "/api/jobs/<job_id>/log/download"),
     ("GET", "/api/assets/<int:asset_id>/revisions"),
@@ -129,6 +130,21 @@ REQUIRED_ROUTE_CONTRACTS = {
         "POST",
         "/api/agent/runs/<run_id>/script-items/batch-actions",
     ),
+    ("POST", "/api/script-preparation-runs"),
+    ("GET", "/api/script-preparation-runs/<run_id>"),
+    (
+        "GET",
+        "/api/script-preparation-runs/<run_id>/items/<item_id>",
+    ),
+    (
+        "POST",
+        "/api/script-preparation-runs/<run_id>/items/<item_id>/actions",
+    ),
+    (
+        "POST",
+        "/api/script-preparation-runs/<run_id>/items/batch-actions",
+    ),
+    ("POST", "/api/script-preparation-runs/<run_id>/cancel"),
     ("GET", "/api/agent/runs/<run_id>/attempts"),
     (
         "GET",
@@ -172,6 +188,7 @@ REQUIRED_HTML_IDS = {
     "projectSettingsPanel",
     "agentPanel",
     "scriptTabs",
+    "scriptPreparationTab",
     "planTabs",
     "testSuiteListPanel",
     "testSuiteDetailPanel",
@@ -182,8 +199,8 @@ REQUIRED_HTML_IDS = {
     "editor",
     "planGenerationModal",
     "scriptGenerationModal",
-    "projectCreateModal",
-    "projectImportModal",
+    "projectManageModal",
+    "projectDeleteModal",
     "testSuiteCreateModal",
     "executionModeModal",
     "testSuiteProgressModal",
@@ -262,21 +279,77 @@ REQUIRED_STATIC_URLS = {
     "/static/js/features/project-settings.js",
     "/static/js/features/setup-preparation.js",
     "/static/js/features/agent-script-preparation.js",
+    "/static/js/features/module-script-preparation.js",
     "/static/js/features/agent.js",
     "/static/app.js",
 }
 
 
 class HtmlContractParser(HTMLParser):
+    VOID_TAGS = {
+        "area",
+        "base",
+        "br",
+        "col",
+        "embed",
+        "hr",
+        "img",
+        "input",
+        "link",
+        "meta",
+        "param",
+        "source",
+        "track",
+        "wbr",
+    }
+
     def __init__(self):
         super().__init__()
         self.elements = []
+        self.script_preparation_scopes = {}
+        self._script_preparation_scope = None
+        self._script_preparation_depth = 0
 
     def handle_starttag(self, tag, attrs):
-        self.elements.append((tag, dict(attrs)))
+        attributes = dict(attrs)
+        self.elements.append((tag, attributes))
+        scope = attributes.get("data-script-preparation-scope")
+        if scope is not None:
+            if self._script_preparation_scope is not None:
+                raise AssertionError(
+                    "Script-preparation workbench roots cannot be nested"
+                )
+            self._script_preparation_scope = scope
+            self._script_preparation_depth = 1
+            self.script_preparation_scopes.setdefault(scope, [])
+        elif (
+            self._script_preparation_scope is not None
+            and tag not in self.VOID_TAGS
+        ):
+            self._script_preparation_depth += 1
+        self._record_script_preparation_hook(attributes)
 
     def handle_startendtag(self, tag, attrs):
-        self.elements.append((tag, dict(attrs)))
+        attributes = dict(attrs)
+        self.elements.append((tag, attributes))
+        self._record_script_preparation_hook(attributes)
+
+    def handle_endtag(self, tag):
+        if (
+            self._script_preparation_scope is None
+            or tag in self.VOID_TAGS
+        ):
+            return
+        self._script_preparation_depth -= 1
+        if self._script_preparation_depth == 0:
+            self._script_preparation_scope = None
+
+    def _record_script_preparation_hook(self, attributes):
+        hook = attributes.get("data-script-preparation-id")
+        if hook is not None and self._script_preparation_scope is not None:
+            self.script_preparation_scopes[
+                self._script_preparation_scope
+            ].append(hook)
 
     def attribute_values(self, attribute):
         return [
@@ -284,6 +357,9 @@ class HtmlContractParser(HTMLParser):
             for _tag, attrs in self.elements
             if attrs.get(attribute) is not None
         ]
+
+    def script_preparation_values(self, scope):
+        return list(self.script_preparation_scopes.get(scope, []))
 
 
 class ArchitectureContractTests(unittest.TestCase):
@@ -346,9 +422,6 @@ class ArchitectureContractTests(unittest.TestCase):
 
         html_ids = parser.attribute_values("id")
         agent_ids = parser.attribute_values("data-agent-id")
-        script_preparation_ids = parser.attribute_values(
-            "data-script-preparation-id"
-        )
         duplicate_html_ids = {
             value: count
             for value, count in Counter(html_ids).items()
@@ -359,22 +432,12 @@ class ArchitectureContractTests(unittest.TestCase):
             for value, count in Counter(agent_ids).items()
             if count > 1
         }
-        duplicate_script_preparation_ids = {
-            value: count
-            for value, count in Counter(script_preparation_ids).items()
-            if count > 1
-        }
 
         self.assertEqual(duplicate_html_ids, {}, "HTML id values must be unique")
         self.assertEqual(
             duplicate_agent_ids,
             {},
             "data-agent-id values must be unique within the rendered page",
-        )
-        self.assertEqual(
-            duplicate_script_preparation_ids,
-            {},
-            "data-script-preparation-id values must be unique",
         )
         self.assertEqual(
             sorted(REQUIRED_HTML_IDS - set(html_ids)),
@@ -387,13 +450,36 @@ class ArchitectureContractTests(unittest.TestCase):
             "Required Agent DOM hooks are missing",
         )
         self.assertEqual(
-            sorted(
-                REQUIRED_SCRIPT_PREPARATION_IDS
-                - set(script_preparation_ids)
-            ),
-            [],
-            "Required script-preparation DOM hooks are missing",
+            set(parser.script_preparation_scopes),
+            {"agent", "module"},
+            "Agent and module workbenches must each expose a scoped root",
         )
+        for scope in ("agent", "module"):
+            with self.subTest(script_preparation_scope=scope):
+                script_preparation_ids = parser.script_preparation_values(
+                    scope
+                )
+                duplicate_script_preparation_ids = {
+                    value: count
+                    for value, count in Counter(
+                        script_preparation_ids
+                    ).items()
+                    if count > 1
+                }
+                self.assertEqual(
+                    duplicate_script_preparation_ids,
+                    {},
+                    "data-script-preparation-id values must be unique "
+                    "inside each workbench root",
+                )
+                self.assertEqual(
+                    sorted(
+                        REQUIRED_SCRIPT_PREPARATION_IDS
+                        - set(script_preparation_ids)
+                    ),
+                    [],
+                    f"Required {scope} script-preparation hooks are missing",
+                )
 
     def test_index_references_static_assets_that_flask_can_serve(self):
         response = self.render_index_without_external_services()
@@ -536,6 +622,22 @@ class ArchitectureContractTests(unittest.TestCase):
             script_urls.index(
                 "/static/js/features/agent-script-preparation.js"
             ),
+            script_urls.index(
+                "/static/js/features/module-script-preparation.js"
+            ),
+            "The shared script-preparation workbench must load before its module adapter",
+        )
+        self.assertLess(
+            script_urls.index(
+                "/static/js/features/module-script-preparation.js"
+            ),
+            script_urls.index("/static/app.js"),
+            "The module script-preparation adapter must load before application assembly",
+        )
+        self.assertLess(
+            script_urls.index(
+                "/static/js/features/agent-script-preparation.js"
+            ),
             script_urls.index("/static/js/features/agent.js"),
             "Agent script preparation must load before Agent assembly",
         )
@@ -576,7 +678,22 @@ class ArchitectureContractTests(unittest.TestCase):
         agent_source = (
             static_dir / "js" / "features" / "agent.js"
         ).read_text(encoding="utf-8")
+        module_source = (
+            static_dir
+            / "js"
+            / "features"
+            / "module-script-preparation.js"
+        ).read_text(encoding="utf-8")
+        main_source = (static_dir / "app.js").read_text(encoding="utf-8")
 
+        self.assertIn(
+            "function createScriptPreparationFeature(",
+            feature_source,
+        )
+        self.assertIn(
+            "window.createScriptPreparationFeature = ",
+            feature_source,
+        )
         self.assertIn(
             "function createAgentScriptPreparationFeature(",
             feature_source,
@@ -588,6 +705,18 @@ class ArchitectureContractTests(unittest.TestCase):
         self.assertIn(
             "createAgentScriptPreparationFeature(",
             agent_source,
+        )
+        self.assertIn(
+            "function createModuleScriptPreparationFeature(",
+            module_source,
+        )
+        self.assertIn(
+            "createScriptPreparationFeature(root, {",
+            module_source,
+        )
+        self.assertIn(
+            "createModuleScriptPreparationFeature({",
+            main_source,
         )
         self.assertNotIn(
             "createAgentFailureWorkspace(",
@@ -865,6 +994,30 @@ class ArchitectureContractTests(unittest.TestCase):
             with self.subTest(function_name=function_name):
                 self.assertIn(f"function {function_name}(", feature_source)
                 self.assertNotIn(f"function {function_name}(", main_source)
+
+    def test_plan_transfer_ui_is_owned_by_feature_and_plan_sidebar(self):
+        static_dir = app.APP_DIR / "static"
+        main_source = (static_dir / "app.js").read_text(encoding="utf-8")
+        feature_source = (
+            static_dir / "js" / "features" / "plan-transfer.js"
+        ).read_text(encoding="utf-8")
+        template_source = (
+            app.APP_DIR / "templates" / "index.html"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn(
+            "function createPlanTransferFeature(deps)",
+            feature_source,
+        )
+        self.assertIn(
+            "const planTransferFeature = createPlanTransferFeature({",
+            main_source,
+        )
+        plan_wrap_start = template_source.index('id="planCreateWrap"')
+        plan_wrap_end = template_source.index("</div>", plan_wrap_start)
+        plan_wrap = template_source[plan_wrap_start:plan_wrap_end]
+        self.assertIn('id="exportPlansButton"', plan_wrap)
+        self.assertIn('id="importPlansButton"', plan_wrap)
 
     def test_project_settings_ui_is_owned_by_its_feature_factory(self):
         static_dir = app.APP_DIR / "static"

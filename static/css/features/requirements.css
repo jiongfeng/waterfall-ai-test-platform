@@ -103,6 +103,16 @@
   justify-content: flex-end;
 }
 
+.requirement-delete-warning {
+  margin-bottom: 14px;
+  border: 1px solid #f1b8b3;
+  border-radius: 8px;
+  background: #fff5f4;
+  padding: 12px 14px;
+  color: var(--danger);
+  overflow-wrap: anywhere;
+}
+
 .requirement-download-link {
   display: inline-flex;
   flex: 0 0 auto;

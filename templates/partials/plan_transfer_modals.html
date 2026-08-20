@@ -1,0 +1,59 @@
+    <div class="modal-backdrop hidden" id="planExportModal" role="dialog" aria-modal="true" aria-labelledby="planExportTitle">
+      <div class="modal plan-transfer-modal">
+        <div class="modal-header">
+          <div>
+            <p class="modal-label">测试计划</p>
+            <h2 id="planExportTitle">导出测试计划</h2>
+            <p class="modal-description">选择当前项目中需要导出的计划，平台会生成可再次导入的 Excel。</p>
+          </div>
+          <button class="modal-close" id="planExportClose" type="button" aria-label="关闭">×</button>
+        </div>
+        <div class="modal-body">
+          <label class="form-field">
+            <span>搜索计划</span>
+            <input id="planExportSearch" type="search" placeholder="输入模块、计划名称或文件名" autocomplete="off" />
+          </label>
+          <div class="plan-export-selection-toolbar">
+            <label><input id="planExportSelectAll" type="checkbox" /> 全部选择</label>
+            <span id="planExportSelectionCount">已选择 0 条</span>
+          </div>
+          <div class="plan-export-tree" id="planExportTree"></div>
+        </div>
+        <div class="modal-footer">
+          <button class="secondary-button" id="planExportCancel" type="button">取消</button>
+          <button class="primary-button" id="planExportSubmit" type="button" disabled>确定导出</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-backdrop hidden" id="planImportModal" role="dialog" aria-modal="true" aria-labelledby="planImportTitle">
+      <div class="modal compact-modal">
+        <div class="modal-header">
+          <div>
+            <p class="modal-label">测试计划</p>
+            <h2 id="planImportTitle">导入测试计划</h2>
+            <p class="modal-description">上传平台导出的 .xlsx，可一次导入多个模块中的计划。</p>
+          </div>
+          <button class="modal-close" id="planImportClose" type="button" aria-label="关闭">×</button>
+        </div>
+        <div class="modal-body">
+          <label class="form-field">
+            <span>Excel 文件</span>
+            <input id="planImportFile" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" />
+          </label>
+          <label class="form-field">
+            <span>同名计划处理</span>
+            <select id="planImportConflictPolicy">
+              <option value="reject" data-i18n-key="planImport.conflict.reject">拒绝整个导入（默认）</option>
+              <option value="skip" data-i18n-key="planImport.conflict.skip">跳过同名计划</option>
+              <option value="overwrite" data-i18n-key="planImport.conflict.overwrite">覆盖并创建新版本</option>
+            </select>
+          </label>
+          <p class="form-help">覆盖只更新测试计划，不会删除现有脚本、测试集或执行记录。</p>
+        </div>
+        <div class="modal-footer">
+          <button class="secondary-button" id="planImportCancel" type="button">取消</button>
+          <button class="primary-button" id="planImportSubmit" type="button">确定导入</button>
+        </div>
+      </div>
+    </div>

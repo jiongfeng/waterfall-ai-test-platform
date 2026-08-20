@@ -100,7 +100,10 @@ class SecurityResponseHeaderTests(unittest.TestCase):
         )
         self.assertIsNotNone(token_match)
         self.assertGreaterEqual(len(token_match.group(1)), 32)
-        self.assertEqual(html.count('sandbox="allow-scripts allow-downloads"'), 2)
+        self.assertEqual(
+            html.count('sandbox="allow-scripts allow-downloads allow-same-origin"'),
+            2,
+        )
 
 
 class CsrfValidationTests(unittest.TestCase):

@@ -8,7 +8,7 @@ import unittest
 import zipfile
 from contextlib import ExitStack
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import app
 
@@ -87,11 +87,90 @@ class SaveAssetRollbackTests(unittest.TestCase):
     def test_script_save_restores_file_when_version_sync_fails(self):
         self.assert_save_route_rolls_back(
             "/api/test-scripts/登录模块/登录脚本.spec.ts",
-            {"content": "修改后的脚本内容"},
+            {
+                "content": "修改后的脚本内容",
+                "expected_revision_id": None,
+            },
             "get_script_file",
             "sync_script_asset",
             "tests/登录模块/登录脚本.spec.ts",
         )
+
+    def test_script_revision_content_get_does_not_require_a_json_body(self):
+        asset = {"asset_id": 1, "asset_type": "script"}
+        revision = {
+            "revision_id": 2,
+            "git_commit_sha": "deadbeef",
+            "file_path": "tests/登录模块/登录脚本.spec.ts",
+        }
+        with (
+            patch.object(app, "get_auth_config", return_value={"enabled": False}),
+            patch.object(app, "get_test_asset_by_id", return_value=asset),
+            patch.object(app, "get_asset_revision", return_value=revision),
+            patch.object(app, "git_show_file", return_value="历史脚本内容"),
+        ):
+            response = self.client.get("/api/assets/1/revisions/2/content")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["content"], "历史脚本内容")
+
+    def test_script_save_and_restore_reject_null_or_missing_revision_baseline(self):
+        script_file = self.project_root / "tests/login/login.spec.ts"
+        script_file.parent.mkdir(parents=True)
+        script_file.write_text("original", encoding="utf-8")
+        asset = {
+            "asset_id": 1,
+            "asset_type": "script",
+            "module_name": "login",
+            "current_path": str(script_file),
+            "current_revision_id": 5,
+        }
+        revision = {"revision_id": 2, "version_no": 2, "git_commit_sha": "deadbeef", "file_path": str(script_file)}
+        with (
+            patch.object(app, "get_auth_config", return_value={"enabled": False}),
+            patch.object(app, "get_script_file", return_value=script_file),
+            patch.object(app, "get_test_asset_by_path", return_value=asset),
+            patch.object(app, "get_test_asset_by_id", return_value=asset),
+            patch.object(app, "get_asset_revision", return_value=revision),
+            patch.object(
+                app,
+                "call_with_script_target_lease",
+                side_effect=lambda _runtime, _module, _filename, callback: callback(),
+            ),
+        ):
+            stale_save = self.client.put(
+                "/api/test-scripts/login/login.spec.ts",
+                json={"content": "stale", "expected_revision_id": None},
+            )
+            missing_restore = self.client.post("/api/assets/1/revisions/2/restore", json={})
+            stale_restore = self.client.post(
+                "/api/assets/1/revisions/2/restore",
+                json={"expected_revision_id": None},
+            )
+        self.assertEqual(stale_save.status_code, 409)
+        self.assertEqual(missing_restore.status_code, 400)
+        self.assertEqual(stale_restore.status_code, 409)
+        self.assertEqual(script_file.read_text(encoding="utf-8"), "original")
+
+    def test_repair_prompt_redacts_failure_before_serialization(self):
+        failure = {"authorization": "Bearer secret-token", "password": "secret-password"}
+        with (
+            patch.object(app, "validate_module_name", side_effect=lambda value: value),
+            patch.object(app, "validate_script_filename", side_effect=lambda value: value),
+            patch.object(app, "validate_plan_filename", side_effect=lambda value: value),
+            patch.object(app, "get_current_project_language", return_value="en"),
+            patch.object(
+                app.agent_failure_handling,
+                "redact_agent_failure_value",
+                return_value={"authorization": "[redacted]", "password": "[redacted]"},
+            ),
+        ):
+            prompt = app.build_agent_script_repair_prompt(
+                {"module_name": "login", "filename": "login.spec.ts", "plan_filename": "login.md"},
+                failure,
+            )
+        self.assertNotIn("secret-token", prompt)
+        self.assertNotIn("secret-password", prompt)
 
     def test_plan_save_restores_file_when_response_metadata_loading_fails(self):
         asset_file = self.project_root / "specs" / "登录模块" / "登录计划.md"
@@ -817,6 +896,85 @@ class SetupScriptRegressionTests(unittest.TestCase):
         self.assertEqual(done["setup"]["uid"], "setup-run")
         self.assertEqual(update_result.call_args.kwargs["database_reset_status"], "failed")
         self.assertEqual(update_run.call_args.kwargs["completed_files"], 0)
+
+
+class ScriptExecutionHistoryArtifactTests(unittest.TestCase):
+    def test_recent_script_results_include_their_report_and_video(self):
+        result_rows = [
+            {
+                "result_id": 17,
+                "run_id": "run-history",
+                "script_asset_id": 3,
+                "status": "failed",
+                "execution_mode": "batch_once",
+                "command": "npx playwright test tests/模块/脚本.spec.ts",
+                "stdout_tail": "historical output",
+            }
+        ]
+        artifact_rows = [
+            {
+                "artifact_id": 21,
+                "run_id": "run-history",
+                "result_id": None,
+                "artifact_type": "html_report",
+                "path": "/project/playwright-report/run-history/index.html",
+                "relative_path": "playwright-report/run-history/index.html",
+                "url": "/api/playwright-reports/playwright-report/run-history/index.html",
+            },
+            {
+                "artifact_id": 22,
+                "run_id": "run-history",
+                "result_id": 17,
+                "artifact_type": "video",
+                "path": "/project/test-results/run-history/video.webm",
+                "relative_path": "test-results/run-history/video.webm",
+                "url": "/api/run-videos/test-results/run-history/video.webm",
+            },
+        ]
+
+        class Cursor:
+            def __init__(self):
+                self.result_sets = [result_rows, artifact_rows]
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def execute(self, *_args):
+                return None
+
+            def fetchall(self):
+                return self.result_sets.pop(0)
+
+        class Connection:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def cursor(self):
+                return Cursor()
+
+        with (
+            patch.object(app, "get_platform_database_config", return_value={"enabled": True}),
+            patch.object(app, "ensure_platform_database_schema"),
+            patch.object(app, "get_test_run_results_table", return_value="test_run_results"),
+            patch.object(app, "get_test_runs_table", return_value="test_runs"),
+            patch.object(app, "get_test_run_artifacts_table", return_value="test_run_artifacts"),
+            patch.object(app, "get_current_project_id", return_value=9),
+            patch.object(app, "get_project_root", return_value=Path("/project")),
+            patch.object(app, "platform_mysql_connection", return_value=Connection()),
+        ):
+            results = app.list_recent_script_results(3)
+
+        serialized = app.serialize_run_result(results[0])
+        self.assertEqual(serialized["run_id"], "run-history")
+        self.assertEqual(serialized["command"], result_rows[0]["command"])
+        self.assertEqual(serialized["report"]["artifact_id"], 21)
+        self.assertEqual(serialized["video"]["artifact_id"], 22)
 
 
 class MergedReportTraceTests(unittest.TestCase):
@@ -2396,7 +2554,117 @@ class AgentDiagnosticBundleTests(unittest.TestCase):
         self.assertIn("grid-template-rows: auto minmax(0, 1fr) auto auto;", stylesheet)
 
 
+class ScriptGenerationLanguageRouteTests(unittest.TestCase):
+    VALID_SCRIPT = (
+        "import { test, expect } from '@playwright/test';\n"
+        "test('successful login', async () => {\n"
+        "  expect(true).toBe(true);\n"
+        "});\n"
+    )
+
+    def test_single_generation_uses_language_captured_before_stream_runs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            plan_file = root / "specs" / "Authentication" / "Successful Login.md"
+            script_dir = root / "tests" / "Authentication"
+            target_file = script_dir / "Successful Login.spec.ts"
+            candidate_file = root / "candidates" / target_file.name
+            plan_file.parent.mkdir(parents=True)
+            script_dir.mkdir(parents=True)
+            plan_file.write_text("# Successful Login\n", encoding="utf-8")
+            language = {"value": "en"}
+            candidate_languages = []
+
+            def candidate_path(_module_name, _plan_filename, _job_id, language=None):
+                candidate_languages.append(language)
+                return candidate_file
+
+            def generated_stream(*_args, **kwargs):
+                # Simulate a project setting change while OpenCode is running.
+                # Finalization must continue to use the request's captured locale.
+                language["value"] = "zh-CN"
+                candidate_file.write_text(self.VALID_SCRIPT, encoding="utf-8")
+                payload = kwargs["success_payload_factory"]()
+                yield app.sse_payload(
+                    "done",
+                    {"ok": True, "status": "succeeded", **payload},
+                )
+
+            def script_path(module_name, filename):
+                self.assertEqual(module_name, "Authentication")
+                self.assertEqual(filename, target_file.name)
+                return target_file
+
+            with (
+                patch.object(app, "get_auth_config", return_value={"enabled": False}),
+                patch.object(
+                    app,
+                    "agent_project_language",
+                    side_effect=lambda: language["value"],
+                ),
+                patch.object(app, "get_plan_target_path", return_value=plan_file),
+                patch.object(app, "get_script_module_dir", return_value=script_dir),
+                patch.object(app, "get_script_file", side_effect=script_path),
+                patch.object(
+                    app,
+                    "get_script_generation_candidate_file",
+                    side_effect=candidate_path,
+                ),
+                patch.object(
+                    app,
+                    "collect_generation_managed_files",
+                    return_value=[plan_file, target_file],
+                ),
+                patch.object(
+                    app,
+                    "iter_generation_managed_files",
+                    side_effect=lambda: iter(
+                        path
+                        for path in (plan_file, target_file)
+                        if path.exists()
+                    ),
+                ),
+                patch.object(app, "sync_plan_asset", return_value={"asset_id": 10}),
+                patch.object(app, "sync_script_asset", return_value={"asset_id": 20}),
+                patch.object(app, "serialize_asset", side_effect=lambda value: value),
+                patch.object(app, "list_asset_revisions", return_value=[]),
+                patch.object(app, "create_test_job"),
+                patch.object(app, "build_script_generation_prompt", return_value="prompt"),
+                patch.object(app, "build_setup_targets", return_value=[]),
+                patch.object(app, "backup_script_file", return_value=None),
+                patch.object(app, "stream_plan_generation", side_effect=generated_stream),
+            ):
+                response = app.app.test_client().post(
+                    "/api/script-generation-stream",
+                    json={
+                        "module_name": "Authentication",
+                        "plan_filename": plan_file.name,
+                        "prompt": "Generate the script.",
+                        "job_id": "generator-language-test",
+                    },
+                )
+                events = list(
+                    app.parse_sse_text_blocks(response.get_data(as_text=True))
+                )
+
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(candidate_languages, ["en"])
+            self.assertEqual(target_file.read_text(encoding="utf-8"), self.VALID_SCRIPT)
+            done = [data for event, data in events if event == "done"][-1]
+            self.assertEqual(done["status"], "succeeded")
+            self.assertEqual(done["script_filename"], target_file.name)
+
+
 class AgentItemRetryWorkflowTests(unittest.TestCase):
+    def setUp(self):
+        self.get_agent_run_row_patcher = patch.object(
+            app,
+            "get_agent_run_row",
+            return_value={"summary_json": "{}"},
+        )
+        self.get_agent_run_row = self.get_agent_run_row_patcher.start()
+        self.addCleanup(self.get_agent_run_row_patcher.stop)
+
     def make_flow(self, auto_repair=True):
         return {
             "retry_flow_id": "retry-1",
@@ -2496,6 +2764,87 @@ class AgentItemRetryWorkflowTests(unittest.TestCase):
         repair_one.assert_not_called()
         self.assertEqual(finish_attempt.call_count, 2)
         self.assertTrue(any(item.get("status") == "succeeded" and item.get("current_phase") == "completed" for item in updates_seen))
+
+    def test_retry_generation_restores_the_original_run_language(self):
+        flow = self.make_flow()
+        updates_seen = []
+        generated = {
+            "module_name": "Authentication",
+            "plan_filename": "Successful Login.md",
+            "filename": "Successful Login.spec.ts",
+            "job_id": "generator-english-retry",
+            "asset": {
+                "asset_id": 20,
+                "current_revision_id": 21,
+                "from_plan_asset_id": 10,
+            },
+        }
+        executed = {
+            **generated,
+            "execution": {
+                "status": "succeeded",
+                "run_id": "run-english-retry",
+                "job_id": "execution-english-retry",
+                "result_id": 31,
+            },
+        }
+        observed_languages = []
+
+        def generate_one(*_args, **_kwargs):
+            observed_languages.append(app.agent_project_language())
+            return generated
+
+        self.get_agent_run_row.return_value = {
+            "summary_json": json.dumps({"language": "en"}),
+        }
+        with (
+            patch.object(app, "register_agent_item_retry_task"),
+            patch.object(app, "cleanup_agent_item_retry_task"),
+            patch.object(app, "agent_set_current_job"),
+            patch.object(app, "agent_raise_if_cancelled"),
+            patch.object(app, "get_agent_item_retry_flow", return_value=flow),
+            patch.object(app, "get_agent_attempt", return_value=self.make_root_attempt()),
+            patch.object(
+                app,
+                "update_agent_item_retry_flow",
+                side_effect=self.stateful_flow_updater(flow, updates_seen),
+            ),
+            patch.object(
+                app,
+                "start_agent_attempt",
+                side_effect=[
+                    {"attempt_id": "attempt-generation"},
+                    {"attempt_id": "attempt-execution"},
+                ],
+            ),
+            patch.object(app, "finish_agent_attempt"),
+            patch.object(
+                app,
+                "agent_generate_script_for_plan",
+                side_effect=generate_one,
+            ),
+            patch.object(
+                app,
+                "agent_execute_generated_script",
+                return_value=executed,
+            ),
+            patch.object(app, "agent_repair_script"),
+            patch.object(app, "merge_agent_retry_step_result"),
+            patch.object(app, "append_agent_item_retry_event"),
+            patch.object(app, "supersede_agent_failed_script_review"),
+            patch.object(app, "mark_agent_suite_stale_after_item_retry"),
+        ):
+            app.run_agent_item_retry_workflow(
+                "agent-1",
+                "retry-1",
+                {"project_key": "demo", "language": "zh-CN"},
+                "admin",
+            )
+
+        self.assertEqual(observed_languages, ["en"])
+        self.assertTrue(
+            any(item.get("status") == "succeeded" for item in updates_seen)
+        )
 
     def test_retry_execution_failure_repairs_once_and_verifies(self):
         flow = self.make_flow()
@@ -3125,6 +3474,94 @@ class AgentItemRetryFrontendContractTests(unittest.TestCase):
         generation_case = source[source.index('case "generate_scripts":') : source.index('case "execute_scripts":')]
         self.assertLess(generation_case.index("output.resolved_failures"), generation_case.index("output.failures"))
         self.assertLess(generation_case.index("output.failures"), generation_case.index("output.retrying"))
+
+
+class ScriptTargetLeaseRouteTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name)
+        self.client = app.app.test_client()
+
+    def tearDown(self):
+        self.temporary.cleanup()
+
+    def execution_context(self):
+        video = self.root / "video.config.ts"
+        video.write_text("temporary", encoding="utf-8")
+        return {
+            "script_file": self.root / "script.spec.ts",
+            "command_text": "npx playwright test",
+            "command": ["npx", "playwright", "test"],
+            "project_root": self.root,
+            "video_config": video,
+            "results_dir": self.root / "results",
+            "report_dir": self.root / "report",
+            "setup_resolution": None,
+        }
+
+    def test_sync_execution_busy_returns_409_and_cleans_video_config(self):
+        context = self.execution_context()
+        lease = Mock()
+        lease.acquire.side_effect = app.ScriptTargetBusy("busy")
+        with (
+            patch.object(app, "get_auth_config", return_value={"enabled": False}),
+            patch.object(app, "build_setup_targets", return_value=[]),
+            patch.object(app, "resolve_setup_profile", return_value=None),
+            patch.object(app, "build_script_execution_context", return_value=context),
+            patch.object(app, "acquire_script_target_lease", return_value=lease),
+        ):
+            response = self.client.post(
+                "/api/script-executions",
+                json={"module_name": "登录", "filename": "登录.spec.ts"},
+            )
+        self.assertEqual(response.status_code, 409)
+        self.assertFalse(context["video_config"].exists())
+
+    def test_sync_execution_and_recording_release_lease_on_completion(self):
+        context = self.execution_context()
+        lease = Mock()
+        completed = Mock(returncode=0, stdout=b"ok", stderr=b"")
+        with (
+            patch.object(app, "get_auth_config", return_value={"enabled": False}),
+            patch.object(app, "build_setup_targets", return_value=[]),
+            patch.object(app, "resolve_setup_profile", return_value=None),
+            patch.object(app, "build_script_execution_context", return_value=context),
+            patch.object(app, "acquire_script_target_lease", return_value=lease),
+            patch.object(app.subprocess, "run", return_value=completed),
+            patch.object(app, "get_playwright_execution_env", return_value={}),
+            patch.object(app, "summarize_process_output", return_value="ok"),
+            patch.object(app, "build_run_video_result", return_value={}),
+            patch.object(app, "build_playwright_report_result", return_value={}),
+        ):
+            response = self.client.post(
+                "/api/script-executions",
+                json={"module_name": "登录", "filename": "登录.spec.ts"},
+            )
+        self.assertEqual(response.status_code, 200)
+        lease.release.assert_called_once()
+
+        script = self.root / "recorded.spec.ts"
+        script.write_text("test('recorded', () => {});", encoding="utf-8")
+        recording_context = {
+            "script_file": script,
+            "command_text": "record",
+            "command": ["npx", "codegen"],
+            "project_root": self.root,
+        }
+        recording_lease = Mock()
+        with (
+            patch.object(app, "get_auth_config", return_value={"enabled": False}),
+            patch.object(app, "build_script_recording_context", return_value=recording_context),
+            patch.object(app, "acquire_script_target_lease", return_value=recording_lease),
+            patch.object(app.subprocess, "run", side_effect=RuntimeError("boom")),
+        ):
+            response = self.client.post(
+                "/api/script-recordings",
+                json={"module_name": "登录", "filename": "recorded.spec.ts"},
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["status"], "failed")
+        recording_lease.release.assert_called_once()
 
 
 class SetupPreparationFrontendContractTests(unittest.TestCase):

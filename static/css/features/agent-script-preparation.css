@@ -1,67 +1,75 @@
-.agent-panel .script-preparation-panel {
+.script-preparation-host.script-preparation-panel {
   display: flex;
+  width: 100%;
   min-width: 0;
   min-height: 0;
   flex: 1 1 auto;
   flex-direction: column;
   gap: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 0 1px 4px rgba(24, 45, 74, 0.06);
+  padding: 16px;
   --script-preparation-warning: #b7791f;
   --script-preparation-warning-bg: #fff5df;
   --script-preparation-danger-bg: #fff3f2;
   --script-preparation-blue-bg: #edf5ff;
+  --muted-strong: #5b687d;
+  --border-strong: #c8d5e6;
 }
 
-.agent-panel .script-preparation-panel.hidden,
-.agent-panel .script-preparation-panel .hidden {
+.script-preparation-host.script-preparation-panel.hidden,
+.script-preparation-host.script-preparation-panel .hidden {
   display: none !important;
 }
 
-.agent-panel .script-preparation-header,
-.agent-panel .script-preparation-header-actions,
-.agent-panel .script-preparation-filterbar,
-.agent-panel .script-preparation-batchbar,
-.agent-panel .script-preparation-table-footer,
-.agent-panel .script-preparation-detail-header,
-.agent-panel .script-preparation-editor-footer {
+.script-preparation-host .script-preparation-header,
+.script-preparation-host .script-preparation-header-actions,
+.script-preparation-host .script-preparation-filterbar,
+.script-preparation-host .script-preparation-batchbar,
+.script-preparation-host .script-preparation-table-footer,
+.script-preparation-host .script-preparation-detail-header,
+.script-preparation-host .script-preparation-editor-footer {
   display: flex;
   align-items: center;
 }
 
-.agent-panel .script-preparation-header {
+.script-preparation-host .script-preparation-header {
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
 }
 
-.agent-panel .script-preparation-heading {
+.script-preparation-host .script-preparation-heading {
   min-width: 0;
 }
 
-.agent-panel .script-preparation-heading h2 {
+.script-preparation-host .script-preparation-heading h2 {
   margin: 2px 0 0;
   color: var(--text);
   font-size: 22px;
   line-height: 1.25;
 }
 
-.agent-panel .script-preparation-heading > p:last-child {
+.script-preparation-host .script-preparation-heading > p:last-child {
   margin: 5px 0 0;
   color: var(--muted-strong);
   font-size: 13px;
 }
 
-.agent-panel .script-preparation-header-actions {
+.script-preparation-host .script-preparation-header-actions {
   flex: 0 0 auto;
   gap: 8px;
 }
 
-.agent-panel .script-preparation-stats {
+.script-preparation-host .script-preparation-stats {
   display: grid;
   grid-template-columns: 1.45fr repeat(4, minmax(96px, 1fr));
   gap: 8px;
 }
 
-.agent-panel .script-preparation-stat {
+.script-preparation-host .script-preparation-stat {
   display: flex;
   min-height: 52px;
   align-items: center;
@@ -72,24 +80,24 @@
   padding: 8px 12px;
 }
 
-.agent-panel .script-preparation-stat span {
+.script-preparation-host .script-preparation-stat span {
   color: var(--muted);
   font-size: 12px;
   font-weight: 700;
 }
 
-.agent-panel .script-preparation-stat strong {
+.script-preparation-host .script-preparation-stat strong {
   color: var(--text);
   font-size: 18px;
 }
 
-.agent-panel .script-preparation-progress-stat {
+.script-preparation-host .script-preparation-progress-stat {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 6px 12px;
 }
 
-.agent-panel .script-preparation-progress-track {
+.script-preparation-host .script-preparation-progress-track {
   grid-column: 1 / -1;
   height: 5px;
   overflow: hidden;
@@ -97,7 +105,7 @@
   background: #dce6f2;
 }
 
-.agent-panel .script-preparation-progress-track span {
+.script-preparation-host .script-preparation-progress-track span {
   display: block;
   width: 0;
   height: 100%;
@@ -106,7 +114,7 @@
   transition: width 180ms ease;
 }
 
-.agent-panel .script-preparation-filterbar {
+.script-preparation-host .script-preparation-filterbar {
   min-height: 40px;
   gap: 8px;
   border: 1px solid #e0e7f0;
@@ -115,13 +123,13 @@
   padding: 4px 6px;
 }
 
-.agent-panel .script-preparation-filterbar > div {
+.script-preparation-host .script-preparation-filterbar > div {
   display: flex;
   align-items: center;
   gap: 6px;
 }
 
-.agent-panel .script-preparation-filterbar button {
+.script-preparation-host .script-preparation-filterbar button {
   min-height: 28px;
   border: 0;
   border-radius: 4px;
@@ -132,14 +140,14 @@
   font-weight: 800;
 }
 
-.agent-panel .script-preparation-filterbar button:hover,
-.agent-panel .script-preparation-filterbar button.active {
+.script-preparation-host .script-preparation-filterbar button:hover,
+.script-preparation-host .script-preparation-filterbar button.active {
   background: #fff;
   color: var(--accent-strong);
   box-shadow: 0 0 0 1px #cbd9eb;
 }
 
-.agent-panel .script-preparation-filterbar input {
+.script-preparation-host .script-preparation-filterbar input {
   width: 230px;
   height: 30px;
   margin-left: auto;
@@ -152,14 +160,14 @@
   font-size: 12px;
 }
 
-.agent-panel .script-preparation-filterbar input:focus,
-.agent-panel .script-preparation-field textarea:focus,
-.agent-panel .script-preparation-script-editor:focus {
+.script-preparation-host .script-preparation-filterbar input:focus,
+.script-preparation-host .script-preparation-field textarea:focus,
+.script-preparation-host .script-preparation-script-editor:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 2px rgba(44, 125, 244, 0.12);
 }
 
-.agent-panel .script-preparation-batchbar {
+.script-preparation-host .script-preparation-batchbar {
   min-height: 42px;
   gap: 8px;
   border: 1px solid #91baf3;
@@ -168,25 +176,25 @@
   padding: 6px 10px;
 }
 
-.agent-panel .script-preparation-batchbar strong {
+.script-preparation-host .script-preparation-batchbar strong {
   color: #173b70;
   font-size: 13px;
 }
 
-.agent-panel .script-preparation-batchbar > span {
+.script-preparation-host .script-preparation-batchbar > span {
   color: #49698f;
   font-size: 12px;
 }
 
-.agent-panel .script-preparation-flex-fill {
+.script-preparation-host .script-preparation-flex-fill {
   flex: 1 1 auto;
 }
 
-.agent-panel .script-preparation-batch-menu-wrap {
+.script-preparation-host .script-preparation-batch-menu-wrap {
   position: relative;
 }
 
-.agent-panel .script-preparation-batch-menu {
+.script-preparation-host .script-preparation-batch-menu {
   position: absolute;
   top: calc(100% + 6px);
   right: 0;
@@ -200,7 +208,7 @@
   padding: 6px;
 }
 
-.agent-panel .script-preparation-batch-menu button {
+.script-preparation-host .script-preparation-batch-menu button {
   display: flex;
   width: 100%;
   height: 35px;
@@ -214,15 +222,15 @@
   font-weight: 700;
 }
 
-.agent-panel .script-preparation-batch-menu button:hover {
+.script-preparation-host .script-preparation-batch-menu button:hover {
   background: var(--surface-muted);
 }
 
-.agent-panel .script-preparation-batch-menu button.danger {
+.script-preparation-host .script-preparation-batch-menu button.danger {
   color: var(--danger);
 }
 
-.agent-panel .script-preparation-batch-menu p {
+.script-preparation-host .script-preparation-batch-menu p {
   margin: 5px 4px 2px;
   border-top: 1px solid #e7edf5;
   padding: 8px 6px 3px;
@@ -231,7 +239,7 @@
   line-height: 1.45;
 }
 
-.agent-panel .script-preparation-table-wrap {
+.script-preparation-host .script-preparation-table-wrap {
   position: relative;
   min-height: 180px;
   flex: 1 1 auto;
@@ -241,15 +249,15 @@
   background: #fff;
 }
 
-.agent-panel .script-preparation-table {
+.script-preparation-host .script-preparation-table {
   width: 100%;
   border-collapse: collapse;
   table-layout: fixed;
   font-size: 12px;
 }
 
-.agent-panel .script-preparation-table th,
-.agent-panel .script-preparation-table td {
+.script-preparation-host .script-preparation-table th,
+.script-preparation-host .script-preparation-table td {
   overflow: hidden;
   border-bottom: 1px solid #e7edf5;
   padding: 8px 9px;
@@ -258,7 +266,7 @@
   white-space: nowrap;
 }
 
-.agent-panel .script-preparation-table th {
+.script-preparation-host .script-preparation-table th {
   position: sticky;
   top: 0;
   z-index: 2;
@@ -269,41 +277,41 @@
   font-weight: 800;
 }
 
-.agent-panel .script-preparation-table tbody tr {
+.script-preparation-host .script-preparation-table tbody tr {
   height: 53px;
 }
 
-.agent-panel .script-preparation-table tbody tr:hover,
-.agent-panel .script-preparation-table tbody tr.selected {
+.script-preparation-host .script-preparation-table tbody tr:hover,
+.script-preparation-host .script-preparation-table tbody tr.selected {
   background: #f2f7ff;
 }
 
-.agent-panel .script-preparation-select-column {
+.script-preparation-host .script-preparation-select-column {
   width: 0;
 }
 
-.agent-panel .script-preparation-name-column {
+.script-preparation-host .script-preparation-name-column {
   width: 28%;
 }
 
-.agent-panel .script-preparation-module-column {
+.script-preparation-host .script-preparation-module-column {
   width: 13%;
 }
 
-.agent-panel .script-preparation-status-column,
-.agent-panel .script-preparation-version-column {
+.script-preparation-host .script-preparation-status-column,
+.script-preparation-host .script-preparation-version-column {
   width: 90px;
 }
 
-.agent-panel .script-preparation-time-column {
+.script-preparation-host .script-preparation-time-column {
   width: 112px;
 }
 
-.agent-panel .script-preparation-action-column {
+.script-preparation-host .script-preparation-action-column {
   width: 80px;
 }
 
-.agent-panel .script-preparation-select-cell {
+.script-preparation-host .script-preparation-select-cell {
   display: table-cell;
   width: 0;
   padding-right: 0;
@@ -312,24 +320,24 @@
   visibility: hidden;
 }
 
-.agent-panel .is-bulk-mode .script-preparation-select-column {
+.script-preparation-host.is-bulk-mode .script-preparation-select-column {
   width: 42px;
 }
 
-.agent-panel .is-bulk-mode .script-preparation-select-cell {
+.script-preparation-host.is-bulk-mode .script-preparation-select-cell {
   padding-right: 9px;
   padding-left: 9px;
   visibility: visible;
 }
 
-.agent-panel .script-preparation-table input[type="checkbox"] {
+.script-preparation-host .script-preparation-table input[type="checkbox"] {
   width: 16px;
   height: 16px;
   accent-color: var(--accent);
 }
 
-.agent-panel .script-preparation-name,
-.agent-panel .script-preparation-detail-link {
+.script-preparation-host .script-preparation-name,
+.script-preparation-host .script-preparation-detail-link {
   border: 0;
   background: transparent;
   color: var(--text);
@@ -338,7 +346,7 @@
   text-align: left;
 }
 
-.agent-panel .script-preparation-name {
+.script-preparation-host .script-preparation-name {
   display: block;
   max-width: 100%;
   overflow: hidden;
@@ -346,11 +354,11 @@
   white-space: nowrap;
 }
 
-.agent-panel .script-preparation-detail-link {
+.script-preparation-host .script-preparation-detail-link {
   color: var(--accent-strong);
 }
 
-.agent-panel .script-preparation-table td small {
+.script-preparation-host .script-preparation-table td small {
   display: block;
   margin-top: 3px;
   overflow: hidden;
@@ -359,7 +367,7 @@
   white-space: nowrap;
 }
 
-.agent-panel .script-preparation-empty {
+.script-preparation-host .script-preparation-empty {
   position: absolute;
   inset: 39px 0 0;
   display: grid;
@@ -369,28 +377,28 @@
   text-align: center;
 }
 
-.agent-panel .script-preparation-empty strong {
+.script-preparation-host .script-preparation-empty strong {
   color: var(--text);
   font-size: 14px;
 }
 
-.agent-panel .script-preparation-table-footer {
+.script-preparation-host .script-preparation-table-footer {
   justify-content: space-between;
   color: var(--muted);
   font-size: 12px;
 }
 
-.agent-panel .status-badge.script-preparation-warning {
+.script-preparation-host .status-badge.script-preparation-warning {
   background: var(--script-preparation-warning-bg);
   color: #9a6107;
 }
 
-.agent-panel .status-badge.script-preparation-muted {
+.script-preparation-host .status-badge.script-preparation-muted {
   background: #eef1f5;
   color: #677589;
 }
 
-.agent-panel .script-preparation-notice {
+.script-preparation-host .script-preparation-notice {
   position: fixed;
   right: 22px;
   bottom: 22px;
@@ -398,17 +406,17 @@
   max-width: min(440px, calc(100vw - 44px));
 }
 
-.agent-panel .script-preparation-modal {
+.script-preparation-host .script-preparation-modal {
   position: fixed;
   inset: 0;
   z-index: 80;
 }
 
-.agent-panel .script-preparation-editor-modal {
+.script-preparation-host .script-preparation-editor-modal {
   z-index: 90;
 }
 
-.agent-panel .script-preparation-modal-backdrop {
+.script-preparation-host .script-preparation-modal-backdrop {
   position: absolute;
   inset: 0;
   width: 100%;
@@ -417,8 +425,8 @@
   background: rgba(15, 23, 42, 0.52);
 }
 
-.agent-panel .script-preparation-detail-dialog,
-.agent-panel .script-preparation-editor-dialog {
+.script-preparation-host .script-preparation-detail-dialog,
+.script-preparation-host .script-preparation-editor-dialog {
   position: absolute;
   z-index: 1;
   overflow: hidden;
@@ -428,13 +436,13 @@
   box-shadow: 0 16px 44px rgba(15, 23, 42, 0.28);
 }
 
-.agent-panel .script-preparation-detail-dialog {
+.script-preparation-host .script-preparation-detail-dialog {
   inset: 28px 24px 24px 120px;
   display: grid;
   grid-template-rows: 84px minmax(0, 1fr);
 }
 
-.agent-panel .script-preparation-detail-header {
+.script-preparation-host .script-preparation-detail-header {
   align-items: flex-start;
   justify-content: space-between;
   gap: 14px;
@@ -442,46 +450,46 @@
   padding: 10px 16px;
 }
 
-.agent-panel .script-preparation-detail-header p {
+.script-preparation-host .script-preparation-detail-header p {
   margin: 0 0 3px;
   color: var(--muted);
   font-size: 12px;
 }
 
-.agent-panel .script-preparation-detail-header h2 {
+.script-preparation-host .script-preparation-detail-header h2 {
   margin: 0;
   color: var(--text);
   font-size: 20px;
   line-height: 1.25;
 }
 
-.agent-panel .script-preparation-detail-header [data-script-preparation-id="detailBadges"] {
+.script-preparation-host .script-preparation-detail-header [data-script-preparation-id="detailBadges"] {
   display: flex;
   flex-wrap: wrap;
   gap: 7px;
   margin-top: 6px;
 }
 
-.agent-panel .script-preparation-detail-layout {
+.script-preparation-host .script-preparation-detail-layout {
   display: grid;
   grid-template-columns: 238px minmax(0, 1fr) 348px;
   min-height: 0;
 }
 
-.agent-panel .script-preparation-history-column,
-.agent-panel .script-preparation-detail-content,
-.agent-panel .script-preparation-action-panel {
+.script-preparation-host .script-preparation-history-column,
+.script-preparation-host .script-preparation-detail-content,
+.script-preparation-host .script-preparation-action-panel {
   min-width: 0;
   min-height: 0;
   overflow: auto;
 }
 
-.agent-panel .script-preparation-history-column {
+.script-preparation-host .script-preparation-history-column {
   border-right: 1px solid var(--border);
   background: #f8fafd;
 }
 
-.agent-panel .script-preparation-history-column > h3 {
+.script-preparation-host .script-preparation-history-column > h3 {
   height: 44px;
   margin: 0;
   border-bottom: 1px solid var(--border);
@@ -490,13 +498,13 @@
   font-size: 13px;
 }
 
-.agent-panel .script-preparation-history-list {
+.script-preparation-host .script-preparation-history-list {
   display: grid;
   align-content: start;
   padding: 5px 7px 12px;
 }
 
-.agent-panel .script-preparation-history-item {
+.script-preparation-host .script-preparation-history-item {
   position: relative;
   display: grid;
   grid-template-columns: 22px minmax(0, 1fr);
@@ -510,19 +518,19 @@
   text-align: left;
 }
 
-.agent-panel .script-preparation-history-item:hover,
-.agent-panel .script-preparation-history-item.active {
+.script-preparation-host .script-preparation-history-item:hover,
+.script-preparation-host .script-preparation-history-item.active {
   border-color: #80b5ff;
   background: var(--script-preparation-blue-bg);
 }
 
-.agent-panel .script-preparation-history-rail {
+.script-preparation-host .script-preparation-history-rail {
   position: relative;
   display: flex;
   justify-content: center;
 }
 
-.agent-panel .script-preparation-history-rail::after {
+.script-preparation-host .script-preparation-history-rail::after {
   position: absolute;
   top: 20px;
   bottom: -39px;
@@ -531,11 +539,11 @@
   content: "";
 }
 
-.agent-panel .script-preparation-history-item:last-child .script-preparation-history-rail::after {
+.script-preparation-host .script-preparation-history-item:last-child .script-preparation-history-rail::after {
   display: none;
 }
 
-.agent-panel .script-preparation-history-rail > span {
+.script-preparation-host .script-preparation-history-rail > span {
   position: relative;
   z-index: 1;
   width: 18px;
@@ -545,70 +553,70 @@
   background: #fff;
 }
 
-.agent-panel .script-preparation-history-item.success .script-preparation-history-rail > span {
+.script-preparation-host .script-preparation-history-item.success .script-preparation-history-rail > span {
   border-color: var(--success);
   background: var(--success);
 }
 
-.agent-panel .script-preparation-history-item.failed .script-preparation-history-rail > span {
+.script-preparation-host .script-preparation-history-item.failed .script-preparation-history-rail > span {
   border-color: #e39b95;
   background: var(--script-preparation-danger-bg);
 }
 
-.agent-panel .script-preparation-history-item.pending .script-preparation-history-rail > span {
+.script-preparation-host .script-preparation-history-item.pending .script-preparation-history-rail > span {
   border-color: #e5bd69;
   background: var(--script-preparation-warning-bg);
 }
 
-.agent-panel .script-preparation-history-copy strong,
-.agent-panel .script-preparation-history-copy small {
+.script-preparation-host .script-preparation-history-copy strong,
+.script-preparation-host .script-preparation-history-copy small {
   display: block;
 }
 
-.agent-panel .script-preparation-history-copy strong {
+.script-preparation-host .script-preparation-history-copy strong {
   font-size: 12px;
 }
 
-.agent-panel .script-preparation-history-copy small {
+.script-preparation-host .script-preparation-history-copy small {
   margin-top: 4px;
   color: var(--muted);
   font-size: 11px;
   line-height: 1.35;
 }
 
-.agent-panel .script-preparation-history-empty,
-.agent-panel .script-preparation-detail-empty {
+.script-preparation-host .script-preparation-history-empty,
+.script-preparation-host .script-preparation-detail-empty {
   padding: 18px;
   color: var(--muted);
   font-size: 12px;
   text-align: center;
 }
 
-.agent-panel .script-preparation-detail-content {
+.script-preparation-host .script-preparation-detail-content {
   padding: 14px 16px 18px;
 }
 
-.agent-panel .script-preparation-action-panel {
+.script-preparation-host .script-preparation-action-panel {
   border-left: 1px solid var(--border);
   background: #fbfcfe;
   padding: 14px;
 }
 
-.agent-panel .script-preparation-section-title,
-.agent-panel .script-preparation-action-panel h3 {
+.script-preparation-host .script-preparation-section-title,
+.script-preparation-host .script-preparation-action-panel h3 {
   margin: 0 0 10px;
   color: var(--text);
   font-size: 16px;
 }
 
-.agent-panel .script-preparation-action-panel > p {
+.script-preparation-host .script-preparation-action-panel > p {
   margin: 0 0 11px;
   color: var(--muted);
   font-size: 12px;
   line-height: 1.5;
 }
 
-.agent-panel .script-preparation-analysis-callout {
+.script-preparation-host .script-preparation-analysis-callout {
   display: flex;
   align-items: flex-start;
   gap: 10px;
@@ -619,21 +627,21 @@
   padding: 11px 12px;
 }
 
-.agent-panel .script-preparation-analysis-callout.failed {
+.script-preparation-host .script-preparation-analysis-callout.failed {
   border-color: #efb7b1;
   background: var(--script-preparation-danger-bg);
 }
 
-.agent-panel .script-preparation-analysis-callout.failed .script-preparation-analysis-label {
+.script-preparation-host .script-preparation-analysis-callout.failed .script-preparation-analysis-label {
   background: var(--danger);
 }
 
-.agent-panel .script-preparation-analysis-callout.failed strong,
-.agent-panel .script-preparation-analysis-callout.failed p {
+.script-preparation-host .script-preparation-analysis-callout.failed strong,
+.script-preparation-host .script-preparation-analysis-callout.failed p {
   color: var(--danger);
 }
 
-.agent-panel .script-preparation-analysis-label {
+.script-preparation-host .script-preparation-analysis-label {
   display: flex;
   width: 28px;
   height: 28px;
@@ -646,19 +654,19 @@
   font-weight: 900;
 }
 
-.agent-panel .script-preparation-analysis-callout strong {
+.script-preparation-host .script-preparation-analysis-callout strong {
   color: #173b70;
   font-size: 14px;
 }
 
-.agent-panel .script-preparation-analysis-callout p {
+.script-preparation-host .script-preparation-analysis-callout p {
   margin: 4px 0 0;
   color: #49698f;
   font-size: 12px;
   line-height: 1.5;
 }
 
-.agent-panel .script-preparation-content-card {
+.script-preparation-host .script-preparation-content-card {
   margin-bottom: 10px;
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -666,37 +674,37 @@
   padding: 12px;
 }
 
-.agent-panel .script-preparation-content-card h4 {
+.script-preparation-host .script-preparation-content-card h4 {
   margin: 0 0 8px;
   color: #26374f;
   font-size: 13px;
 }
 
-.agent-panel .script-preparation-content-card p,
-.agent-panel .script-preparation-content-card li {
+.script-preparation-host .script-preparation-content-card p,
+.script-preparation-host .script-preparation-content-card li {
   color: #435269;
   font-size: 12px;
   line-height: 1.65;
 }
 
-.agent-panel .script-preparation-content-card p {
+.script-preparation-host .script-preparation-content-card p {
   margin: 0;
   white-space: pre-wrap;
 }
 
-.agent-panel .script-preparation-content-card ul {
+.script-preparation-host .script-preparation-content-card ul {
   margin: 0;
   padding-left: 18px;
 }
 
-.agent-panel .script-preparation-prompt-card {
+.script-preparation-host .script-preparation-prompt-card {
   margin-bottom: 11px;
   border: 1px solid #cad9eb;
   border-radius: 6px;
   background: #fff;
 }
 
-.agent-panel .script-preparation-prompt-card header {
+.script-preparation-host .script-preparation-prompt-card header {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -707,7 +715,7 @@
   font-weight: 900;
 }
 
-.agent-panel .script-preparation-prompt-card p {
+.script-preparation-host .script-preparation-prompt-card p {
   margin: 0;
   max-height: 160px;
   overflow: auto;
@@ -718,26 +726,26 @@
   white-space: pre-wrap;
 }
 
-.agent-panel .script-preparation-action-list {
+.script-preparation-host .script-preparation-action-list {
   display: grid;
   gap: 7px;
 }
 
-.agent-panel .script-preparation-block {
+.script-preparation-host .script-preparation-block {
   width: 100%;
 }
 
-.agent-panel .script-preparation-large {
+.script-preparation-host .script-preparation-large {
   min-height: 38px;
   font-size: 13px;
 }
 
-.agent-panel .danger-button {
+.script-preparation-host .danger-button {
   border-color: #e8aaa4;
   color: var(--danger);
 }
 
-.agent-panel .script-preparation-version-note {
+.script-preparation-host .script-preparation-version-note {
   margin-top: 10px;
   border-radius: 5px;
   background: #eef2f7;
@@ -747,7 +755,7 @@
   line-height: 1.5;
 }
 
-.agent-panel .script-preparation-history-notice {
+.script-preparation-host .script-preparation-history-notice {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -761,7 +769,7 @@
   font-size: 12px;
 }
 
-.agent-panel .script-preparation-error-callout {
+.script-preparation-host .script-preparation-error-callout {
   margin-bottom: 12px;
   border: 1px solid #efb7b1;
   border-radius: 6px;
@@ -770,46 +778,46 @@
   color: var(--danger);
 }
 
-.agent-panel .script-preparation-error-callout strong,
-.agent-panel .script-preparation-error-callout span {
+.script-preparation-host .script-preparation-error-callout strong,
+.script-preparation-host .script-preparation-error-callout span {
   display: block;
   font-size: 12px;
 }
 
-.agent-panel .script-preparation-error-callout span {
+.script-preparation-host .script-preparation-error-callout span {
   margin-top: 3px;
 }
 
-.agent-panel .script-preparation-input-grid {
+.script-preparation-host .script-preparation-input-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
   margin-bottom: 10px;
 }
 
-.agent-panel .script-preparation-input-grid > div {
+.script-preparation-host .script-preparation-input-grid > div {
   border: 1px solid #dfe6ef;
   border-radius: 5px;
   background: #f8fafd;
   padding: 9px;
 }
 
-.agent-panel .script-preparation-input-grid span,
-.agent-panel .script-preparation-input-grid strong {
+.script-preparation-host .script-preparation-input-grid span,
+.script-preparation-host .script-preparation-input-grid strong {
   display: block;
 }
 
-.agent-panel .script-preparation-input-grid span {
+.script-preparation-host .script-preparation-input-grid span {
   color: var(--muted);
   font-size: 11px;
 }
 
-.agent-panel .script-preparation-input-grid strong {
+.script-preparation-host .script-preparation-input-grid strong {
   margin-top: 4px;
   font-size: 12px;
 }
 
-.agent-panel .script-preparation-code-box {
+.script-preparation-host .script-preparation-code-box {
   max-height: 420px;
   margin: 0;
   overflow: auto;
@@ -822,13 +830,13 @@
   white-space: pre-wrap;
 }
 
-.agent-panel .script-preparation-readonly-summary {
+.script-preparation-host .script-preparation-readonly-summary {
   display: grid;
   gap: 0;
   margin-top: 9px;
 }
 
-.agent-panel .script-preparation-readonly-summary > div {
+.script-preparation-host .script-preparation-readonly-summary > div {
   display: flex;
   justify-content: space-between;
   gap: 10px;
@@ -838,11 +846,11 @@
   font-size: 12px;
 }
 
-.agent-panel .script-preparation-readonly-summary strong {
+.script-preparation-host .script-preparation-readonly-summary strong {
   color: var(--text);
 }
 
-.agent-panel .script-preparation-editor-dialog {
+.script-preparation-host .script-preparation-editor-dialog {
   top: 50%;
   left: 50%;
   display: grid;
@@ -852,13 +860,13 @@
   transform: translate(-50%, -50%);
 }
 
-.agent-panel .script-preparation-editor-body {
+.script-preparation-host .script-preparation-editor-body {
   min-height: 0;
   overflow: auto;
   padding: 16px;
 }
 
-.agent-panel .script-preparation-version-flow {
+.script-preparation-host .script-preparation-version-flow {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center;
@@ -866,35 +874,35 @@
   margin-bottom: 14px;
 }
 
-.agent-panel .script-preparation-version-flow > div {
+.script-preparation-host .script-preparation-version-flow > div {
   border: 1px solid #dfe6ef;
   border-radius: 6px;
   background: #f8fafd;
   padding: 9px 11px;
 }
 
-.agent-panel .script-preparation-version-flow span,
-.agent-panel .script-preparation-version-flow strong {
+.script-preparation-host .script-preparation-version-flow span,
+.script-preparation-host .script-preparation-version-flow strong {
   display: block;
 }
 
-.agent-panel .script-preparation-version-flow span {
+.script-preparation-host .script-preparation-version-flow span {
   color: var(--muted);
   font-size: 11px;
 }
 
-.agent-panel .script-preparation-version-flow strong {
+.script-preparation-host .script-preparation-version-flow strong {
   margin-top: 3px;
   font-size: 13px;
 }
 
-.agent-panel .script-preparation-version-flow i {
+.script-preparation-host .script-preparation-version-flow i {
   color: var(--accent-strong);
   font-style: normal;
   font-weight: 900;
 }
 
-.agent-panel .script-preparation-field {
+.script-preparation-host .script-preparation-field {
   display: grid;
   gap: 6px;
   margin-bottom: 12px;
@@ -903,12 +911,12 @@
   font-weight: 800;
 }
 
-.agent-panel .script-preparation-field small {
+.script-preparation-host .script-preparation-field small {
   color: var(--muted);
   font-weight: 500;
 }
 
-.agent-panel .script-preparation-field textarea {
+.script-preparation-host .script-preparation-field textarea {
   width: 100%;
   min-height: 112px;
   resize: vertical;
@@ -921,66 +929,66 @@
   font: 12px/1.55 inherit;
 }
 
-.agent-panel .script-preparation-field .script-preparation-script-editor {
+.script-preparation-host .script-preparation-field .script-preparation-script-editor {
   min-height: 430px;
   background: #f7f9fc;
   font-family: Consolas, "Cascadia Code", Menlo, monospace;
 }
 
-.agent-panel .script-preparation-field .script-preparation-supplemental-prompt {
+.script-preparation-host .script-preparation-field .script-preparation-supplemental-prompt {
   min-height: 150px;
 }
 
-.agent-panel .script-preparation-editor-footer {
+.script-preparation-host .script-preparation-editor-footer {
   gap: 8px;
   border-top: 1px solid var(--border);
   padding: 12px 16px;
 }
 
 @media (max-width: 1180px) {
-  .agent-panel .script-preparation-detail-dialog {
+  .script-preparation-host .script-preparation-detail-dialog {
     left: 32px;
   }
 
-  .agent-panel .script-preparation-detail-layout {
+  .script-preparation-host .script-preparation-detail-layout {
     grid-template-columns: 210px minmax(0, 1fr) 306px;
   }
 }
 
 @media (max-width: 900px) {
-  .agent-panel .script-preparation-stats {
+  .script-preparation-host .script-preparation-stats {
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 
-  .agent-panel .script-preparation-progress-stat {
+  .script-preparation-host .script-preparation-progress-stat {
     grid-column: 1 / -1;
   }
 
-  .agent-panel .script-preparation-filterbar {
+  .script-preparation-host .script-preparation-filterbar {
     align-items: stretch;
     flex-direction: column;
   }
 
-  .agent-panel .script-preparation-filterbar > div {
+  .script-preparation-host .script-preparation-filterbar > div {
     overflow-x: auto;
   }
 
-  .agent-panel .script-preparation-filterbar input {
+  .script-preparation-host .script-preparation-filterbar input {
     width: 100%;
     margin: 0;
   }
 
-  .agent-panel .script-preparation-detail-dialog {
+  .script-preparation-host .script-preparation-detail-dialog {
     inset: 12px;
     overflow: auto;
   }
 
-  .agent-panel .script-preparation-detail-layout {
+  .script-preparation-host .script-preparation-detail-layout {
     grid-template-columns: 210px minmax(0, 1fr);
     overflow: visible;
   }
 
-  .agent-panel .script-preparation-action-panel {
+  .script-preparation-host .script-preparation-action-panel {
     grid-column: 1 / -1;
     border-top: 1px solid var(--border);
     border-left: 0;
@@ -988,41 +996,41 @@
 }
 
 @media (max-width: 680px) {
-  .agent-panel .script-preparation-header,
-  .agent-panel .script-preparation-batchbar {
+  .script-preparation-host .script-preparation-header,
+  .script-preparation-host .script-preparation-batchbar {
     align-items: stretch;
     flex-direction: column;
   }
 
-  .agent-panel .script-preparation-header-actions {
+  .script-preparation-host .script-preparation-header-actions {
     justify-content: space-between;
   }
 
-  .agent-panel .script-preparation-stats {
+  .script-preparation-host .script-preparation-stats {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .agent-panel .script-preparation-detail-dialog {
+  .script-preparation-host .script-preparation-detail-dialog {
     grid-template-rows: auto minmax(0, 1fr);
   }
 
-  .agent-panel .script-preparation-detail-layout {
+  .script-preparation-host .script-preparation-detail-layout {
     display: block;
     overflow: auto;
   }
 
-  .agent-panel .script-preparation-history-column,
-  .agent-panel .script-preparation-detail-content,
-  .agent-panel .script-preparation-action-panel {
+  .script-preparation-host .script-preparation-history-column,
+  .script-preparation-host .script-preparation-detail-content,
+  .script-preparation-host .script-preparation-action-panel {
     overflow: visible;
   }
 
-  .agent-panel .script-preparation-editor-dialog {
+  .script-preparation-host .script-preparation-editor-dialog {
     width: calc(100vw - 24px);
     max-height: calc(100vh - 24px);
   }
 
-  .agent-panel .script-preparation-input-grid {
+  .script-preparation-host .script-preparation-input-grid {
     grid-template-columns: 1fr;
   }
 }

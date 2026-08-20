@@ -27,12 +27,15 @@ function createModulePlanGenerationFeature(deps) {
     parseSseBlock,
     getDefaultScriptTargetPath,
     getProjectRequestHeaders,
+    createClientJobId,
     persistViewState,
     loadScriptTree,
     renderSideList,
     createStatusBadge,
     getGenerationStatusInfo,
     getPlanRecordKey,
+    openScriptPreparationRun,
+    canOpenScriptPreparation = () => true,
   } = deps;
   const {
     setPlanScriptGenerationRecord,
@@ -40,6 +43,10 @@ function createModulePlanGenerationFeature(deps) {
     openScriptGenerationModal,
   } = generation;
   const { formatModuleRepairDuration } = moduleExecution;
+  const translate = (key, params = {}, fallback = key) => {
+    const translated = window.WaterfallI18n?.t?.(key, params);
+    return translated && translated !== key ? translated : fallback;
+  };
 
 function getCurrentModulePlans() {
   return (getSelectedPlanModule()?.plans || []).filter((plan) => !plan.is_index);
@@ -105,7 +112,6 @@ async function deleteSelectedModulePlans() {
   if (!moduleName || !planFilenames.length || isModulePlanActionBusy()) {
     return;
   }
-
   if (!window.confirm(`确认删除选中的 ${planFilenames.length} 条测试计划？`)) {
     return;
   }
@@ -301,19 +307,29 @@ function handleModulePlanScriptStreamEvent({ event, data }, previousResult, modu
   }
 
   if (event === "done") {
-    const status = data.ok === false ? "failed" : previousResult.status === "running" ? "succeeded" : previousResult.status;
+    const status = data.status === "cancelled"
+      ? "cancelled"
+      : data.ok === false
+        ? "failed"
+        : previousResult.status === "running"
+          ? "succeeded"
+          : previousResult.status;
     const nextResult = {
       ...previousResult,
       status,
       error: data.error || previousResult.error,
       plan_filename: data.plan_filename || previousResult.plan_filename || planFilename,
+      script_filename:
+        data.script_filename ||
+        previousResult.script_filename ||
+        getExpectedScriptFilenameForPlan(planFilename),
     };
     setPlanScriptGenerationBatchItem(moduleName, planFilename, {
       status: nextResult.status,
       error: nextResult.error || "",
       logs: nextResult.logs || "",
       target_path: nextResult.target_path || "",
-      script_filename: getExpectedScriptFilenameForPlan(planFilename),
+      script_filename: nextResult.script_filename,
       finished_at: Date.now(),
     });
     setPlanScriptGenerationRecord(moduleName, planFilename, {
@@ -336,166 +352,160 @@ async function generateSelectedModulePlanScripts() {
   if (!moduleName || !planFilenames.length || isModulePlanActionBusy()) {
     return;
   }
-
-  const startedAt = Date.now();
-  const initialItems = Object.fromEntries(
-    planFilenames.map((planFilename) => [
-      planFilename,
-      {
-        status: "queued",
-        logs: "",
-        error: "",
-        target_path: "",
-        script_filename: "",
-        started_at: null,
-        finished_at: null,
-        updated_at: Date.now(),
-      },
-    ]),
-  );
+  if (!canOpenScriptPreparation()) {
+    setNotice(translate(
+      "moduleScriptPreparation.permissionDenied",
+      {},
+      "当前账号没有访问“脚本”菜单的权限，无法启动脚本准备任务。",
+    ), "error");
+    return null;
+  }
+  if (typeof openScriptPreparationRun !== "function") {
+    return generateSelectedModulePlanScriptsLegacy(moduleName, planFilenames);
+  }
   state.scriptGeneration.isRunning = true;
-  state.plans.bulkSelectionMode = false;
-  state.plans.selectedPlanFiles.clear();
-  state.plans.selectedPlanFile = null;
-  state.plans.activeTab = PLAN_VIEW_TAB.SCRIPT_GENERATION;
-  persistViewState();
+  renderModulePlanList();
+  setNotice(translate(
+    "moduleScriptPreparation.creatingNotice",
+    {},
+    "正在创建脚本准备任务，创建后会自动生成、执行并修复失败脚本。",
+  ));
+  try {
+    const result = await requestJson("/api/script-preparation-runs", {
+      method: "POST",
+      body: JSON.stringify({
+        module_name: moduleName,
+        plan_filenames: planFilenames,
+        client_request_id: createClientJobId("script-preparation"),
+      }),
+    });
+    state.plans.bulkSelectionMode = false;
+    state.plans.selectedPlanFiles.clear();
+    await openScriptPreparationRun(result, moduleName);
+    setNotice(translate(
+      "moduleScriptPreparation.createdNotice",
+      {},
+      "脚本准备任务已创建，正在自动生成并验证脚本。",
+    ), "success");
+    return result;
+  } catch (error) {
+    setNotice(error.message || translate(
+      "moduleScriptPreparation.createFailed",
+      {},
+      "创建脚本准备任务失败。",
+    ), "error");
+    return null;
+  } finally {
+    state.scriptGeneration.isRunning = false;
+    renderContent();
+  }
+}
+
+async function generateSelectedModulePlanScriptsLegacy(moduleName, planFilenames) {
+  const startedAt = Date.now();
+  const items = Object.fromEntries(planFilenames.map((planFilename) => [planFilename, {
+    status: "queued", logs: "", error: "", target_path: "", script_filename: "", updated_at: startedAt,
+  }]));
+  state.scriptGeneration.isRunning = true;
+  state.scriptGeneration.cancelRequested = false;
   setPlanScriptGenerationBatch(moduleName, {
-    status: "running",
-    module_name: moduleName,
-    plan_filenames: planFilenames,
-    active_plan_filename: "",
-    expanded_plan_filename: planFilenames[0],
-    items: initialItems,
-    started_at: startedAt,
-    finished_at: null,
+    status: "running", plan_filenames: planFilenames, items, started_at: startedAt, finished_at: null,
   });
-  renderContent();
-  setNotice("正在批量生成脚本，请稍候。");
-
-  let hasFailure = false;
-  const renderTimer = window.setInterval(() => renderModulePlanScriptBatchRecord(), 1000);
-
+  let failed = false;
   try {
     for (const planFilename of planFilenames) {
+      if (state.scriptGeneration.cancelRequested) {
+        break;
+      }
+      const jobId = createClientJobId("generator");
       const promptFixed = renderScriptPromptFromTemplate(moduleName, planFilename);
-      const promptNote = SCRIPT_PROMPT_NOTE_DEFAULT;
-      const prompt = `${promptFixed.trim()}\n${promptNote.trim()}`.trim();
-      const itemStartedAt = Date.now();
-      setPlanScriptGenerationBatch(moduleName, {
-        active_plan_filename: planFilename,
-        expanded_plan_filename: planFilename,
-      });
-      setPlanScriptGenerationBatchItem(moduleName, planFilename, {
-        status: "running",
-        logs: "",
-        error: "",
-        started_at: itemStartedAt,
-        finished_at: null,
-      });
+      const prompt = `${promptFixed.trim()}\n${SCRIPT_PROMPT_NOTE_DEFAULT.trim()}`.trim();
+      setPlanScriptGenerationBatchItem(moduleName, planFilename, { status: "running", started_at: Date.now(), job_id: jobId });
       setPlanScriptGenerationRecord(moduleName, planFilename, {
-        status: "running",
-        prompt_fixed: promptFixed,
-        prompt_note: promptNote,
-        prompt,
-        plan_filename: planFilename,
-        logs: "",
-        error: "",
-        target_path: getDefaultScriptTargetPath(moduleName),
-        started_at: itemStartedAt,
-        finished_at: null,
+        status: "running", prompt_fixed: promptFixed, prompt_note: SCRIPT_PROMPT_NOTE_DEFAULT, prompt,
+        target_path: getDefaultScriptTargetPath(moduleName), started_at: Date.now(), job_id: jobId,
       });
-      renderModulePlanList();
-
       try {
         const response = await fetch("/api/script-generation-stream", {
           method: "POST",
-          headers: getProjectRequestHeaders({
-            "Content-Type": "application/json",
-          }),
-          body: JSON.stringify({
-            module_name: moduleName,
-            plan_filename: planFilename,
-            prompt,
-          }),
+          headers: getProjectRequestHeaders({ "Content-Type": "application/json" }),
+          body: JSON.stringify({ module_name: moduleName, plan_filename: planFilename, prompt, job_id: jobId }),
         });
-
-        if (!response.ok) {
-          let data;
-          try {
-            data = await response.json();
-          } catch (error) {
-            data = { error: `请求失败: ${response.status}` };
-          }
-          throw new Error(data.error || `请求失败: ${response.status}`);
+        if (!response.ok || !response.body) {
+          throw new Error(`请求失败: ${response.status || "stream unavailable"}`);
         }
-
-        if (!response.body) {
-          throw new Error("浏览器不支持读取流式响应。");
-        }
-
         const result = await readModulePlanScriptGenerationStream(response, moduleName, planFilename);
-        const finishedAt = Date.now();
-        if (result.status !== "succeeded" && result.status !== "failed") {
-          result.status = "failed";
-          result.error = "流式响应提前结束。";
-        }
-        setPlanScriptGenerationBatchItem(moduleName, planFilename, {
-          status: result.status,
-          error: result.error || "",
-          logs: result.logs || "",
+        const status = ["succeeded", "failed", "cancelled"].includes(result.status) ? result.status : "failed";
+        const updates = {
+          status, error: result.error || "", logs: result.logs || "",
           target_path: result.target_path || getDefaultScriptTargetPath(moduleName),
-          script_filename: getExpectedScriptFilenameForPlan(planFilename),
-          finished_at: finishedAt,
-        });
-        setPlanScriptGenerationRecord(moduleName, planFilename, {
-          status: result.status,
-          error: result.error || "",
-          logs: result.logs || "",
-          target_path: result.target_path || getDefaultScriptTargetPath(moduleName),
-          finished_at: finishedAt,
-        });
-        if (result.status === "failed") {
-          hasFailure = true;
-        }
+          script_filename: result.script_filename || getExpectedScriptFilenameForPlan(planFilename),
+          finished_at: Date.now(),
+        };
+        setPlanScriptGenerationBatchItem(moduleName, planFilename, updates);
+        setPlanScriptGenerationRecord(moduleName, planFilename, updates);
+        failed ||= status === "failed";
       } catch (error) {
-        hasFailure = true;
-        const finishedAt = Date.now();
-        const batch = state.plans.scriptGenerationBatches[getPlanModuleRecordKey(moduleName)] || {};
-        const item = batch.items?.[planFilename] || {};
-        const prefix = item.logs && !item.logs.endsWith("\n") ? "\n" : "";
-        const logs = `${item.logs || ""}${prefix}${error.message}\n`;
-        setPlanScriptGenerationBatchItem(moduleName, planFilename, {
-          status: "failed",
-          error: error.message,
-          logs,
-          finished_at: finishedAt,
-        });
-        setPlanScriptGenerationRecord(moduleName, planFilename, {
-          status: "failed",
-          error: error.message,
-          logs,
-          finished_at: finishedAt,
-        });
+        failed = true;
+        const updates = { status: "failed", error: error.message, logs: `${error.message}\n`, finished_at: Date.now() };
+        setPlanScriptGenerationBatchItem(moduleName, planFilename, updates);
+        setPlanScriptGenerationRecord(moduleName, planFilename, updates);
       }
     }
-
     setPlanScriptGenerationBatch(moduleName, {
-      status: hasFailure ? "failed" : "succeeded",
-      active_plan_filename: "",
+      status: state.scriptGeneration.cancelRequested ? "cancelled" : failed ? "failed" : "succeeded",
       finished_at: Date.now(),
     });
     await loadScriptTree();
-    state.activeSection = SECTION.PLANS;
-    state.plans.selectedModule = moduleName;
-    state.plans.selectedPlanFile = null;
-    state.plans.activeTab = PLAN_VIEW_TAB.SCRIPT_GENERATION;
-    persistViewState();
-    renderSideList();
-    setNotice(hasFailure ? "批量生成脚本完成，存在失败计划。" : "批量生成脚本完成。", hasFailure ? "error" : "success");
   } finally {
-    window.clearInterval(renderTimer);
     state.scriptGeneration.isRunning = false;
+    state.scriptGeneration.cancelRequested = false;
     renderContent();
+  }
+}
+
+function markPlanScriptGenerationItemsCancelled(moduleName) {
+  const batch = state.plans.scriptGenerationBatches[getPlanModuleRecordKey(moduleName)];
+  (batch?.plan_filenames || []).forEach((planFilename) => {
+    const item = batch.items?.[planFilename];
+    if (item && ["queued", "running", "cancelling"].includes(item.status)) {
+      const updates = {
+        status: "cancelled",
+        error: item.error || "用户终止了生成任务。",
+        finished_at: Date.now(),
+      };
+      setPlanScriptGenerationBatchItem(moduleName, planFilename, updates);
+      setPlanScriptGenerationRecord(moduleName, planFilename, updates);
+    }
+  });
+}
+
+async function cancelModulePlanScriptGenerationBatch() {
+  if (!state.scriptGeneration.isRunning || state.scriptGeneration.cancelRequested) {
+    return;
+  }
+  if (!window.confirm("确定终止本次生成吗？已产生的日志会保留，未完成的结果不会保存。")) {
+    return;
+  }
+
+  const moduleName = state.plans.selectedModule;
+  const jobId = state.scriptGeneration.currentJobId;
+  state.scriptGeneration.cancelRequested = true;
+  setPlanScriptGenerationBatch(moduleName, { status: "cancelling" });
+  renderContent();
+  try {
+    if (jobId) {
+      await requestJson(`/api/jobs/${encodePathPart(jobId)}/cancel`, {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+    }
+    markPlanScriptGenerationItemsCancelled(moduleName);
+  } catch (error) {
+    state.scriptGeneration.cancelRequested = false;
+    setPlanScriptGenerationBatch(moduleName, { status: "running" });
+    renderContent();
+    setNotice(error.message, "error");
   }
 }
 
@@ -512,7 +522,14 @@ function renderModulePlanList() {
   elements.modulePlanSelectHeader.classList.toggle("hidden", !isBulkMode);
   elements.modulePlanSelectionCount.textContent = `已选择 ${selectedCount} 条`;
   elements.modulePlanBulkToggle.disabled = !plans.length || isBusy;
-  elements.modulePlanBulkGenerate.disabled = selectedCount === 0 || isBusy;
+  elements.modulePlanBulkGenerate.disabled = selectedCount === 0 || isBusy || !canOpenScriptPreparation();
+  elements.modulePlanBulkGenerate.title = canOpenScriptPreparation()
+    ? ""
+    : translate(
+        "moduleScriptPreparation.permissionRequired",
+        {},
+        "需要“脚本”菜单权限",
+      );
   elements.modulePlanBulkDelete.disabled = selectedCount === 0 || isBusy;
   elements.modulePlanSelectAll.disabled = !plans.length || isBusy;
   elements.modulePlanSelectAll.checked = Boolean(plans.length && selectedCount === plans.length);
@@ -628,11 +645,21 @@ function renderModulePlanScriptBatchRecord() {
   elements.modulePlanScriptBatchList.classList.toggle("hidden", !hasBatch);
   elements.modulePlanScriptBatchHeader.classList.toggle("hidden", !hasBatch);
   elements.modulePlanScriptBatchSummary.textContent =
-    batch?.status === "running" || isRunningBatch
+    batch?.status === "cancelling"
+      ? `正在终止批量生成：已取消 ${statusCounts.cancelled || 0}，成功 ${statusCounts.succeeded || 0}，失败 ${statusCounts.failed || 0}`
+      : batch?.status === "running" || isRunningBatch
       ? `批量生成脚本进行中：成功 ${statusCounts.succeeded || 0}，失败 ${statusCounts.failed || 0}，进行中 ${
           statusCounts.running || 0
         }，排队 ${statusCounts.queued || 0}`
-      : `批量生成脚本记录：成功 ${statusCounts.succeeded || 0}，失败 ${statusCounts.failed || 0}`;
+      : `批量生成脚本记录：成功 ${statusCounts.succeeded || 0}，失败 ${statusCounts.failed || 0}，取消 ${statusCounts.cancelled || 0}`;
+  if (elements.modulePlanScriptBatchCancelButton) {
+    const canCancel = state.scriptGeneration.isRunning && ["running", "cancelling"].includes(batch?.status);
+    elements.modulePlanScriptBatchCancelButton.classList.toggle("hidden", !canCancel);
+    elements.modulePlanScriptBatchCancelButton.disabled = state.scriptGeneration.cancelRequested;
+    elements.modulePlanScriptBatchCancelButton.textContent = state.scriptGeneration.cancelRequested
+      ? "正在终止…"
+      : "终止生成";
+  }
 
   elements.modulePlanScriptBatchList.replaceChildren();
   if (!hasBatch) {
@@ -699,6 +726,7 @@ return {
   readModulePlanScriptGenerationStream,
   handleModulePlanScriptStreamEvent,
   generateSelectedModulePlanScripts,
+  cancelModulePlanScriptGenerationBatch,
   renderModulePlanList,
   renderModulePlanScriptBatchRecord,
 };

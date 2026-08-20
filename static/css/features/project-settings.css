@@ -63,6 +63,116 @@
   flex-wrap: wrap;
 }
 
+.project-seed-current {
+  display: flex;
+  min-height: 58px;
+  flex-direction: column;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: #f8fafc;
+  padding: 8px 10px;
+}
+
+.project-seed-current > span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.project-seed-current > strong {
+  color: #1e3a5f;
+  font-size: 13px;
+}
+
+.project-seed-guidance {
+  margin-top: 12px;
+  border-left: 3px solid #9db8dc;
+  background: #f8fafc;
+  padding: 8px 10px;
+  color: #475569;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.project-seed-guidance p {
+  margin: 0;
+}
+
+.project-seed-guidance p + p {
+  margin-top: 3px;
+}
+
+.project-seed-overwrite-hint {
+  color: #92400e;
+  font-weight: 650;
+}
+
+.project-seed-generate-menu-wrap {
+  position: relative;
+}
+
+.project-seed-generate-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 9px;
+}
+
+.project-seed-generate-caret {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.project-seed-generate-menu {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 5px);
+  right: 0;
+  width: min(330px, calc(100vw - 48px));
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: #ffffff;
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.15);
+}
+
+.project-seed-generate-menu[hidden] {
+  display: none;
+}
+
+.project-seed-generate-menu > button {
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  gap: 3px;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  background: #ffffff;
+  padding: 10px 12px;
+  color: var(--text);
+  text-align: left;
+}
+
+.project-seed-generate-menu > button:last-child {
+  border-bottom: 0;
+}
+
+.project-seed-generate-menu > button:hover:not(:disabled),
+.project-seed-generate-menu > button:focus-visible {
+  background: var(--surface-muted);
+}
+
+.project-seed-generate-menu > button strong {
+  font-size: 13px;
+}
+
+.project-seed-generate-menu > button span {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .project-settings-toggle {
   display: inline-flex;
   align-items: center;

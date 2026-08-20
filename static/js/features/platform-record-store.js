@@ -93,6 +93,8 @@ function createPlatformRecordStore(deps = {}) {
 
     return {
       status: record.status === "running" ? "failed" : record.status || "succeeded",
+      run_id: typeof record.run_id === "string" ? record.run_id : "",
+      result_id: Number(record.result_id) || null,
       command: typeof record.command === "string" ? record.command : "",
       logs: normalizeLogs(record),
       returncode: Object.prototype.hasOwnProperty.call(record, "returncode") ? record.returncode : undefined,
@@ -133,6 +135,7 @@ function createPlatformRecordStore(deps = {}) {
       prompt: typeof record.prompt === "string" ? record.prompt : "",
       logs: normalizeLogs(record),
       error,
+      job_id: typeof record.job_id === "string" ? record.job_id : "",
       target_path: typeof record.target_path === "string" ? record.target_path : "",
       started_at: Number(record.started_at) || null,
       finished_at: finishedAt,
@@ -329,6 +332,7 @@ function createPlatformRecordStore(deps = {}) {
           : "",
       target_path: typeof item.target_path === "string" ? item.target_path : "",
       script_filename: typeof item.script_filename === "string" ? item.script_filename : "",
+      job_id: typeof item.job_id === "string" ? item.job_id : "",
     }));
 
     return {
@@ -368,6 +372,7 @@ function createPlatformRecordStore(deps = {}) {
       prompt: typeof item.prompt === "string" ? item.prompt : "",
       target_path: typeof item.target_path === "string" ? item.target_path : "",
       generated_plan: isPlainObject(item.generated_plan) ? item.generated_plan : null,
+      job_id: typeof item.job_id === "string" ? item.job_id : "",
     }));
 
     return {
@@ -397,6 +402,7 @@ function createPlatformRecordStore(deps = {}) {
       module_name: typeof record.module_name === "string" ? record.module_name : "",
       plan_filename: typeof record.plan_filename === "string" ? record.plan_filename : "",
       prompt: typeof record.prompt === "string" ? record.prompt : "",
+      job_id: typeof record.job_id === "string" ? record.job_id : "",
       logs: normalizeLogs(record),
       error:
         staleRunning && record.status === "running"
@@ -429,6 +435,7 @@ function createPlatformRecordStore(deps = {}) {
       prompt_note: promptNote,
       prompt:
         typeof record.prompt === "string" ? record.prompt : `${promptFixed.trim()}\n${promptNote.trim()}`.trim(),
+      job_id: typeof record.job_id === "string" ? record.job_id : "",
       logs: normalizeLogs(record),
       error:
         staleRunning && record.status === "running"

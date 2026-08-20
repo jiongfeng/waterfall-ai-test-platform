@@ -19,6 +19,7 @@ _EXACT_ERRORS = {
     "Agent 任务不存在。": "Agent task not found.",
     "Agent 失败记录不存在。": "Agent failure record not found.",
     "脚本项不存在。": "Script item not found.",
+    "脚本准备任务已取消。": "The script-preparation task was cancelled.",
     "单项重试记录不存在。": "Item retry record not found.",
     "当前项目已有 Agent 任务正在运行。": "An Agent task is already running for this project.",
     "当前项目有 Agent 主任务正在运行。": "An Agent primary task is running for this project.",
@@ -55,6 +56,7 @@ _EXACT_ERRORS = {
 }
 
 _PREFIX_ERRORS = (
+    ("重置密码失败：", "Could not reset password: "),
     ("创建项目失败：", "Could not create project: "),
     ("创建 Agent 任务失败：", "Could not create Agent task: "),
     ("读取 Agent 任务失败：", "Could not load Agent task: "),

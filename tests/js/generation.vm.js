@@ -317,6 +317,15 @@ const failedPlan = feature.handlePlanStreamEvent(
 assert.strictEqual(failedPlan.status, "failed");
 assert.ok(elements.planJobStatus.textContent.includes("生成失败"));
 
+const cancelledPlan = feature.handlePlanStreamEvent(
+  { event: "done", data: { ok: false, status: "cancelled", error: "用户终止" } },
+  { status: "running", logs: "已有日志\n" },
+  "登录",
+  "登录.md",
+);
+assert.strictEqual(cancelledPlan.status, "cancelled");
+assert.strictEqual(elements.planJobStatus.textContent, "任务已取消");
+
 let scriptResult = { status: "running", logs: "" };
 scriptResult = feature.handleScriptStreamEvent(
   { event: "log", data: { message: "脚本开始" } },
@@ -335,6 +344,15 @@ assert.strictEqual(
   state.plans.scriptGenerationRecords[planKey].status,
   "succeeded",
 );
+
+const cancelledScript = feature.handleScriptStreamEvent(
+  { event: "done", data: { ok: false, status: "cancelled", error: "用户终止" } },
+  { status: "running", logs: "脚本日志\n" },
+  "登录",
+  "登录.md",
+);
+assert.strictEqual(cancelledScript.status, "cancelled");
+assert.strictEqual(elements.planScriptJobStatus.textContent, "任务已取消");
 
 function streamResponse(chunks) {
   let index = 0;

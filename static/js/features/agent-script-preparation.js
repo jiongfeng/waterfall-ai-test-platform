@@ -1,4 +1,4 @@
-function createAgentScriptPreparationFeature(root, options = {}) {
+function createScriptPreparationFeature(root, options = {}) {
   if (!root) {
     throw new Error("脚本准备挂载容器不存在。");
   }
@@ -12,17 +12,24 @@ function createAgentScriptPreparationFeature(root, options = {}) {
   }
 
   const getRunId = typeof options.getRunId === "function" ? options.getRunId : () => "";
+  const api = options.api && typeof options.api === "object" ? options.api : {};
+  const context = options.context && typeof options.context === "object" ? options.context : {};
   const noticeTarget = typeof options.setNotice === "function" ? options.setNotice : setLocalNotice;
   const notify = (message, type = "", dynamic = false) => noticeTarget(message, type, dynamic);
   const onStateChange = typeof options.onStateChange === "function" ? options.onStateChange : () => {};
   const confirmAction = typeof options.confirm === "function" ? options.confirm : (message) => windowRef.confirm(message);
   const encodePathPart = options.encodePathPart || ((value) => encodeURIComponent(String(value || "")));
   const snapshotTimeoutMs = Math.max(1_000, Number(options.snapshotTimeoutMs) || 10_000);
+  const pollIntervalMs = Math.max(0, Number(options.pollIntervalMs) || 0);
+  const revealOnActivate = options.revealOnActivate !== false;
   const translate = (key, params, fallback) => {
     const translated = windowRef.WaterfallI18n?.t?.(key, params);
     return translated && translated !== key ? translated : fallback;
   };
   const platformText = (value) => windowRef.WaterfallI18n?.source?.(value) || value;
+  const localizePlatformError = (value) => value === "脚本准备任务已取消。"
+    ? translate("scriptPreparation.cancelledError", {}, value)
+    : value;
   const markDynamic = (element, enabled = true) => windowRef.WaterfallI18n?.markDynamic?.(element, enabled);
   const setMixedText = (element, parts) => {
     markDynamic(element, false);
@@ -30,6 +37,14 @@ function createAgentScriptPreparationFeature(root, options = {}) {
       .filter(({ text }) => text !== null && text !== undefined && text !== "")
       .map(({ text, dynamic = false }) => `<span ${dynamic ? "data-i18n-dynamic" : ""}>${escapeHtml(text)}</span>`)
       .join('<span aria-hidden="true"> · </span>');
+  };
+  const contextText = (key, fallback, params = {}) => {
+    const configured = context[key];
+    return typeof configured === "function"
+      ? configured(params)
+      : typeof configured === "string" && configured
+        ? configured
+        : fallback;
   };
 
   const preparationElement = (name) => {
@@ -108,7 +123,7 @@ function createAgentScriptPreparationFeature(root, options = {}) {
     "editing",
     "finalizing",
   ]);
-  const READY_STATUSES = new Set(["ready", "passed", "resolved", "succeeded", "verified"]);
+  const READY_STATUSES = new Set(["ready", "passed", "resolved", "completed", "succeeded", "verified"]);
   const HUMAN_STATUSES = new Set([
     "awaiting_human",
     "awaiting_action",
@@ -137,6 +152,10 @@ function createAgentScriptPreparationFeature(root, options = {}) {
     summaryDynamic: false,
     items: [],
     counts: {},
+    pendingActions: [],
+    actionResults: [],
+    notifiedActionIds: new Set(),
+    actionResultsInitialized: false,
     filter: "all",
     search: "",
     bulkMode: false,
@@ -156,7 +175,35 @@ function createAgentScriptPreparationFeature(root, options = {}) {
     actionRequestId: 0,
     detailOpener: null,
     editorOpener: null,
+    pollTimer: null,
+    pollPending: false,
   };
+
+  function clearPollTimer() {
+    if (state.pollTimer !== null) {
+      (windowRef.clearInterval || clearInterval)(state.pollTimer);
+      state.pollTimer = null;
+    }
+  }
+
+  function schedulePoll() {
+    if (state.pollTimer !== null || !pollIntervalMs || !state.active || !state.runId) {
+      return;
+    }
+    state.pollTimer = (windowRef.setInterval || setInterval)(async () => {
+      if (!state.active || !state.runId || state.pollPending) {
+        return;
+      }
+      state.pollPending = true;
+      try {
+        await refresh({ includeDetail: Boolean(state.openItem) });
+      } catch (error) {
+        // Snapshot/detail rendering owns the user-facing error state; keep polling guarded.
+      } finally {
+        state.pollPending = false;
+      }
+    }, pollIntervalMs);
+  }
 
   function setLocalNotice(message, type = "", dynamic = false) {
     markDynamic(elements.localNotice, dynamic);
@@ -176,6 +223,21 @@ function createAgentScriptPreparationFeature(root, options = {}) {
 
   function isPlainObject(value) {
     return Boolean(value && typeof value === "object" && !Array.isArray(value));
+  }
+
+  function localizePlatformErrorPayload(value) {
+    if (typeof value === "string") {
+      return localizePlatformError(value);
+    }
+    if (Array.isArray(value)) {
+      return value.map(localizePlatformErrorPayload);
+    }
+    if (isPlainObject(value)) {
+      return Object.fromEntries(
+        Object.entries(value).map(([key, entry]) => [key, localizePlatformErrorPayload(entry)]),
+      );
+    }
+    return value;
   }
 
   function asArray(value) {
@@ -279,7 +341,7 @@ function createAgentScriptPreparationFeature(root, options = {}) {
       return { label: platformText("待人工"), className: "script-preparation-warning" };
     }
     if (group === "abandoned") {
-      return { label: platformText("已放弃"), className: "script-preparation-muted" };
+      return { label: contextText("abandonedStatusLabel", platformText("已放弃")), className: "script-preparation-muted" };
     }
     const labels = {
       queued: "等待中",
@@ -291,6 +353,17 @@ function createAgentScriptPreparationFeature(root, options = {}) {
       finalizing: "收尾中",
     };
     return { label: platformText(labels[status] || "处理中"), className: "running" };
+  }
+
+  function runStatusInfo(value) {
+    const status = normalizeStatus(value);
+    if (["cancelled", "canceled"].includes(status)) {
+      return { label: translate("scriptPreparation.runCancelled", {}, "已取消"), className: "script-preparation-muted" };
+    }
+    if (["failed", "error"].includes(status)) {
+      return { label: translate("scriptPreparation.runFailed", {}, "任务失败"), className: "failed" };
+    }
+    return statusInfo(status);
   }
 
   function normalizeHistory(history, index) {
@@ -428,7 +501,14 @@ function createAgentScriptPreparationFeature(root, options = {}) {
     const suppliedCounts = isPlainObject(supplied) ? supplied : {};
     return {
       total: firstNumber(suppliedCounts.total, suppliedCounts.scripts, counts.total),
-      processing: firstNumber(suppliedCounts.processing, suppliedCounts.running, counts.processing),
+      processing: firstNumber(
+        suppliedCounts.processing,
+        suppliedCounts.running,
+        suppliedCounts.busy !== undefined || suppliedCounts.queued !== undefined
+          ? firstNumber(suppliedCounts.busy) + firstNumber(suppliedCounts.queued)
+          : null,
+        counts.processing,
+      ),
       ready: firstNumber(suppliedCounts.ready, suppliedCounts.passed, suppliedCounts.succeeded, counts.ready),
       awaiting_human: firstNumber(
         suppliedCounts.awaiting_human,
@@ -465,8 +545,53 @@ function createAgentScriptPreparationFeature(root, options = {}) {
       summaryDynamic: Boolean(rawSummary) || state.summaryDynamic,
       counts,
       items,
+      pendingActions: asArray(source.pending_actions || data?.pending_actions),
+      actionResults: asArray(
+        source.action_results || source.recent_actions || data?.action_results || data?.recent_actions,
+      ),
       updated_at: firstNumber(source.updated_at, data?.updated_at),
     };
+  }
+
+  function surfaceActionFailures(results) {
+    const messages = [];
+    const notifyNewFailures = state.actionResultsInitialized;
+    asArray(results).forEach((result) => {
+      const status = normalizeStatus(result?.state || result?.status);
+      if (!["failed", "cancelled", "canceled"].includes(status)) {
+        return;
+      }
+      const actionId = firstText(
+        result?.action_id,
+        [result?.item_id, result?.action, status, result?.finished_at, result?.error].map((value) => String(value ?? "")).join(":"),
+      );
+      if (!actionId || state.notifiedActionIds.has(actionId)) {
+        return;
+      }
+      state.notifiedActionIds.add(actionId);
+      if (!notifyNewFailures) {
+        return;
+      }
+      const itemId = firstText(result?.item_id, result?.script_item_id);
+      const item = state.items.find((entry) => entry.script_item_id === itemId);
+      const title = item ? itemDisplayTitle(item) : itemId || platformText("未知脚本");
+      const failed = status === "failed";
+      const error = firstText(result?.error, translate(
+        failed ? "scriptPreparation.backgroundActionFailed" : "scriptPreparation.cancelledWithoutExecution",
+        {},
+        failed ? "后台操作失败。" : "任务已取消，操作未执行。",
+      ));
+      const action = actionLabel(firstText(result?.action, "操作"));
+      messages.push(translate(
+        failed ? "scriptPreparation.actionResultFailed" : "scriptPreparation.actionResultCancelled",
+        { title, action, error },
+        failed ? `“${title}”${action}失败：${error}` : `“${title}”${action}已取消：${error}`,
+      ));
+    });
+    if (messages.length) {
+      notify(messages.join("；"), "error", true);
+    }
+    state.actionResultsInitialized = true;
   }
 
   function applySnapshot(data) {
@@ -476,8 +601,13 @@ function createAgentScriptPreparationFeature(root, options = {}) {
     state.summaryDynamic = snapshot.summaryDynamic;
     state.items = snapshot.items;
     state.counts = snapshot.counts;
+    state.pendingActions = snapshot.pendingActions;
+    state.actionResults = snapshot.actionResults;
+    surfaceActionFailures(snapshot.actionResults);
     const visibleIds = new Set(snapshot.items.map((item) => item.script_item_id));
-    state.selectedIds = new Set(Array.from(state.selectedIds).filter((itemId) => visibleIds.has(itemId)));
+    state.selectedIds = new Set(Array.from(state.selectedIds).filter((itemId) =>
+      visibleIds.has(itemId) && !pendingActionFor(itemId),
+    ));
     if (state.openItem) {
       const summaryItem = snapshot.items.find((item) => item.script_item_id === state.openItem.script_item_id);
       if (summaryItem) {
@@ -528,19 +658,55 @@ function createAgentScriptPreparationFeature(root, options = {}) {
     return [item.case_id, item.display_name].filter(Boolean).join(" ") || item.filename || item.script_item_id;
   }
 
+  function pendingActionFor(itemOrId) {
+    const itemId = typeof itemOrId === "string" ? itemOrId : itemOrId?.script_item_id;
+    return state.pendingActions.find((entry) =>
+      firstText(entry?.item_id, entry?.script_item_id) === itemId &&
+      ["queued", "running"].includes(normalizeStatus(entry?.state || entry?.status)),
+    ) || null;
+  }
+
+  function pendingActionText(itemOrAction) {
+    const pendingAction = itemOrAction?.action_id ? itemOrAction : pendingActionFor(itemOrAction);
+    if (!pendingAction) {
+      return "";
+    }
+    const action = actionLabel(firstText(pendingAction.action, "操作"));
+    return normalizeStatus(pendingAction.state || pendingAction.status) === "running"
+      ? translate("scriptPreparation.actionProcessing", { action }, `${action}处理中`)
+      : translate("scriptPreparation.actionQueued", { action }, `${action}已排队`);
+  }
+
   function itemProgressText(item) {
+    const pendingAction = pendingActionFor(item);
+    if (pendingAction) {
+      return pendingActionText(pendingAction);
+    }
     if (item.progress_message) {
-      return item.progress_message;
+      return localizePlatformError(item.progress_message);
     }
     const group = statusGroup(item.status);
     if (group === "ready") {
       return platformText("执行通过");
     }
     if (group === "abandoned") {
-      return platformText("不进入测试集");
+      return contextText("abandonedProgress", platformText("不进入测试集"));
     }
     if (group === "awaiting_human") {
       const action = recommendedAction(item);
+      if (action === "execute") {
+        if (environmentBlocked(item)) {
+          return translate("scriptPreparation.environmentProgress", {}, "环境修复后重新执行");
+        }
+        if (externalChange(item)) {
+          return translate(
+            "scriptPreparation.externalChangeExecute",
+            {},
+            "脚本版本已更新，请重新执行当前版本",
+          );
+        }
+        return translate("scriptPreparation.executeProgress", {}, "建议重新执行当前版本");
+      }
       return platformText(action === "regenerate" ? "建议重新生成" : action === "repair" ? "建议重新修复" : "等待人工处理");
     }
     return statusInfo(item.status).label;
@@ -550,12 +716,29 @@ function createAgentScriptPreparationFeature(root, options = {}) {
     const action = normalizeStatus(
       item?.analysis?.recommended_action || item?.recommended_action || item?.analysis?.action || "",
     );
-    return ["regenerate", "repair"].includes(action) ? action : "";
+    if (["regenerate", "repair", "execute"].includes(action)) {
+      return action;
+    }
+    return externalChange(item) ? "execute" : "";
+  }
+
+  function environmentBlocked(item) {
+    const analysis = isPlainObject(item?.analysis) ? item.analysis : {};
+    return Boolean(analysis.blocked_by_environment || normalizeStatus(analysis.analysis_status) === "blocked");
+  }
+
+  function externalChange(item) {
+    const analysis = isPlainObject(item?.analysis) ? item.analysis : {};
+    return Boolean(
+      item?.external_change ||
+      analysis.external_change ||
+      normalizeStatus(analysis.analysis_status) === "external_change"
+    );
   }
 
   function analysisFailed(item) {
     const analysis = isPlainObject(item?.analysis) ? item.analysis : {};
-    return Boolean(firstText(analysis.analysis_error, analysis.error) || !recommendedAction(item));
+    return !environmentBlocked(item) && Boolean(firstText(analysis.analysis_error, analysis.error) || !recommendedAction(item));
   }
 
   function actionLabel(action) {
@@ -563,7 +746,7 @@ function createAgentScriptPreparationFeature(root, options = {}) {
       {
         edit: "人工编辑脚本",
         execute: "重新执行当前版本",
-        abandon: "忽略脚本",
+        abandon: contextText("abandonLabel", "忽略脚本"),
         regenerate: "重新生成",
         repair: "重新修复",
       }[action] || action,
@@ -589,6 +772,10 @@ function createAgentScriptPreparationFeature(root, options = {}) {
   }
 
   function actionAvailability(item, action) {
+    const pendingAction = pendingActionFor(item);
+    if (pendingAction) {
+      return { enabled: false, reason: `${pendingActionText(pendingAction)}，请等待当前操作完成。`, reasonDynamic: false };
+    }
     const capability = item?.capabilities?.[action];
     if (capability === false || capability?.enabled === false) {
       const rawReason = firstText(capability?.reason);
@@ -699,17 +886,22 @@ function createAgentScriptPreparationFeature(root, options = {}) {
   function renderStageHeader() {
     const counts = state.counts;
     const title = translate("scriptPreparation.title", {}, "脚本准备");
+    const contextualSummary = contextText("summary", "", {
+      status: state.status,
+      counts,
+      sourceSummary: state.summary,
+    });
     elements.stageTitle.textContent = title;
-    markDynamic(elements.stageSummary, state.summaryDynamic);
-    elements.stageSummary.textContent = state.summaryDynamic
+    markDynamic(elements.stageSummary, !contextualSummary && state.summaryDynamic);
+    elements.stageSummary.textContent = contextualSummary || (state.summaryDynamic
       ? state.summary
-      : translate("scriptPreparation.summary", {}, "系统依次完成生成、执行和一次自动修复；待人工脚本不阻塞后续处理。");
+      : translate("scriptPreparation.summary", {}, "系统依次完成生成、执行和一次自动修复；待人工脚本不阻塞后续处理。"));
     if (state.runId) setMixedText(elements.stageMeta, [{ text: state.runId, dynamic: true }, { text: title }]);
     else {
       markDynamic(elements.stageMeta, false);
-      elements.stageMeta.textContent = platformText("尚未选择 Agent 任务");
+      elements.stageMeta.textContent = contextText("emptyMeta", platformText("尚未选择 Agent 任务"));
     }
-    const info = statusInfo(state.status);
+    const info = runStatusInfo(state.status);
     elements.stageStatus.textContent = info.label;
     elements.stageStatus.className = `status-badge ${info.className}`;
     const complete = firstNumber(counts.ready) + firstNumber(counts.abandoned);
@@ -755,6 +947,7 @@ function createAgentScriptPreparationFeature(root, options = {}) {
       .filter(Boolean);
     const awaitingSelected = selectedItems.filter((item) => statusGroup(item.status) === "awaiting_human").length;
     const missingCurrentScript = selectedItems.filter((item) => !hasCurrentScript(item)).length;
+    const selectableIds = items.filter((item) => !pendingActionFor(item)).map((item) => item.script_item_id);
     elements.batchHint.textContent = state.selectedIds.size
       ? missingCurrentScript
         ? translate(
@@ -772,14 +965,19 @@ function createAgentScriptPreparationFeature(root, options = {}) {
       : platformText("选择脚本后执行批量操作");
     elements.batchMenuToggle.disabled = !state.selectedIds.size || state.actionPending;
     elements.clearSelection.disabled = !state.selectedIds.size || state.actionPending;
+    elements.bulkToggle.disabled = state.actionPending || !selectableIds.length;
+    const abandonButton = elements.batchMenu.querySelector?.('[data-script-preparation-action="batch-abandon"]');
+    if (abandonButton) {
+      abandonButton.textContent = contextText("abandonLabel", "忽略脚本");
+    }
     [elements.batchExecute, elements.batchRepair].forEach((button) => {
       button.disabled = !state.selectedIds.size || state.actionPending || Boolean(missingCurrentScript);
       button.title = missingCurrentScript ? "选中项包含尚未生成候选脚本的记录。" : "";
     });
-    const visibleIds = items.map((item) => item.script_item_id);
-    const selectedVisible = visibleIds.filter((itemId) => state.selectedIds.has(itemId)).length;
-    elements.selectAll.checked = Boolean(visibleIds.length && selectedVisible === visibleIds.length);
-    elements.selectAll.indeterminate = Boolean(selectedVisible && selectedVisible < visibleIds.length);
+    const selectedVisible = selectableIds.filter((itemId) => state.selectedIds.has(itemId)).length;
+    elements.selectAll.disabled = state.actionPending || !selectableIds.length;
+    elements.selectAll.checked = Boolean(selectableIds.length && selectedVisible === selectableIds.length);
+    elements.selectAll.indeterminate = Boolean(selectedVisible && selectedVisible < selectableIds.length);
   }
 
   function renderTable() {
@@ -788,6 +986,7 @@ function createAgentScriptPreparationFeature(root, options = {}) {
       .map((item) => {
         const info = statusInfo(item.status);
         const selected = state.selectedIds.has(item.script_item_id);
+        const pending = pendingActionFor(item);
         return `
           <tr class="${selected ? "selected" : ""}" data-script-item-id="${escapeHtml(item.script_item_id)}">
             <td class="script-preparation-select-cell">
@@ -798,7 +997,8 @@ function createAgentScriptPreparationFeature(root, options = {}) {
                 data-i18n-dynamic-attributes
                 aria-label="${translate("action.select", {}, "选择")} ${escapeHtml(itemDisplayTitle(item))}"
                 ${selected ? "checked" : ""}
-                ${state.actionPending ? "disabled" : ""}
+                ${state.actionPending || pending ? "disabled" : ""}
+                ${pending ? `title="${escapeHtml(pendingActionText(pending))}"` : ""}
               />
             </td>
             <td>
@@ -823,7 +1023,7 @@ function createAgentScriptPreparationFeature(root, options = {}) {
       .join("");
     elements.tableEmpty.classList.toggle("hidden", Boolean(items.length));
     elements.tableFooterTotal.textContent = `共 ${state.items.length} 条脚本 · 当前显示 ${items.length} 条`;
-    elements.tableFooterHint.textContent = "只有执行成功的脚本会进入测试集";
+    elements.tableFooterHint.textContent = contextText("footerHint", "只有执行成功的脚本会进入测试集");
     renderBatchControls(items);
   }
 
@@ -901,6 +1101,8 @@ function createAgentScriptPreparationFeature(root, options = {}) {
   function analysisMarkup(item) {
     const analysis = item.analysis || {};
     const action = recommendedAction(item);
+    const blocked = environmentBlocked(item);
+    const changedExternally = externalChange(item);
     const failed = analysisFailed(item);
     const actionText = action === "regenerate"
       ? platformText("重新生成完整脚本")
@@ -910,21 +1112,39 @@ function createAgentScriptPreparationFeature(root, options = {}) {
             { version: versionLabel(item) },
             `重新修复当前候选 ${versionLabel(item)}`,
           )
-        : platformText("暂无有效推荐");
-    const summary = firstText(
+        : action === "execute"
+          ? blocked
+            ? translate("scriptPreparation.environmentExecute", {}, "修复环境后重新执行")
+            : changedExternally
+              ? translate(
+                  "scriptPreparation.externalChangeExecute",
+                  {},
+                  "脚本版本已更新，请重新执行当前版本",
+                )
+              : platformText("重新执行当前版本")
+          : platformText("暂无有效推荐");
+    const summary = localizePlatformError(firstText(
       analysis.summary,
       analysis.root_cause,
       analysis.failure_reason,
       item.error,
-      failed ? "AI 未能形成有效建议，请结合失败详情人工选择下一步。" : "AI 已完成失败分析，请结合证据选择下一步。",
-    );
+      blocked
+        ? translate("scriptPreparation.environmentSummary", {}, "测试执行被环境策略阻止，请修复环境配置后重新执行当前候选。")
+        : changedExternally
+          ? translate(
+              "scriptPreparation.externalChangeExecute",
+              {},
+              "脚本版本已更新，请重新执行当前版本",
+            )
+          : failed ? "AI 未能形成有效建议，请结合失败详情人工选择下一步。" : "AI 已完成失败分析，请结合证据选择下一步。",
+    ));
     const facts = analysisList(analysis.facts || analysis.confirmed_facts);
     const evidence = analysisList(analysis.evidence_refs || analysis.evidence_references);
     const risks = analysisList(analysis.risks);
     return `
-      <h3 class="script-preparation-section-title">AI 分析 <span class="status-badge ${failed ? "failed" : "success"}">${failed ? "分析失败" : "分析完成"}</span></h3>
+      <h3 class="script-preparation-section-title">${blocked ? escapeHtml(translate("scriptPreparation.environmentCheck", {}, "环境检查")) : "AI 分析"} <span class="status-badge ${failed ? "failed" : blocked ? "script-preparation-warning" : "success"}">${failed ? "分析失败" : blocked ? escapeHtml(translate("scriptPreparation.environmentBlocked", {}, "环境阻断")) : "分析完成"}</span></h3>
       <div class="script-preparation-analysis-callout ${failed ? "failed" : ""}">
-        <span class="script-preparation-analysis-label">AI</span>
+        <span class="script-preparation-analysis-label">${blocked ? "!" : "AI"}</span>
         <div><strong>${failed ? platformText("未形成自动推荐") : escapeHtml(translate("scriptPreparation.analysisRecommendation", { action: actionText }, `推荐：${actionText}`))}</strong><p data-i18n-dynamic>${escapeHtml(summary)}</p></div>
       </div>
       <section class="script-preparation-content-card">
@@ -941,7 +1161,7 @@ function createAgentScriptPreparationFeature(root, options = {}) {
         ${
           facts.length || evidence.length
             ? `<ul>${[...facts, ...evidence].slice(0, 8).map((entry) => `<li data-i18n-dynamic>${escapeHtml(entry)}</li>`).join("")}</ul>`
-            : `<p ${item.error ? "data-i18n-dynamic" : ""}>${escapeHtml(firstText(item.error, "详细证据会随执行记录一并保留。"))}</p>`
+            : `<p ${item.error ? "data-i18n-dynamic" : ""}>${escapeHtml(localizePlatformError(firstText(item.error, "详细证据会随执行记录一并保留。")))}</p>`
         }
       </section>
       <section class="script-preparation-content-card">
@@ -974,7 +1194,7 @@ function createAgentScriptPreparationFeature(root, options = {}) {
   function failureMarkup(item, stage) {
     const detail = stageDetailObject(stage);
     const rawError = firstText(stage.error, detail.error, detail.error_message, item.error);
-    const error = firstText(stage.error, detail.error, detail.error_message, item.error, "本次处理失败。");
+    const error = localizePlatformError(firstText(stage.error, detail.error, detail.error_message, item.error, "本次处理失败。"));
     const rawTitle = firstText(detail.title, detail.failure_step);
     const labelInfo = stageLabelInfo(stage, item);
     const inputVersion = firstNumber(
@@ -1003,7 +1223,7 @@ function createAgentScriptPreparationFeature(root, options = {}) {
       </div>
       <section class="script-preparation-content-card">
         <h4>失败详情</h4>
-        <pre class="script-preparation-code-box">${escapeHtml(Object.keys(detail).length ? previewJson(detail) : error)}</pre>
+        <pre class="script-preparation-code-box">${escapeHtml(Object.keys(detail).length ? previewJson(localizePlatformErrorPayload(detail)) : error)}</pre>
       </section>
     `;
   }
@@ -1122,21 +1342,24 @@ function createAgentScriptPreparationFeature(root, options = {}) {
         <div class="script-preparation-readonly-summary">
           <div><span>状态</span><strong>${escapeHtml(info.label)}</strong></div>
           <div><span>当前候选</span><strong>${escapeHtml(versionLabel(item))}</strong></div>
-          <div><span>进入测试集</span><strong>${item.included_in_suite ? "是" : "否"}</strong></div>
+          <div><span>${escapeHtml(contextText("participationLabel", "进入测试集"))}</span><strong>${item.included_in_suite ? "是" : "否"}</strong></div>
         </div>
       `;
       return;
     }
     const recommended = recommendedAction(item);
+    const pendingAction = pendingActionFor(item);
     const alternate = recommended === "repair" ? "regenerate" : recommended === "regenerate" ? "repair" : "";
     const prompts = recommended ? promptValues(item, recommended) : { supplementalPrompt: "" };
     const supplemental = firstText(prompts.supplementalPrompt, item.analysis?.suggestion, "暂无补充 Prompt。");
-    const controlsPending = state.actionPending || state.detailLoading;
+    const controlsPending = state.actionPending || state.detailLoading || Boolean(pendingAction);
     const availability = Object.fromEntries(
       ["edit", "execute", "regenerate", "repair", "abandon"].map((action) => [action, actionAvailability(item, action)]),
     );
     const buttonAttributes = (action) => {
-      const reason = controlsPending ? platformText("脚本详情或操作仍在处理中。") : availability[action]?.reason || "";
+      const reason = pendingAction
+        ? `${pendingActionText(pendingAction)}，请等待当前操作完成。`
+        : controlsPending ? platformText("脚本详情或操作仍在处理中。") : availability[action]?.reason || "";
       const dynamic = !controlsPending && availability[action]?.reasonDynamic;
       return `${controlsPending || !availability[action]?.enabled ? "disabled" : ""}${reason ? ` ${dynamic ? "data-i18n-dynamic-attributes " : ""}title="${escapeHtml(reason)}"` : ""}`;
     };
@@ -1144,14 +1367,27 @@ function createAgentScriptPreparationFeature(root, options = {}) {
       ? `
         <button class="primary-button script-preparation-block script-preparation-large" type="button" data-script-preparation-action="item-${escapeHtml(
           recommended,
-        )}" ${buttonAttributes(recommended)}>${escapeHtml(translate(
-          "scriptPreparation.followRecommendation",
-          { action: actionLabel(recommended) },
-          `按建议${actionLabel(recommended)}`,
-        ))}</button>
+        )}" ${buttonAttributes(recommended)}>${escapeHtml(
+          recommended === "execute" && externalChange(item) && !environmentBlocked(item)
+            ? translate(
+                "scriptPreparation.externalChangeExecute",
+                {},
+                "脚本版本已更新，请重新执行当前版本",
+              )
+            : translate(
+                "scriptPreparation.followRecommendation",
+                { action: actionLabel(recommended) },
+                `按建议${actionLabel(recommended)}`,
+              ),
+        )}</button>
       `
       : "";
-    const alternativeDecisionButtons = recommended
+    const alternativeDecisionButtons = recommended === "execute"
+      ? `
+        <button class="secondary-button script-preparation-block" type="button" data-script-preparation-action="item-regenerate" ${buttonAttributes("regenerate")}>重新生成</button>
+        <button class="secondary-button script-preparation-block" type="button" data-script-preparation-action="item-repair" ${buttonAttributes("repair")}>重新修复</button>
+      `
+      : recommended
       ? `<button class="secondary-button script-preparation-block" type="button" data-script-preparation-action="item-${escapeHtml(
           alternate,
         )}" ${buttonAttributes(alternate)}>${alternate === "repair" ? "改为重新修复" : "改为重新生成"}</button>`
@@ -1162,8 +1398,17 @@ function createAgentScriptPreparationFeature(root, options = {}) {
     elements.actionPanel.innerHTML = `
       <h3>处理此脚本</h3>
       <p>请选择下一步。操作会追加到左侧历史，不会覆盖已有版本。</p>
+      ${pendingAction ? `<div class="script-preparation-version-note">${escapeHtml(pendingActionText(pendingAction))}，完成后可继续处理。</div>` : ""}
       ${
-        recommended
+        recommended === "execute"
+          ? `<div class="script-preparation-version-note">${escapeHtml(
+              environmentBlocked(item)
+                ? translate("scriptPreparation.environmentPromptNote", {}, "环境配置恢复后可直接重新执行当前候选，无需修改 Prompt。")
+                : externalChange(item)
+                  ? translate("scriptPreparation.externalChangePromptNote", {}, "当前候选脚本已更新，无需修改 Prompt，请直接重新执行最新版本。")
+                  : translate("scriptPreparation.executePromptNote", {}, "无需修改 Prompt，可直接重新执行当前候选。"),
+            )}</div>`
+          : recommended
           ? `<section class="script-preparation-prompt-card">
               <header><span>${escapeHtml(translate(
                 "scriptPreparation.supplementalPromptTitle",
@@ -1177,12 +1422,12 @@ function createAgentScriptPreparationFeature(root, options = {}) {
       <div class="script-preparation-action-list">
         ${primaryDecisionButton}
         <button class="secondary-button script-preparation-block" type="button" data-script-preparation-action="item-edit" ${buttonAttributes("edit")}>人工编辑脚本</button>
-        <button class="secondary-button script-preparation-block" type="button" data-script-preparation-action="item-execute" ${buttonAttributes("execute")}>重新执行当前版本</button>
+        ${recommended === "execute" ? "" : `<button class="secondary-button script-preparation-block" type="button" data-script-preparation-action="item-execute" ${buttonAttributes("execute")}>重新执行当前版本</button>`}
         ${alternativeDecisionButtons}
-        <button class="secondary-button danger-button script-preparation-block" type="button" data-script-preparation-action="item-abandon" ${buttonAttributes("abandon")}>忽略脚本</button>
+        <button class="secondary-button danger-button script-preparation-block" type="button" data-script-preparation-action="item-abandon" ${buttonAttributes("abandon")}>${escapeHtml(contextText("abandonLabel", "忽略脚本"))}</button>
       </div>
       ${!hasCurrentScript(item) ? '<div class="script-preparation-version-note">尚未生成候选脚本，人工编辑、重新执行和重新修复暂不可用；请重新生成或忽略脚本。</div>' : ""}
-      <div class="script-preparation-version-note">忽略后脚本标记为已放弃，不进入测试集；Prompt、脚本版本和处理历史仍会保留。</div>
+      <div class="script-preparation-version-note">${escapeHtml(contextText("abandonNote", "忽略后脚本标记为已放弃，不进入测试集；Prompt、脚本版本和处理历史仍会保留。"))}</div>
     `;
   }
 
@@ -1236,6 +1481,9 @@ function createAgentScriptPreparationFeature(root, options = {}) {
       return;
     }
     const editingScript = mode === "edit";
+    const baselineRevisionId = state.editorDraft?.baselineRevisionId ?? null;
+    const revisionChanged = String(baselineRevisionId ?? "") !== String(item.current_revision_id ?? "");
+    const pendingAction = pendingActionFor(item);
     elements.editSection.classList.toggle("hidden", !editingScript);
     elements.promptSection.classList.toggle("hidden", editingScript);
     elements.editorSave.classList.toggle("hidden", !editingScript);
@@ -1245,11 +1493,8 @@ function createAgentScriptPreparationFeature(root, options = {}) {
       { text: translate("scriptPreparation.title", {}, "脚本准备") },
       { text: itemDisplayTitle(item), dynamic: true },
     ]);
-    elements.editorBaseline.textContent = translate(
-      "scriptPreparation.candidateVersion",
-      { version: versionLabel(item) },
-      `候选 ${versionLabel(item)}`,
-    );
+    const baselineVersion = state.editorDraft?.baselineVersionLabel || versionLabel(item);
+    elements.editorBaseline.textContent = translate("scriptPreparation.candidateVersion", { version: baselineVersion }, `候选 ${baselineVersion}`);
     elements.editorTarget.textContent = item.current_version
       ? translate(
           "scriptPreparation.nextCandidateVersion",
@@ -1259,13 +1504,20 @@ function createAgentScriptPreparationFeature(root, options = {}) {
       : platformText("新候选版本");
     if (editingScript) {
       elements.editorTitle.textContent = "人工编辑脚本";
-      elements.editorDescription.textContent = "保存会创建新候选版本；选择保存并执行后重新进入自动验证流程。";
+      elements.editorDescription.textContent = pendingAction
+        ? `${pendingActionText(pendingAction)}，请等待当前操作完成。`
+        : revisionChanged
+        ? "脚本版本已更新，请关闭弹窗并基于最新版本重新编辑。"
+        : "保存会创建新候选版本；选择保存并执行后重新进入自动验证流程。";
       elements.editorSave.textContent = state.actionPending ? "正在保存…" : "仅保存";
       elements.editorSaveExecute.textContent = state.actionPending ? "正在保存…" : "保存并执行";
     } else {
       elements.editorTitle.textContent = mode === "repair" ? "重新修复" : "重新生成";
-      elements.editorDescription.textContent =
-        mode === "repair"
+      elements.editorDescription.textContent = pendingAction
+        ? `${pendingActionText(pendingAction)}，请等待当前操作完成。`
+        : revisionChanged
+        ? "脚本版本已更新，请关闭弹窗并基于最新版本重新填写 Prompt。"
+        : mode === "repair"
           ? "基于当前候选创建修复版本；原 Prompt 与 AI 补充 Prompt 均可编辑。"
           : "不继承当前代码，根据更新后的 Prompt 生成全新候选。";
       elements.editorConfirm.textContent = state.actionPending
@@ -1275,7 +1527,8 @@ function createAgentScriptPreparationFeature(root, options = {}) {
           : "开始重新生成";
     }
     [elements.editorSave, elements.editorSaveExecute, elements.editorConfirm].forEach((button) => {
-      button.disabled = state.actionPending;
+      button.disabled = state.actionPending || revisionChanged || Boolean(pendingAction);
+      button.title = pendingAction ? `${pendingActionText(pendingAction)}，请等待当前操作完成。` : revisionChanged ? "脚本版本已更新，请关闭弹窗后重试。" : "";
     });
   }
 
@@ -1307,16 +1560,28 @@ function createAgentScriptPreparationFeature(root, options = {}) {
       snapshotError: state.snapshotError,
       detailLoading: state.detailLoading,
       actionPending: state.actionPending,
+      pendingActions: state.pendingActions.map((action) => ({ ...action })),
+      actionResults: state.actionResults.map((action) => ({ ...action })),
       items: state.items.map((item) => ({ ...item, history: [...item.history] })),
     };
   }
 
   function snapshotUrl() {
-    return `/api/agent/runs/${encodePathPart(state.runId)}/script-preparation`;
+    return typeof api.snapshotUrl === "function"
+      ? api.snapshotUrl(state.runId)
+      : `/api/agent/runs/${encodePathPart(state.runId)}/script-preparation`;
   }
 
   function itemUrl(itemId) {
-    return `/api/agent/runs/${encodePathPart(state.runId)}/script-items/${encodePathPart(itemId)}`;
+    return typeof api.itemUrl === "function"
+      ? api.itemUrl(state.runId, itemId)
+      : `/api/agent/runs/${encodePathPart(state.runId)}/script-items/${encodePathPart(itemId)}`;
+  }
+
+  function batchActionsUrl() {
+    return typeof api.batchActionsUrl === "function"
+      ? api.batchActionsUrl(state.runId)
+      : `/api/agent/runs/${encodePathPart(state.runId)}/script-items/batch-actions`;
   }
 
   async function loadSnapshot() {
@@ -1475,6 +1740,8 @@ function createAgentScriptPreparationFeature(root, options = {}) {
     state.editorDraft = {
       mode,
       itemId: state.openItem.script_item_id,
+      baselineRevisionId: state.openItem.current_revision_id ?? null,
+      baselineVersionLabel: versionLabel(state.openItem),
       scriptContent: state.openItem.script_content || "",
       originalPrompt: prompts.originalPrompt,
       supplementalPrompt: prompts.supplementalPrompt,
@@ -1515,13 +1782,13 @@ function createAgentScriptPreparationFeature(root, options = {}) {
   }
 
   function setSelectedItems(itemIds) {
-    const valid = new Set(state.items.map((item) => item.script_item_id));
+    const valid = new Set(state.items.filter((item) => !pendingActionFor(item)).map((item) => item.script_item_id));
     state.selectedIds = new Set(asArray(itemIds).map(String).filter((itemId) => valid.has(itemId)));
     render();
   }
 
   function selectItem(itemId, selected) {
-    if (selected) {
+    if (selected && !pendingActionFor(itemId)) {
       state.selectedIds.add(itemId);
     } else {
       state.selectedIds.delete(itemId);
@@ -1543,13 +1810,22 @@ function createAgentScriptPreparationFeature(root, options = {}) {
     if (!item || state.actionPending) {
       return null;
     }
+    const pendingAction = pendingActionFor(item);
+    if (pendingAction) {
+      notify(`${pendingActionText(pendingAction)}，请等待当前操作完成。`, "error");
+      return null;
+    }
     if (!["edit", "execute", "abandon", "regenerate", "repair"].includes(action)) {
       throw new Error("不支持的脚本准备操作。");
     }
-    if (action === "abandon" && !confirmAction(translate(
-      "scriptPreparation.confirmAbandonItem",
-      { title: itemDisplayTitle(item) },
-      `确定忽略“${itemDisplayTitle(item)}”吗？该脚本不会进入测试集。`,
+    if (action === "abandon" && !confirmAction(contextText(
+      "abandonItemMessage",
+      translate(
+        "scriptPreparation.confirmAbandonItem",
+        { title: itemDisplayTitle(item) },
+        `确定忽略“${itemDisplayTitle(item)}”吗？该脚本不会进入测试集。`,
+      ),
+      { item, title: itemDisplayTitle(item) },
     ))) {
       return null;
     }
@@ -1631,6 +1907,7 @@ function createAgentScriptPreparationFeature(root, options = {}) {
       return performItemAction("edit", {
         content,
         execute_after_save: Boolean(executeAfterSave),
+        expected_revision_id: state.editorDraft?.baselineRevisionId ?? null,
       });
     }
     if (["regenerate", "repair"].includes(mode)) {
@@ -1643,23 +1920,28 @@ function createAgentScriptPreparationFeature(root, options = {}) {
       return performItemAction(mode, {
         original_prompt: originalPrompt,
         supplemental_prompt: supplementalPrompt,
+        expected_revision_id: state.editorDraft?.baselineRevisionId ?? null,
       });
     }
     return null;
   }
 
   async function performBatchAction(action) {
-    const itemIds = Array.from(state.selectedIds);
+    const itemIds = Array.from(state.selectedIds).filter((itemId) => !pendingActionFor(itemId));
     if (!itemIds.length || state.actionPending) {
       return null;
     }
     if (!["execute", "abandon", "regenerate", "repair"].includes(action)) {
       throw new Error("不支持的批量脚本准备操作。");
     }
-    if (action === "abandon" && !confirmAction(translate(
-      "scriptPreparation.confirmAbandonBatch",
-      { count: itemIds.length },
-      `确定忽略选中的 ${itemIds.length} 条脚本吗？它们不会进入测试集。`,
+    if (action === "abandon" && !confirmAction(contextText(
+      "abandonBatchMessage",
+      translate(
+        "scriptPreparation.confirmAbandonBatch",
+        { count: itemIds.length },
+        `确定忽略选中的 ${itemIds.length} 条脚本吗？它们不会进入测试集。`,
+      ),
+      { count: itemIds.length, items: itemIds.map((itemId) => state.items.find((item) => item.script_item_id === itemId)).filter(Boolean) },
     ))) {
       return null;
     }
@@ -1683,7 +1965,7 @@ function createAgentScriptPreparationFeature(root, options = {}) {
         };
       });
       const data = await requestJson(
-        `/api/agent/runs/${encodePathPart(state.runId)}/script-items/batch-actions`,
+        batchActionsUrl(),
         {
           method: "POST",
           body: JSON.stringify({ items, action }),
@@ -1764,21 +2046,29 @@ function createAgentScriptPreparationFeature(root, options = {}) {
 
   async function activate(runId = state.runId || getRunId()) {
     state.active = true;
-    root.classList.remove("hidden");
+    if (revealOnActivate) {
+      root.classList.remove("hidden");
+    }
     if (runId && runId !== state.runId) {
       setRun(runId);
       state.active = true;
-      root.classList.remove("hidden");
+      if (revealOnActivate) {
+        root.classList.remove("hidden");
+      }
     }
     try {
       await loadSnapshot();
     } catch (error) {
       const rawError = firstText(error?.message);
       notify(rawError || platformText("读取脚本准备状态失败。"), "error", Boolean(rawError));
+    } finally {
+      schedulePoll();
     }
   }
 
   function deactivate() {
+    clearPollTimer();
+    state.pollPending = false;
     state.active = false;
     state.snapshotRequestId += 1;
     state.detailRequestId += 1;
@@ -1799,6 +2089,8 @@ function createAgentScriptPreparationFeature(root, options = {}) {
     if (nextRunId === state.runId) {
       return false;
     }
+    clearPollTimer();
+    state.pollPending = false;
     state.snapshotRequestId += 1;
     state.detailRequestId += 1;
     state.actionRequestId += 1;
@@ -1807,6 +2099,10 @@ function createAgentScriptPreparationFeature(root, options = {}) {
     state.status = "queued";
     state.items = [];
     state.counts = deriveCounts([]);
+    state.pendingActions = [];
+    state.actionResults = [];
+    state.notifiedActionIds.clear();
+    state.actionResultsInitialized = false;
     state.selectedIds.clear();
     state.bulkMode = false;
     state.batchMenuOpen = false;
@@ -1822,6 +2118,7 @@ function createAgentScriptPreparationFeature(root, options = {}) {
     state.detailLoading = false;
     state.actionPending = false;
     render();
+    schedulePoll();
     return true;
   }
 
@@ -1921,7 +2218,7 @@ function createAgentScriptPreparationFeature(root, options = {}) {
       selectItem(target.dataset.itemId, target.checked);
     } else if (action === "select-all") {
       visibleItems().forEach((item) => {
-        if (target.checked) {
+        if (target.checked && !pendingActionFor(item)) {
           state.selectedIds.add(item.script_item_id);
         } else {
           state.selectedIds.delete(item.script_item_id);
@@ -2018,4 +2315,9 @@ function createAgentScriptPreparationFeature(root, options = {}) {
   };
 }
 
+function createAgentScriptPreparationFeature(root, options = {}) {
+  return createScriptPreparationFeature(root, options);
+}
+
+window.createScriptPreparationFeature = createScriptPreparationFeature;
 window.createAgentScriptPreparationFeature = createAgentScriptPreparationFeature;

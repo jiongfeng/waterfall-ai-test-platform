@@ -11,6 +11,7 @@ class RequirementRepositoryDependencies:
     require_platform_database: Callable[[], dict]
     get_requirements_table: Callable[[dict], str]
     get_requirement_modules_table: Callable[[dict], str]
+    get_agent_runs_table: Callable[[dict], str]
     get_current_project_id: Callable[[], int]
     platform_mysql_connection: Callable[[dict], object]
     validate_uid: Callable[[object, str], str]
@@ -34,13 +35,21 @@ class RequirementRepository:
             )
         self.dependencies = dependencies
 
-    def get_requirement(self, requirement_uid):
+    def get_requirement(
+        self,
+        requirement_uid,
+        *,
+        include_deleted=False,
+    ):
         config = self.dependencies.require_platform_database()
         table = self.dependencies.get_requirements_table(config)
         project_id = self.dependencies.get_current_project_id()
         requirement_uid = self.dependencies.validate_uid(
             requirement_uid,
             "requirement_uid",
+        )
+        status_filter = (
+            "" if include_deleted else "AND status != 'deleted'"
         )
         with self.dependencies.platform_mysql_connection(
             config
@@ -52,7 +61,7 @@ class RequirementRepository:
                     FROM {table}
                     WHERE project_id = %s
                       AND requirement_uid = %s
-                      AND status != 'deleted'
+                      {status_filter}
                     LIMIT 1
                     """,
                     (project_id, requirement_uid),
@@ -137,6 +146,9 @@ class RequirementRepository:
                 config
             )
         )
+        agent_runs_table = self.dependencies.get_agent_runs_table(
+            config
+        )
         project_id = self.dependencies.get_current_project_id()
         requirement_uid = self.dependencies.validate_uid(
             requirement_uid,
@@ -147,6 +159,26 @@ class RequirementRepository:
             config
         ) as connection:
             with connection.cursor() as cursor:
+                cursor.execute(
+                    f"""
+                    SELECT run_id
+                    FROM {agent_runs_table}
+                    WHERE project_id = %s
+                      AND requirement_uid = %s
+                      AND status IN (
+                        'queued', 'running', 'cancelling',
+                        'awaiting_script_action'
+                      )
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                    """,
+                    (project_id, requirement_uid),
+                )
+                if cursor.fetchone():
+                    raise ValueError(
+                        "该需求存在运行中或等待处理的 Agent 任务，"
+                        "请先完成或取消任务后再删除。"
+                    )
                 cursor.execute(
                     f"""
                     UPDATE {requirements_table}

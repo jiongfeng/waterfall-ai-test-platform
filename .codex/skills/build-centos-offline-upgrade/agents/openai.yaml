@@ -1,0 +1,4 @@
+interface:
+  display_name: "Build CentOS Offline Upgrade"
+  short_description: "Build and verify the CentOS offline Docker upgrade"
+  default_prompt: "Use $build-centos-offline-upgrade to create a verified offline Docker upgrade package for the internal CentOS 7.6 deployment."

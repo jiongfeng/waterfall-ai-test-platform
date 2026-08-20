@@ -1,6 +1,7 @@
 {
   "project_workspace_root": "./workspaces",
   "project_template_dependency_source_root": "",
+  "default_project_language": "en",
   "opencode_server_url": "http://127.0.0.1:4096",
   "opencode_username": "opencode",
   "opencode_password": "",
@@ -38,7 +39,8 @@
         "base_url": "http://127.0.0.1:3000",
         "login_url": "/login",
         "username": "",
-        "password": ""
+        "password": "",
+        "seed_mode": "login"
       },
       "database_baseline": {
         "enabled": false

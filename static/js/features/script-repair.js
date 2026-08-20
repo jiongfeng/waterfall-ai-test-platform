@@ -23,6 +23,7 @@ function createScriptRepairFeature(deps) {
     renderContent,
     setNotice,
     getProjectRequestHeaders,
+    createClientJobId,
     refreshScriptMetadata,
     confirmDiscardEdit,
   } = deps;
@@ -68,7 +69,7 @@ function renderScriptRunDuration(record = null) {
     return;
   }
 
-  const isRunning = record.status === "running" && state.scriptRun.isRunning;
+  const isRunning = ["running", "cancelling"].includes(record.status) && state.scriptRun.isRunning;
   const finishedAt = record.finished_at || (isRunning ? Date.now() : record.updated_at);
   const duration = formatRepairDuration(finishedAt - record.started_at);
   const key = isRunning ? "repair.elapsed" : "repair.duration";
@@ -225,9 +226,16 @@ function renderScriptRunStreamStatus(status, error = "") {
     return;
   }
 
+  if (status === "cancelling") {
+    elements.scriptRunJobStatus.textContent = "正在终止任务";
+    elements.scriptRunSubmit.disabled = true;
+    elements.scriptRunSubmit.textContent = "正在终止…";
+    return;
+  }
+
   elements.scriptRunJobStatus.textContent = "任务进行中，正在接收实时输出";
-  elements.scriptRunSubmit.disabled = true;
-  elements.scriptRunSubmit.textContent = "修复中";
+  elements.scriptRunSubmit.disabled = false;
+  elements.scriptRunSubmit.textContent = "终止修复";
 }
 
 function setScriptRunRecord(moduleName, filename, result) {
@@ -245,6 +253,8 @@ function setScriptRunRecord(moduleName, filename, result) {
 
   state.scripts.runRecords[key] = {
     status: result.status || previous.status || "succeeded",
+    run_id: result.run_id || previous.run_id || "",
+    result_id: Number(result.result_id) || previous.result_id || null,
     command: result.command || previous.command || "",
     logs: hasLogs ? result.logs : hasOutput ? result.output : previous.logs || "",
     returncode: hasReturncode ? result.returncode : previous.returncode,
@@ -330,6 +340,8 @@ function handleScriptExecutionStreamEvent({ event, data }, previousResult, modul
       ...previousResult,
       status: data.status || previousResult.status,
       command: data.command || previousResult.command,
+      run_id: data.run_id || previousResult.run_id,
+      result_id: data.result_id || previousResult.result_id,
       target_path: data.target_path || previousResult.target_path,
       error: data.error || previousResult.error,
       returncode: Object.prototype.hasOwnProperty.call(data, "returncode") ? data.returncode : previousResult.returncode,
@@ -370,6 +382,8 @@ function handleScriptExecutionStreamEvent({ event, data }, previousResult, modul
       status,
       error: data.error || previousResult.error,
       returncode: Object.prototype.hasOwnProperty.call(data, "returncode") ? data.returncode : previousResult.returncode,
+      run_id: data.run_id || previousResult.run_id,
+      result_id: data.result_id || previousResult.result_id,
       output: data.output || previousResult.logs || "",
       logs: previousResult.logs || data.output || "",
       video: Object.prototype.hasOwnProperty.call(data, "video") ? data.video : previousResult.video,
@@ -404,6 +418,7 @@ async function executeSelectedScript() {
 
   state.scriptExecution.isRunning = true;
   state.scripts.activeTab = SCRIPT_VIEW_TAB.EXECUTION;
+  state.scripts.selectedExecutionRunId = "";
   persistViewState();
   setScriptRunRecord(moduleName, filename, {
     status: "running",
@@ -506,7 +521,10 @@ async function submitScriptRun() {
 
   updateScriptRepairPromptFromInputs();
   const startedAt = Date.now();
+  const jobId = createClientJobId("healer");
   state.scriptRun.isRunning = true;
+  state.scriptRun.cancelRequested = false;
+  state.scriptRun.currentJobId = jobId;
   state.scripts.activeTab = SCRIPT_VIEW_TAB.REPAIR;
   persistViewState();
   setScriptRepairRecord(moduleName, filename, {
@@ -514,6 +532,7 @@ async function submitScriptRun() {
     prompt_fixed: elements.scriptRunPromptFixed.value,
     prompt_note: elements.scriptRunPromptNote.value,
     prompt,
+    job_id: jobId,
     logs: "",
     error: "",
     started_at: startedAt,
@@ -538,6 +557,7 @@ async function submitScriptRun() {
         module_name: moduleName,
         filename,
         prompt,
+        job_id: jobId,
       }),
     });
 
@@ -560,7 +580,7 @@ async function submitScriptRun() {
     const result = await readScriptRunStream(response, moduleName, filename);
     const finishedAt = Date.now();
     state.scriptRun.isRunning = false;
-    if (result.status !== "succeeded" && result.status !== "failed") {
+    if (!["succeeded", "failed", "cancelled"].includes(result.status)) {
       result.status = "failed";
       result.error = "流式响应提前结束。";
     }
@@ -571,6 +591,8 @@ async function submitScriptRun() {
       target_path: result.target_path || "",
       finished_at: finishedAt,
     });
+    state.scriptRun.currentJobId = "";
+    state.scriptRun.cancelRequested = false;
     setScriptRunRecord(moduleName, filename, {
       status: result.status,
       error: result.error,
@@ -593,14 +615,20 @@ async function submitScriptRun() {
     if (result.status === "failed") {
       renderScriptRunStreamStatus("failed", result.error || "");
       setNotice(result.error || "测试脚本修复失败。", "error");
+      return;
+    }
+
+    if (result.status === "cancelled") {
+      setNotice("测试脚本修复已终止。", "");
     }
   } catch (error) {
     const finishedAt = Date.now();
+    const wasCancelled = state.scriptRun.cancelRequested;
     state.scriptRun.isRunning = false;
     const current = state.scripts.repairRecords[getScriptRunRecordKey(moduleName, filename)] || {};
     const prefix = current.logs && !current.logs.endsWith("\n") ? "\n" : "";
     setScriptRepairRecord(moduleName, filename, {
-      status: "failed",
+      status: wasCancelled ? "cancelled" : "failed",
       error: error.message,
       logs: `${current.logs || ""}${prefix}${error.message}\n`,
       finished_at: finishedAt,
@@ -608,8 +636,44 @@ async function submitScriptRun() {
     state.scripts.activeTab = SCRIPT_VIEW_TAB.REPAIR;
     persistViewState();
     stopScriptRunDurationTimer();
+    state.scriptRun.currentJobId = "";
+    state.scriptRun.cancelRequested = false;
     renderContent();
-    renderScriptRunStreamStatus("failed", error.message);
+    renderScriptRunStreamStatus(wasCancelled ? "cancelled" : "failed", error.message);
+    setNotice(wasCancelled ? "测试脚本修复已终止。" : error.message, wasCancelled ? "" : "error");
+  }
+}
+
+async function cancelScriptRun() {
+  const jobId = state.scriptRun.currentJobId;
+  if (!state.scriptRun.isRunning || !jobId || state.scriptRun.cancelRequested) {
+    return;
+  }
+  if (!window.confirm("确定终止本次生成吗？已产生的日志会保留，未完成的结果不会保存。")) {
+    return;
+  }
+
+  state.scriptRun.cancelRequested = true;
+  setScriptRepairRecord(state.scripts.selectedModule, state.scripts.selectedFile, {
+    status: "cancelling",
+  });
+  renderContent();
+  try {
+    const response = await fetch("/api/script-run-cancel", {
+      method: "POST",
+      headers: getProjectRequestHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ job_id: jobId }),
+    });
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data.error || `请求失败: ${response.status}`);
+    }
+  } catch (error) {
+    state.scriptRun.cancelRequested = false;
+    setScriptRepairRecord(state.scripts.selectedModule, state.scripts.selectedFile, {
+      status: "running",
+    });
+    renderContent();
     setNotice(error.message, "error");
   }
 }
@@ -690,13 +754,14 @@ function handleScriptRunStreamEvent({ event, data }, previousResult, moduleName,
 
   if (event === "done") {
     if (data.ok === false) {
-      renderScriptRunStreamStatus("failed", data.error || "");
+      const status = data.status === "cancelled" ? "cancelled" : "failed";
+      renderScriptRunStreamStatus(status, data.error || "");
       setScriptRepairRecord(moduleName, filename, {
-        status: "failed",
+        status,
         error: data.error || previousResult.error || "",
         logs: previousResult.logs || "",
       });
-      return { ...previousResult, status: "failed", error: data.error || previousResult.error };
+      return { ...previousResult, status, error: data.error || previousResult.error };
     }
 
     const nextResult = {
@@ -744,6 +809,7 @@ return {
   executeSelectedScript,
   openScriptRepairRecord,
   submitScriptRun,
+  cancelScriptRun,
   readScriptRunStream,
   handleScriptRunStreamEvent,
 };

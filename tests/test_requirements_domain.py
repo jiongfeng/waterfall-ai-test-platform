@@ -109,6 +109,7 @@ def make_repository_dependencies(connection=None, **overrides):
         "get_requirement_modules_table": (
             lambda _config: "`requirement_modules`"
         ),
+        "get_agent_runs_table": lambda _config: "`agent_runs`",
         "get_current_project_id": lambda: 7,
         "platform_mysql_connection": lambda _config: connection,
         "validate_uid": app.validate_uid,
@@ -438,7 +439,7 @@ class RequirementRepositoryTests(unittest.TestCase):
             }
         ]
         cursor = FakeCursor(
-            fetchones=[requirement_rows[0]],
+            fetchones=[requirement_rows[0], requirement_rows[0]],
             fetchalls=[requirement_rows],
         )
         connection = FakeConnection(cursor)
@@ -450,9 +451,19 @@ class RequirementRepositoryTests(unittest.TestCase):
         fetched = requirement_repository.get_requirement(
             "requirement-2"
         )
+        fetched_including_deleted = (
+            requirement_repository.get_requirement(
+                "requirement-2",
+                include_deleted=True,
+            )
+        )
 
         self.assertEqual(listed, requirement_rows)
         self.assertEqual(fetched, requirement_rows[0])
+        self.assertEqual(
+            fetched_including_deleted,
+            requirement_rows[0],
+        )
         list_query, list_parameters = cursor.executions[0]
         self.assertIn("LEFT JOIN `requirement_modules`", list_query)
         self.assertEqual(list_parameters, (7,))
@@ -462,9 +473,20 @@ class RequirementRepositoryTests(unittest.TestCase):
             get_parameters,
             (7, "requirement-2"),
         )
+        include_deleted_query, include_deleted_parameters = (
+            cursor.executions[2]
+        )
+        self.assertNotIn(
+            "status != 'deleted'",
+            include_deleted_query,
+        )
+        self.assertEqual(
+            include_deleted_parameters,
+            (7, "requirement-2"),
+        )
 
     def test_upload_insert_and_delete_cascade_keep_contracts(self):
-        cursor = FakeCursor(rowcounts=[1, 1, 1])
+        cursor = FakeCursor(rowcounts=[0, 1, 1])
         connection = FakeConnection(cursor)
         get_requirement = Mock(
             return_value={"requirement_uid": "requirement-fixed"}
@@ -501,8 +523,12 @@ class RequirementRepositoryTests(unittest.TestCase):
         )
         self.assertIn("INSERT INTO", cursor.executions[0][0])
         self.assertIn(
+            "FROM `agent_runs`",
+            cursor.executions[1][0],
+        )
+        self.assertIn(
             "JOIN `requirements`",
-            cursor.executions[2][0],
+            cursor.executions[3][0],
         )
 
     def test_module_update_serializes_json_and_returns_adapter_row(self):
@@ -548,6 +574,43 @@ class RequirementRepositoryTests(unittest.TestCase):
         ))
         self.assertEqual(parameters[5], '["R1"]')
         get_module.assert_called_once_with(3, "module-1")
+
+
+class RequirementDeletionPolicyTests(unittest.TestCase):
+    def test_active_agent_run_blocks_requirement_deletion(self):
+        cursor = FakeCursor(
+            fetchones=[{"run_id": "agent-1"}],
+        )
+        connection = FakeConnection(cursor)
+        requirement_repository = repository.RequirementRepository(
+            make_repository_dependencies(connection)
+        )
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "存在运行中或等待处理的 Agent 任务",
+        ):
+            requirement_repository.delete_requirement(
+                "requirement-1"
+            )
+
+        self.assertEqual(connection.commit_count, 0)
+        self.assertEqual(len(cursor.executions), 1)
+
+    def test_terminal_agent_history_does_not_block_deletion(self):
+        requirement_repository = Mock()
+        requirement_repository.delete_requirement.return_value = True
+        with patch.object(
+            app,
+            "_requirement_repository",
+            return_value=requirement_repository,
+        ):
+            deleted = app.delete_requirement_by_uid("requirement-1")
+
+        self.assertTrue(deleted)
+        requirement_repository.delete_requirement.assert_called_once_with(
+            "requirement-1"
+        )
 
 
 class RequirementServiceTests(unittest.TestCase):

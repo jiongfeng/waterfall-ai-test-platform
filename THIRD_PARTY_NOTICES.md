@@ -18,6 +18,7 @@ Apache-2.0 源码发行范围。平台创建用户工作区时才把复制出的
 | Python-Markdown | 3.10.2 | BSD-3-Clause | Markdown 转换 |
 | nh3 | 0.3.6 | MIT | HTML allowlist 清理 |
 | PyMySQL | 1.2.0 | MIT | MySQL 客户端 |
+| openpyxl | 3.1.5 | MIT | 测试计划 Excel 导入导出 |
 
 这些包的传递依赖由 Python 包管理器解析。构建二进制发行物时，必须从实际安装环境生成完整依赖与许可证清单，而不能只依赖上表。
 

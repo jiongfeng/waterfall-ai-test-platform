@@ -123,6 +123,8 @@ AUTH_API_PERMISSION_POLICY = _build_api_permission_policy(
         ("menu.projectSettings",),
         (
             ("projects.create_project", "POST"),
+            ("projects.update_project", "PATCH"),
+            ("projects.delete_project", "DELETE"),
             ("projects.get_project_settings", "GET"),
             ("projects.save_project_settings", "PUT"),
             ("project_archive.export_project", "GET"),
@@ -139,7 +141,7 @@ AUTH_API_PERMISSION_POLICY = _build_api_permission_policy(
             ("setup.list_setup_runs", "GET"),
             ("test_project_database_connection", "POST"),
             ("test_project_database_restore", "POST"),
-            ("generate_project_seed", "POST"),
+            ("seed.generate_project_seed", "POST"),
             ("test_project_seed", "POST"),
         ),
     ),
@@ -176,10 +178,23 @@ AUTH_API_PERMISSION_POLICY = _build_api_permission_policy(
             ("save_plan", "PUT"),
             ("delete_plan", "DELETE"),
             ("split_plan_cases", "POST"),
+            ("plan_workbook.export_plans_xlsx", "POST"),
+            ("plan_workbook.import_plans_xlsx", "POST"),
             ("get_plan_generation_defaults", "GET"),
             ("create_plan_generation_job", "POST"),
             ("get_plan_generation_job", "GET"),
             ("create_plan_generation_stream", "POST"),
+        ),
+    ),
+    (
+        ("menu.scripts",),
+        (
+            ("module_script_preparation.create_run", "POST"),
+            ("module_script_preparation.get_run", "GET"),
+            ("module_script_preparation.get_item", "GET"),
+            ("module_script_preparation.apply_action", "POST"),
+            ("module_script_preparation.apply_batch_action", "POST"),
+            ("module_script_preparation.cancel_run", "POST"),
         ),
     ),
     (
@@ -226,6 +241,12 @@ AUTH_API_PERMISSION_POLICY = _build_api_permission_policy(
             ("get_job", "GET"),
             ("get_job_log", "GET"),
             ("download_job_log", "GET"),
+        ),
+    ),
+    (
+        ("menu.requirements", "menu.plans", "menu.scripts", "menu.testSuites"),
+        (
+            ("cancel_test_job", "POST"),
         ),
     ),
     (

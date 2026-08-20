@@ -48,6 +48,7 @@ Docker 包装脚本默认读取仓库根目录 `config.json`，也可用
 ```json
 {
   "project_workspace_root": "/data/playwright-workspaces",
+  "default_project_language": "en",
   "opencode_server_url": "http://opencode:4096",
   "opencode_username": "opencode",
   "opencode_password": "",
@@ -76,7 +77,8 @@ Docker 包装脚本默认读取仓库根目录 `config.json`，也可用
         "base_url": "https://test.example.invalid",
         "login_url": "/login",
         "username": "",
-        "password": ""
+        "password": "",
+        "seed_mode": "login"
       },
       "database_baseline": {
         "enabled": false
@@ -154,10 +156,16 @@ OpenCode、平台数据库和被测系统凭据按原有配置字段保存：
 }
 ```
 
-`password_ref` 是页面清单中的业务标识，不会自动解析环境变量。项目设置中的
-用户名和密码可能进入计划/脚本生成 Prompt、seed 脚本、工作区 Git 和执行产物。
-因此只能使用隔离非生产系统中的可撤销、最小权限测试账号，并将模型服务和所有
-相关产物纳入同一敏感数据边界。
+`password_ref` 是页面清单中的业务标识，不会自动解析环境变量。`seed_mode`
+支持 `visit_only` 和 `login`，旧配置默认按 `login` 处理。“访问 Seed”使用固定
+模板，只使用 `base_url`，不创建模型任务，也不把登录地址、用户名或密码写入
+Seed；“登录 Seed”沿用模型生成流程，并会把配置的登录信息提供给模型。两种模式
+都会覆盖同一个 `tests/seed/seed.spec.ts`。
+旧版本生成且没有模式标记的 Seed 会在界面显示为“未知”，重新生成后即可识别。
+
+项目设置中的用户名和密码仍可能进入计划/脚本生成 Prompt、登录 Seed、工作区
+Git 和执行产物。因此只能使用隔离非生产系统中的可撤销、最小权限测试账号，
+并将模型服务和所有相关产物纳入同一敏感数据边界。
 
 不要把秘密放入命令行、Compose YAML、镜像层、公开示例、Issue 或诊断附件。
 实际 `config.json` 和 `.env` 必须保持未跟踪、权限受限；正式部署还应加密其备份。
@@ -189,6 +197,11 @@ OpenCode、平台数据库和被测系统凭据按原有配置字段保存：
 `status` 支持 `active` 和 `disabled`。禁用项目不会删除工作区、Git 历史或
 数据库记录。`default_project_key` 必须指向已配置项目；未提供时选择标记为
 默认的项目，或回退到第一个项目。
+
+`default_project_language` 支持 `zh-CN` 和 `en`，未配置时默认为 `en`。
+配置中也兼容大小写不同的 `zh-cn`，运行时会统一为 `zh-CN`。该值用于默认项目
+首次初始化以及新增项目弹窗的默认选项；新增项目可显式选择其他语言。已经保存到
+数据库的项目语言不会因为修改该配置或重启平台而被覆盖。
 
 ## OpenCode
 

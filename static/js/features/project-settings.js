@@ -18,9 +18,65 @@ function createProjectSettingsFeature(deps) {
     isPlainObject,
     escapeHtml,
     t = (key) => key,
+    confirm = (message) => window.confirm(message),
+    document: documentObject = window.document,
   } = deps;
-  const { normalizeProject, loadProjects } = projects;
+  const {
+    normalizeProject,
+    loadProjects,
+    renderProjectSelect = () => {},
+  } = projects;
   const { isAnyScriptJobRunning } = jobs;
+
+const SEED_MODE = Object.freeze({
+  VISIT_ONLY: "visit_only",
+  LOGIN: "login",
+});
+
+function normalizeSeedMode(value) {
+  return Object.values(SEED_MODE).includes(value) ? value : "";
+}
+
+function seedModeLabel(mode) {
+  if (mode === SEED_MODE.VISIT_ONLY) {
+    return t("projectSettings.seedModeVisitOnly");
+  }
+  if (mode === SEED_MODE.LOGIN) {
+    return t("projectSettings.seedModeLogin");
+  }
+  return t("projectSettings.seedModeUnknown");
+}
+
+function setSeedGenerateMenuOpen(open, { focusFirst = false, restoreFocus = false } = {}) {
+  const toggle = elements.projectSettingsPanel.querySelector("#projectSeedGenerateToggle");
+  const menu = elements.projectSettingsPanel.querySelector("#projectSeedGenerateMenu");
+  if (!toggle || !menu) {
+    return;
+  }
+  menu.hidden = !open;
+  toggle.setAttribute("aria-expanded", String(open));
+  if (open && focusFirst) {
+    menu.querySelector("[data-seed-mode]:not(:disabled)")?.focus();
+  } else if (!open && restoreFocus) {
+    toggle.focus();
+  }
+}
+
+documentObject?.addEventListener?.("pointerdown", (event) => {
+  const wrap = elements.projectSettingsPanel.querySelector(".project-seed-generate-menu-wrap");
+  const menu = elements.projectSettingsPanel.querySelector("#projectSeedGenerateMenu");
+  if (menu && !menu.hidden && wrap && !wrap.contains(event.target)) {
+    setSeedGenerateMenuOpen(false);
+  }
+});
+
+documentObject?.addEventListener?.("keydown", (event) => {
+  const menu = elements.projectSettingsPanel.querySelector("#projectSeedGenerateMenu");
+  if (event.key === "Escape" && menu && !menu.hidden) {
+    event.preventDefault();
+    setSeedGenerateMenuOpen(false, { restoreFocus: true });
+  }
+});
 
 function normalizeTargetSystem(value) {
   const target = isPlainObject(value) ? value : {};
@@ -80,6 +136,7 @@ function setProjectSettingsBusy(key, value) {
   elements.projectSettingsPanel.querySelectorAll("button").forEach((button) => {
     button.disabled = busy;
   });
+  renderProjectSelect();
 }
 
 async function loadProjectSettings() {
@@ -89,6 +146,7 @@ async function loadProjectSettings() {
     const data = await requestJson("/api/project-settings");
     state.projectSettings.loaded = true;
     state.projectSettings.seedScriptPath = data.seed_script_path || "tests/seed/seed.spec.ts";
+    state.projectSettings.seedMode = normalizeSeedMode(data.seed_mode);
     state.projectSettings.targetSystem = normalizeTargetSystem(data.target_system);
     state.projectSettings.databaseBaseline = isPlainObject(data.database_baseline)
       ? { ...data.database_baseline }
@@ -125,6 +183,7 @@ async function saveProjectSettings(event) {
     });
     state.projectSettings.loaded = true;
     state.projectSettings.seedScriptPath = data.seed_script_path || state.projectSettings.seedScriptPath;
+    state.projectSettings.seedMode = normalizeSeedMode(data.seed_mode) || state.projectSettings.seedMode;
     state.projectSettings.targetSystem = normalizeTargetSystem(data.target_system);
     state.projectSettings.databaseBaseline = isPlainObject(data.database_baseline)
       ? { ...data.database_baseline }
@@ -143,12 +202,12 @@ async function saveProjectSettings(event) {
   } catch (error) {
     setNotice(error.message, "error");
   } finally {
-    state.projectSettings.isSaving = false;
+    setProjectSettingsBusy("isSaving", false);
     renderProjectSettingsPanel();
   }
 }
 
-async function readProjectSettingsStream(response) {
+async function readProjectSettingsStream(response, expectedProjectKey = "") {
   const reader = response.body.getReader();
   const decoder = new TextDecoder("utf-8");
   let buffer = "";
@@ -165,7 +224,10 @@ async function readProjectSettingsStream(response) {
       const block = buffer.slice(0, boundaryIndex);
       buffer = buffer.slice(boundaryIndex + 2);
       const event = parseSseBlock(block);
-      if (event) {
+      if (
+        event &&
+        (!expectedProjectKey || state.project.currentKey === expectedProjectKey)
+      ) {
         result = handleProjectSettingsStreamEvent(event, result);
       }
       boundaryIndex = buffer.indexOf("\n\n");
@@ -174,7 +236,10 @@ async function readProjectSettingsStream(response) {
 
   buffer += decoder.decode();
   const trailingEvent = parseSseBlock(buffer.trim());
-  if (trailingEvent) {
+  if (
+    trailingEvent &&
+    (!expectedProjectKey || state.project.currentKey === expectedProjectKey)
+  ) {
     result = handleProjectSettingsStreamEvent(trailingEvent, result);
   }
   return result;
@@ -202,17 +267,43 @@ function handleProjectSettingsStreamEvent({ event, data }, previousResult) {
       return { ...previousResult, ok: false, status: data.status || "failed", error: data.error || "" };
     }
     appendProjectSettingsOutput(t("projectSettings.seedGenerationComplete"));
-    return { ...previousResult, ok: true, status: "succeeded" };
+    if (data.seed_mode_persistence === "failed") {
+      appendProjectSettingsOutput(t("projectSettings.seedModePersistenceWarning"));
+    }
+    return {
+      ...previousResult,
+      ok: true,
+      status: "succeeded",
+      seedMode: normalizeSeedMode(data.seed_mode) || previousResult.seedMode || "",
+    };
   }
   return previousResult;
 }
 
-async function generateProjectSeed() {
+async function generateProjectSeed(requestedMode = SEED_MODE.LOGIN) {
+  const mode = normalizeSeedMode(requestedMode);
+  if (!mode) {
+    throw new Error(`Unsupported Seed mode: ${requestedMode}`);
+  }
   if (state.projectSettings.isGeneratingSeed) {
     return;
   }
+  const requestProjectKey = state.project.currentKey;
+  const currentMode = normalizeSeedMode(state.projectSettings.seedMode);
+  if (
+    currentMode &&
+    currentMode !== mode &&
+    !confirm(
+      t("projectSettings.confirmSeedModeOverwrite", {
+        current: seedModeLabel(currentMode),
+        next: seedModeLabel(mode),
+      }),
+    )
+  ) {
+    return;
+  }
   setProjectSettingsBusy("isGeneratingSeed", true);
-  setProjectSettingsOutput(`${t("projectSettings.generatingSeed")}\n`);
+  setProjectSettingsOutput(`${t("projectSettings.generatingSeedMode", { mode: seedModeLabel(mode) })}\n`);
   try {
     const response = await fetch("/api/project-settings/seed/generate", {
       method: "POST",
@@ -220,14 +311,21 @@ async function generateProjectSeed() {
         "Content-Type": "application/json",
         ...getProjectRequestHeaders(),
       },
-      body: JSON.stringify({}),
+      body: JSON.stringify({ mode }),
     });
     if (!response.ok) {
       const data = await response.json().catch(() => ({}));
       throw new Error(data.error || t("error.requestFailed", { status: response.status }));
     }
-    const result = await readProjectSettingsStream(response);
+    const result = await readProjectSettingsStream(
+      response,
+      requestProjectKey,
+    );
+    if (state.project.currentKey !== requestProjectKey) {
+      return;
+    }
     if (result.ok) {
+      state.projectSettings.seedMode = normalizeSeedMode(result.seedMode) || mode;
       setNotice(t("projectSettings.seedGenerated"), "success");
       await loadProjects();
       return;
@@ -237,7 +335,7 @@ async function generateProjectSeed() {
     appendProjectSettingsOutput(error.message);
     setNotice(error.message, "error");
   } finally {
-    state.projectSettings.isGeneratingSeed = false;
+    setProjectSettingsBusy("isGeneratingSeed", false);
     renderProjectSettingsPanel();
   }
 }
@@ -264,7 +362,7 @@ async function testProjectSeed() {
     setProjectSettingsOutput(error.message);
     setNotice(error.message, "error");
   } finally {
-    state.projectSettings.isTestingSeed = false;
+    setProjectSettingsBusy("isTestingSeed", false);
     renderProjectSettingsPanel();
   }
 }
@@ -311,6 +409,7 @@ function renderProjectSettingsPanel() {
     settings.isGeneratingSeed ||
     settings.isTestingSeed ||
     isAnyScriptJobRunning();
+  const currentSeedMode = normalizeSeedMode(settings.seedMode);
   const settingsTabs = `
     <div class="project-settings-top-tabs" role="tablist" aria-label="${t("projectSettings.tabsLabel")}">
       <button class="content-tab ${settings.activeTab === PROJECT_SETTINGS_VIEW_TAB.BASIC ? "active" : ""}" id="projectSettingsBasicTab" type="button" role="tab" aria-selected="${settings.activeTab === PROJECT_SETTINGS_VIEW_TAB.BASIC}">${t("projectSettings.basic")}</button>
@@ -358,9 +457,33 @@ function renderProjectSettingsPanel() {
             <span>${t("projectSettings.seedScript")}</span>
             <input type="text" value="${escapeHtml(settings.seedScriptPath)}" readonly />
           </label>
+          <div class="project-seed-current" aria-live="polite">
+            <span>${t("projectSettings.currentSeedMode")}</span>
+            <strong data-seed-mode="${escapeHtml(currentSeedMode || "unknown")}">${escapeHtml(seedModeLabel(currentSeedMode))}</strong>
+          </div>
+        </div>
+        <div class="project-seed-guidance">
+          <p>${t("projectSettings.visitSeedHint")}</p>
+          <p>${t("projectSettings.loginSeedHint")}</p>
+          <p class="project-seed-overwrite-hint">${escapeHtml(t("projectSettings.seedOverwriteHint", { path: settings.seedScriptPath }))}</p>
         </div>
         <div class="project-settings-actions">
-          <button class="secondary-button" id="projectSeedGenerate" type="button" ${busy ? "disabled" : ""}>${t("projectSettings.generateSeed")}</button>
+          <div class="project-seed-generate-menu-wrap">
+            <button class="secondary-button project-seed-generate-toggle" id="projectSeedGenerateToggle" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="projectSeedGenerateMenu" ${busy ? "disabled" : ""}>
+              <span>${t("projectSettings.generateSeed")}</span>
+              <span class="project-seed-generate-caret" aria-hidden="true">▾</span>
+            </button>
+            <div class="project-seed-generate-menu" id="projectSeedGenerateMenu" role="menu" hidden>
+              <button type="button" role="menuitem" data-seed-mode="${SEED_MODE.VISIT_ONLY}" ${busy ? "disabled" : ""}>
+                <strong>${t("projectSettings.generateVisitSeed")}</strong>
+                <span>${t("projectSettings.generateVisitSeedDescription")}</span>
+              </button>
+              <button type="button" role="menuitem" data-seed-mode="${SEED_MODE.LOGIN}" ${busy ? "disabled" : ""}>
+                <strong>${t("projectSettings.generateLoginSeed")}</strong>
+                <span>${t("projectSettings.generateLoginSeedDescription")}</span>
+              </button>
+            </div>
+          </div>
           <button class="secondary-button" id="projectSeedTest" type="button" ${busy ? "disabled" : ""}>${t("projectSettings.testSeed")}</button>
         </div>
       </div>
@@ -397,12 +520,57 @@ function renderProjectSettingsPanel() {
 
   bindProjectSettingsTabs();
   elements.projectSettingsPanel.querySelector("#projectSettingsForm")?.addEventListener("submit", saveProjectSettings);
-  elements.projectSettingsPanel.querySelector("#projectSeedGenerate")?.addEventListener("click", generateProjectSeed);
+  const seedGenerateToggle = elements.projectSettingsPanel.querySelector("#projectSeedGenerateToggle");
+  const seedGenerateMenu = elements.projectSettingsPanel.querySelector("#projectSeedGenerateMenu");
+  seedGenerateToggle?.addEventListener("click", () => {
+    setSeedGenerateMenuOpen(Boolean(seedGenerateMenu?.hidden), { focusFirst: true });
+  });
+  seedGenerateToggle?.addEventListener("keydown", (event) => {
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setSeedGenerateMenuOpen(true, { focusFirst: true });
+    }
+  });
+  seedGenerateMenu?.addEventListener("keydown", (event) => {
+    const buttons = Array.from(
+      seedGenerateMenu.querySelectorAll("[data-seed-mode]:not(:disabled)"),
+    );
+    if (!buttons.length) {
+      return;
+    }
+    if (event.key === "Escape") {
+      event.preventDefault();
+      setSeedGenerateMenuOpen(false, { restoreFocus: true });
+      return;
+    }
+    if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
+      return;
+    }
+    event.preventDefault();
+    const currentIndex = buttons.indexOf(documentObject?.activeElement);
+    const nextIndex = event.key === "Home"
+      ? 0
+      : event.key === "End"
+        ? buttons.length - 1
+        : event.key === "ArrowUp"
+          ? (currentIndex <= 0 ? buttons.length - 1 : currentIndex - 1)
+          : (currentIndex + 1) % buttons.length;
+    buttons[nextIndex].focus();
+  });
+  seedGenerateMenu?.querySelectorAll("[data-seed-mode]").forEach((button) => {
+    button.addEventListener("click", () => {
+      setSeedGenerateMenuOpen(false);
+      return generateProjectSeed(button.dataset.seedMode);
+    });
+  });
   elements.projectSettingsPanel.querySelector("#projectSeedTest")?.addEventListener("click", testProjectSeed);
 }
 
 return {
   normalizeTargetSystem,
+  normalizeSeedMode,
+  seedModeLabel,
+  setSeedGenerateMenuOpen,
   projectSettingsField,
   collectProjectSettingsForm,
   setProjectSettingsOutput,

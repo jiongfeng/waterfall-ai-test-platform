@@ -958,12 +958,33 @@ async function repairSelectedModuleScripts() {
 
 function renderExecutionHistory() {
   const results = state.scripts.recentResults || [];
+  const selectedRunId = state.scripts.selectedExecutionRunId || "";
   elements.executionHistoryPanel.classList.toggle("hidden", !results.length);
   elements.executionHistorySummary.textContent = results.length ? `最近 ${results.length} 次执行记录` : "最近执行记录";
   elements.executionHistoryTableBody.replaceChildren();
 
   results.forEach((result) => {
     const row = document.createElement("tr");
+    const isSelected = Boolean(result.run_id && result.run_id === selectedRunId);
+    row.className = `execution-history-row${isSelected ? " selected" : ""}`;
+    row.tabIndex = 0;
+    row.setAttribute("role", "button");
+    row.setAttribute("aria-selected", String(isSelected));
+    const selectResult = () => {
+      if (!result.run_id || state.scripts.selectedExecutionRunId === result.run_id) {
+        return;
+      }
+      state.scripts.selectedExecutionRunId = result.run_id;
+      renderExecutionHistory();
+      renderExecutionRecord();
+    };
+    row.addEventListener("click", selectResult);
+    row.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        selectResult();
+      }
+    });
     const statusCell = document.createElement("td");
     statusCell.appendChild(createStatusBadge(getDbResultStatusInfo(result.status)));
     row.appendChild(statusCell);
@@ -1052,7 +1073,10 @@ function isAnyScriptJobRunning() {
     state.scripts.bulkDeletingScripts ||
     state.requirements.planGenerationRunning ||
     state.project.isExporting ||
-    state.project.isImporting
+    state.project.isImporting ||
+    state.projectSettings?.isSaving ||
+    state.projectSettings?.isGeneratingSeed ||
+    state.projectSettings?.isTestingSeed
   );
 }
 
@@ -1315,7 +1339,23 @@ function renderModuleRepairRecord() {
 }
 
 function renderExecutionRecord() {
-  const record = state.scripts.runRecords[getScriptRunRecordKey()];
+  const liveRecord = state.scripts.runRecords[getScriptRunRecordKey()];
+  const selectedRunId = state.scripts.selectedExecutionRunId || "";
+  const historicalResult = (state.scripts.recentResults || []).find(
+    (result) => result.run_id && result.run_id === selectedRunId,
+  );
+  const record = historicalResult
+    ? {
+        status: historicalResult.status,
+        run_id: historicalResult.run_id,
+        result_id: historicalResult.result_id,
+        command: historicalResult.command,
+        logs: historicalResult.stdout_tail,
+        report: historicalResult.report,
+        video: historicalResult.video,
+        video_error: historicalResult.error_message,
+      }
+    : liveRecord;
   const video = record?.video;
   const report = record?.report;
   const command = record?.command || "";
@@ -1331,14 +1371,7 @@ function renderExecutionRecord() {
     const commandLine = command ? `$ ${command}` : "";
     const logText = [commandLine, logs].filter(Boolean).join("\n");
     elements.executionLog.textContent = logText;
-    elements.executionLogStatus.textContent =
-      record?.status === "running"
-        ? "执行中"
-        : record?.status === "failed"
-          ? "执行失败"
-          : record?.status === "succeeded"
-            ? "执行完成"
-            : "";
+    elements.executionLogStatus.textContent = getDbResultStatusInfo(record?.status).label;
     elements.executionLog.scrollTop = elements.executionLog.scrollHeight;
   } else {
     elements.executionLog.textContent = "";
@@ -1372,7 +1405,7 @@ function renderExecutionRecord() {
     emptyTitle = "正在执行脚本";
   } else if (record?.status === "failed") {
     emptyTitle = "执行失败";
-  } else if (record?.status === "succeeded") {
+  } else if (record?.status === "succeeded" || record?.status === "passed") {
     emptyTitle = "未找到执行视频";
   }
   elements.executionEmpty.querySelector("h3").textContent = emptyTitle;
@@ -1390,6 +1423,8 @@ function renderScriptRepairRecord() {
     elements.scriptRunJobOutput.classList.add("hidden");
     elements.scriptRunSubmit.disabled = true;
     elements.scriptRunSubmit.textContent = "确认修复";
+    elements.scriptRunSubmit.classList.add("primary-button");
+    elements.scriptRunSubmit.classList.remove("danger-primary-button");
     return;
   }
 
@@ -1400,6 +1435,9 @@ function renderScriptRepairRecord() {
   elements.scriptRunJobOutput.classList.toggle("hidden", !record.logs && record.status === "idle");
   elements.scriptRunJobStatus.className = "job-status";
   renderScriptRunDuration(record);
+  const isRunning = record.status === "running" || record.status === "cancelling" || state.scriptRun.isRunning;
+  elements.scriptRunSubmit.classList.toggle("primary-button", !isRunning);
+  elements.scriptRunSubmit.classList.toggle("danger-primary-button", isRunning);
 
   if (record.status === "succeeded") {
     elements.scriptRunJobStatus.textContent = "任务成功";
@@ -1425,10 +1463,17 @@ function renderScriptRepairRecord() {
     return;
   }
 
+  if (record.status === "cancelling" || state.scriptRun.cancelRequested) {
+    elements.scriptRunJobStatus.textContent = "正在终止任务";
+    elements.scriptRunSubmit.disabled = true;
+    elements.scriptRunSubmit.textContent = "正在终止…";
+    return;
+  }
+
   if (record.status === "running" || state.scriptRun.isRunning) {
     elements.scriptRunJobStatus.textContent = "任务进行中，正在接收实时输出";
-    elements.scriptRunSubmit.disabled = true;
-    elements.scriptRunSubmit.textContent = "修复中";
+    elements.scriptRunSubmit.disabled = false;
+    elements.scriptRunSubmit.textContent = "终止修复";
     return;
   }
 

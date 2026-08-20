@@ -36,12 +36,12 @@ function createGenerationFeature(deps) {
     requestJson,
     encodePathPart,
     getProjectRequestHeaders,
+    createClientJobId,
     parseSseBlock,
     setNotice,
     persistViewState,
     renderContent,
     renderSideList,
-    renderPlanGenerationRecord,
     loadPlanModules,
     selectPlan,
     selectPlanModule,
@@ -60,6 +60,8 @@ function createGenerationFeature(deps) {
 function resetGenerationJobView() {
   state.generation.jobId = null;
   state.generation.isRunning = false;
+  state.generation.cancelRequested = false;
+  state.generation.currentJobId = "";
   if (state.generation.pollTimer) {
     timers.clearInterval(state.generation.pollTimer);
     state.generation.pollTimer = null;
@@ -111,6 +113,21 @@ function renderPlanStreamStatus(status, error = "") {
     return;
   }
 
+  if (status === "cancelled") {
+    elements.planJobStatus.textContent = "任务已取消";
+    elements.planJobStatus.classList.add("cancelled");
+    elements.planGenerationSubmit.disabled = false;
+    elements.planGenerationSubmit.textContent = "重新生成";
+    return;
+  }
+
+  if (status === "cancelling") {
+    elements.planJobStatus.textContent = "正在终止任务";
+    elements.planGenerationSubmit.disabled = true;
+    elements.planGenerationSubmit.textContent = "正在终止…";
+    return;
+  }
+
   elements.planJobStatus.textContent = "任务进行中，正在接收实时输出";
   elements.planGenerationSubmit.disabled = true;
   elements.planGenerationSubmit.textContent = "生成中";
@@ -136,7 +153,7 @@ function renderGenerationDuration(element, record) {
     return;
   }
 
-  const isRunning = record.status === "running";
+  const isRunning = ["running", "cancelling"].includes(record.status);
   const finishedAt = record.finished_at || (isRunning ? Date.now() : record.updated_at);
   const duration = formatDuration(finishedAt - record.started_at);
   const key = isRunning ? "generation.elapsed" : "generation.duration";
@@ -184,6 +201,125 @@ function stopPlanScriptGenerationDurationTimer() {
     state.scriptGeneration.durationTimer = null;
   }
   refreshPlanScriptGenerationDuration();
+}
+
+function getCurrentPlanGenerationRecord() {
+  if (!state.plans.selectedModule) {
+    return null;
+  }
+  if (state.plans.selectedPlanFile) {
+    return state.plans.generationRecords[getPlanRecordKey()] || null;
+  }
+  return Object.values(state.plans.generationRecords)
+    .filter((record) => record?.module_name === state.plans.selectedModule)
+    .sort((left, right) => (right.updated_at || 0) - (left.updated_at || 0))[0] || null;
+}
+
+function renderPlanGenerationRecord() {
+  const record = getCurrentPlanGenerationRecord();
+  const hasRecord = Boolean(record);
+  elements.planGenerationRecordEmpty.classList.toggle("hidden", hasRecord);
+  elements.planGenerationRecordContent.classList.toggle("hidden", !hasRecord);
+  if (!hasRecord) {
+    elements.planRecordPrompt.value = "";
+    elements.planRecordTargetPath.textContent = "";
+    elements.planRecordJobLogs.textContent = "";
+    elements.planRecordJobOutput.classList.add("hidden");
+    elements.planGenerationCancelButton.classList.add("hidden");
+    renderGenerationDuration(elements.planRecordDuration, null);
+    return;
+  }
+
+  elements.planRecordPrompt.value = record.prompt || "";
+  elements.planRecordTargetPath.textContent = record.target_path || "";
+  elements.planRecordJobLogs.textContent = localizeGenerationLog(record.logs || "");
+  elements.planRecordJobLogs.scrollTop = elements.planRecordJobLogs.scrollHeight;
+  elements.planRecordJobOutput.classList.toggle("hidden", !record.logs && record.status === "idle");
+  elements.planRecordJobStatus.className = "job-status";
+  const coverageMeta = record.coverage_profile
+    ? `模板来源：${getCoverageProfile(record.coverage_profile)?.label || "核心回归"}${record.prompt_customized ? " · 已自定义" : ""}`
+    : "";
+  renderGenerationDuration(elements.planRecordDuration, record);
+  const canCancel = state.generation.isRunning && state.generation.currentJobId &&
+    (!record.job_id || record.job_id === state.generation.currentJobId);
+  elements.planGenerationCancelButton.classList.toggle("hidden", !canCancel);
+  elements.planGenerationCancelButton.disabled = state.generation.cancelRequested;
+  elements.planGenerationCancelButton.textContent = state.generation.cancelRequested ? "正在终止…" : "终止生成";
+
+  if (record.status === "succeeded") {
+    elements.planRecordJobStatus.textContent = coverageMeta ? `任务成功 · ${coverageMeta}` : "任务成功";
+    elements.planRecordJobStatus.classList.add("success");
+  } else if (record.status === "failed") {
+    elements.planRecordJobStatus.textContent = `任务失败${coverageMeta ? ` · ${coverageMeta}` : ""}${record.error ? `：${record.error}` : ""}`;
+    elements.planRecordJobStatus.classList.add("error");
+  } else if (record.status === "cancelled") {
+    elements.planRecordJobStatus.textContent = `任务已取消${coverageMeta ? ` · ${coverageMeta}` : ""}`;
+    elements.planRecordJobStatus.classList.add("cancelled");
+  } else if (record.status === "cancelling") {
+    elements.planRecordJobStatus.textContent = `正在终止任务${coverageMeta ? ` · ${coverageMeta}` : ""}`;
+  } else if (record.status === "running") {
+    elements.planRecordJobStatus.textContent = `任务进行中${coverageMeta ? ` · ${coverageMeta}` : ""}，正在接收实时输出`;
+  } else {
+    elements.planRecordJobStatus.textContent = "任务进行中";
+  }
+}
+
+function renderPlanScriptGenerationRecord() {
+  const record = ensurePlanScriptGenerationRecord();
+  if (!record) {
+    elements.planScriptPromptFixed.value = "";
+    elements.planScriptPromptNote.value = "";
+    elements.planScriptRecordTargetPath.textContent = "";
+    elements.planScriptJobLogs.textContent = "";
+    elements.planScriptJobOutput.classList.add("hidden");
+    renderGenerationDuration(elements.planScriptDuration, null);
+    elements.planScriptGenerationSubmit.disabled = true;
+    elements.planScriptGenerationSubmit.textContent = "确认生成";
+    elements.planScriptGenerationSubmit.classList.add("primary-button");
+    elements.planScriptGenerationSubmit.classList.remove("danger-primary-button");
+    return;
+  }
+
+  elements.planScriptPromptFixed.value = record.prompt_fixed;
+  elements.planScriptPromptNote.value = record.prompt_note;
+  elements.planScriptRecordTargetPath.textContent = record.target_path || getDefaultScriptTargetPath(record.module_name);
+  elements.planScriptJobLogs.textContent = localizeGenerationLog(record.logs || "");
+  elements.planScriptJobLogs.scrollTop = elements.planScriptJobLogs.scrollHeight;
+  elements.planScriptJobOutput.classList.toggle("hidden", !record.logs && record.status === "idle");
+  elements.planScriptJobStatus.className = "job-status";
+  renderGenerationDuration(elements.planScriptDuration, record);
+  const isRunning = ["running", "cancelling"].includes(record.status) || state.scriptGeneration.isRunning;
+  elements.planScriptGenerationSubmit.classList.toggle("primary-button", !isRunning);
+  elements.planScriptGenerationSubmit.classList.toggle("danger-primary-button", isRunning);
+
+  if (record.status === "succeeded") {
+    elements.planScriptJobStatus.textContent = "任务成功";
+    elements.planScriptJobStatus.classList.add("success");
+    elements.planScriptGenerationSubmit.disabled = state.scriptGeneration.isRunning;
+    elements.planScriptGenerationSubmit.textContent = "重新生成";
+  } else if (record.status === "failed") {
+    elements.planScriptJobStatus.textContent = `任务失败${record.error ? `：${record.error}` : ""}`;
+    elements.planScriptJobStatus.classList.add("error");
+    elements.planScriptGenerationSubmit.disabled = state.scriptGeneration.isRunning;
+    elements.planScriptGenerationSubmit.textContent = "重试";
+  } else if (record.status === "cancelled") {
+    elements.planScriptJobStatus.textContent = "任务已取消";
+    elements.planScriptJobStatus.classList.add("cancelled");
+    elements.planScriptGenerationSubmit.disabled = state.scriptGeneration.isRunning;
+    elements.planScriptGenerationSubmit.textContent = "重新生成";
+  } else if (record.status === "cancelling" || state.scriptGeneration.cancelRequested) {
+    elements.planScriptJobStatus.textContent = "正在终止任务";
+    elements.planScriptGenerationSubmit.disabled = true;
+    elements.planScriptGenerationSubmit.textContent = "正在终止…";
+  } else if (record.status === "running" || state.scriptGeneration.isRunning) {
+    elements.planScriptJobStatus.textContent = "任务进行中，正在接收实时输出";
+    elements.planScriptGenerationSubmit.disabled = false;
+    elements.planScriptGenerationSubmit.textContent = "终止生成";
+  } else {
+    elements.planScriptJobStatus.textContent = "任务进行中";
+    elements.planScriptGenerationSubmit.disabled = state.scriptGeneration.isRunning;
+    elements.planScriptGenerationSubmit.textContent = "确认生成";
+  }
 }
 
 function setPlanGenerationRecord(moduleName, planFilename, updates) {
@@ -721,7 +857,10 @@ async function submitPlanGeneration() {
   elements.planJobStatus.className = "job-status";
   elements.planJobLogs.textContent = "";
   const startedAt = Date.now();
+  const jobId = createClientJobId("planner");
   state.generation.isRunning = true;
+  state.generation.cancelRequested = false;
+  state.generation.currentJobId = jobId;
   setPlanGenerationRecord(moduleName, planFilename, {
     status: "running",
     module_name: moduleName,
@@ -729,6 +868,7 @@ async function submitPlanGeneration() {
     prompt,
     coverage_profile: coverageProfile,
     prompt_customized: promptCustomized,
+    job_id: jobId,
     logs: "",
     error: "",
     target_path: targetPath,
@@ -755,6 +895,7 @@ async function submitPlanGeneration() {
         coverage_profile: coverageProfile,
         coverage_prompt: coveragePrompt,
         prompt_customized: promptCustomized,
+        job_id: jobId,
         ...(requirementSource || {}),
       }),
     });
@@ -779,7 +920,7 @@ async function submitPlanGeneration() {
     const result = await readPlanGenerationStream(response, moduleName, planFilename);
     const finishedAt = Date.now();
     state.generation.isRunning = false;
-    if (result.status !== "succeeded" && result.status !== "failed") {
+    if (!["succeeded", "failed", "cancelled"].includes(result.status)) {
       result.status = "failed";
       result.error = "流式响应提前结束。";
     }
@@ -790,6 +931,8 @@ async function submitPlanGeneration() {
       target_path: result.target_path || elements.planTargetPath.textContent || "",
       finished_at: finishedAt,
     });
+    state.generation.currentJobId = "";
+    state.generation.cancelRequested = false;
     stopPlanGenerationDurationTimer();
 
     if (result.status === "succeeded") {
@@ -803,6 +946,13 @@ async function submitPlanGeneration() {
       return;
     }
 
+    if (result.status === "cancelled") {
+      renderContent();
+      setNotice("测试计划生成已终止。", "");
+      resetPlanGenerationSource();
+      return;
+    }
+
     if (result.status !== "failed") {
       renderPlanStreamStatus("failed", "流式响应提前结束。");
     }
@@ -810,20 +960,49 @@ async function submitPlanGeneration() {
     resetPlanGenerationSource();
   } catch (error) {
     const finishedAt = Date.now();
+    const wasCancelled = state.generation.cancelRequested;
     state.generation.isRunning = false;
     const current = state.plans.generationRecords[getPlanRecordKey(moduleName, planFilename)] || {};
     const prefix = current.logs && !current.logs.endsWith("\n") ? "\n" : "";
     setPlanGenerationRecord(moduleName, planFilename, {
-      status: "failed",
+      status: wasCancelled ? "cancelled" : "failed",
       error: error.message,
       logs: `${current.logs || ""}${prefix}${error.message}\n`,
       finished_at: finishedAt,
     });
     stopPlanGenerationDurationTimer();
-    renderPlanStreamStatus("failed", error.message);
+    state.generation.currentJobId = "";
+    state.generation.cancelRequested = false;
+    renderPlanStreamStatus(wasCancelled ? "cancelled" : "failed", error.message);
     appendPlanJobLog(error.message);
     renderContent();
     resetPlanGenerationSource();
+  }
+}
+
+async function cancelPlanGeneration() {
+  const jobId = state.generation.currentJobId;
+  if (!state.generation.isRunning || !jobId || state.generation.cancelRequested) {
+    return;
+  }
+  if (!window.confirm("确定终止本次生成吗？已产生的日志会保留，未完成的结果不会保存。")) {
+    return;
+  }
+
+  state.generation.cancelRequested = true;
+  const record = state.plans.generationRecords[getPlanRecordKey()] || {};
+  setPlanGenerationRecord(record.module_name, record.plan_filename, { status: "cancelling" });
+  renderContent();
+  try {
+    await requestJson(`/api/jobs/${encodePathPart(jobId)}/cancel`, {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
+  } catch (error) {
+    state.generation.cancelRequested = false;
+    setPlanGenerationRecord(record.module_name, record.plan_filename, { status: "running" });
+    renderContent();
+    setNotice(error.message, "error");
   }
 }
 
@@ -905,13 +1084,14 @@ function handlePlanStreamEvent({ event, data }, previousResult, moduleName, plan
   }
 
   if (event === "done" && data.ok === false) {
-    renderPlanStreamStatus("failed", data.error || "");
+    const status = data.status === "cancelled" ? "cancelled" : "failed";
+    renderPlanStreamStatus(status, data.error || "");
     setPlanGenerationRecord(moduleName, previousResult.plan_filename || planFilename, {
-      status: "failed",
+      status,
       error: data.error || previousResult.error || "",
       logs: previousResult.logs || "",
     });
-    return { ...previousResult, status: "failed", error: data.error || previousResult.error };
+    return { ...previousResult, status, error: data.error || previousResult.error };
   }
 
   if (event === "done" && data.ok !== false) {
@@ -1000,6 +1180,8 @@ async function openPlanGenerationResult(result, moduleName, planFilename, genera
 
 function resetScriptGenerationView() {
   state.scriptGeneration.isRunning = false;
+  state.scriptGeneration.cancelRequested = false;
+  state.scriptGeneration.currentJobId = "";
   stopPlanScriptGenerationDurationTimer();
   elements.planScriptJobStatus.textContent = "任务进行中";
   elements.planScriptJobStatus.className = "job-status";
@@ -1063,9 +1245,24 @@ function renderScriptStreamStatus(status, error = "") {
     return;
   }
 
+  if (status === "cancelled") {
+    elements.planScriptJobStatus.textContent = "任务已取消";
+    elements.planScriptJobStatus.classList.add("cancelled");
+    elements.planScriptGenerationSubmit.disabled = false;
+    elements.planScriptGenerationSubmit.textContent = "重新生成";
+    return;
+  }
+
+  if (status === "cancelling") {
+    elements.planScriptJobStatus.textContent = "正在终止任务";
+    elements.planScriptGenerationSubmit.disabled = true;
+    elements.planScriptGenerationSubmit.textContent = "正在终止…";
+    return;
+  }
+
   elements.planScriptJobStatus.textContent = "任务进行中，正在接收实时输出";
-  elements.planScriptGenerationSubmit.disabled = true;
-  elements.planScriptGenerationSubmit.textContent = "生成中";
+  elements.planScriptGenerationSubmit.disabled = false;
+  elements.planScriptGenerationSubmit.textContent = "终止生成";
 }
 
 function openScriptGenerationModal() {
@@ -1107,7 +1304,10 @@ async function submitScriptGeneration() {
 
   updatePlanScriptGenerationPromptFromInputs();
   const startedAt = Date.now();
+  const jobId = createClientJobId("generator");
   state.scriptGeneration.isRunning = true;
+  state.scriptGeneration.cancelRequested = false;
+  state.scriptGeneration.currentJobId = jobId;
   state.plans.activeTab = PLAN_VIEW_TAB.SCRIPT_GENERATION;
   persistViewState();
   setPlanScriptGenerationRecord(moduleName, planFilename, {
@@ -1116,6 +1316,7 @@ async function submitScriptGeneration() {
     prompt_note: elements.planScriptPromptNote.value,
     prompt,
     plan_filename: planFilename,
+    job_id: jobId,
     logs: "",
     error: "",
     target_path: getDefaultScriptTargetPath(moduleName),
@@ -1141,6 +1342,7 @@ async function submitScriptGeneration() {
         module_name: moduleName,
         plan_filename: planFilename,
         prompt,
+        job_id: jobId,
       }),
     });
 
@@ -1163,7 +1365,7 @@ async function submitScriptGeneration() {
     const result = await readScriptGenerationStream(response, moduleName, planFilename);
     const finishedAt = Date.now();
     state.scriptGeneration.isRunning = false;
-    if (result.status !== "succeeded" && result.status !== "failed") {
+    if (!["succeeded", "failed", "cancelled"].includes(result.status)) {
       result.status = "failed";
       result.error = "流式响应提前结束。";
     }
@@ -1174,6 +1376,8 @@ async function submitScriptGeneration() {
       target_path: result.target_path || getDefaultScriptTargetPath(moduleName),
       finished_at: finishedAt,
     });
+    state.scriptGeneration.currentJobId = "";
+    state.scriptGeneration.cancelRequested = false;
     stopPlanScriptGenerationDurationTimer();
     renderContent();
 
@@ -1194,23 +1398,60 @@ async function submitScriptGeneration() {
       return;
     }
 
+    if (result.status === "cancelled") {
+      setNotice("测试脚本生成已终止。", "");
+      return;
+    }
+
     if (result.status !== "failed") {
       renderScriptStreamStatus("failed", "流式响应提前结束。");
     }
   } catch (error) {
     const finishedAt = Date.now();
+    const wasCancelled = state.scriptGeneration.cancelRequested;
     state.scriptGeneration.isRunning = false;
     const current = state.plans.scriptGenerationRecords[getPlanRecordKey(moduleName, planFilename)] || {};
     const prefix = current.logs && !current.logs.endsWith("\n") ? "\n" : "";
     setPlanScriptGenerationRecord(moduleName, planFilename, {
-      status: "failed",
+      status: wasCancelled ? "cancelled" : "failed",
       error: error.message,
       logs: `${current.logs || ""}${prefix}${error.message}\n`,
       finished_at: finishedAt,
     });
     stopPlanScriptGenerationDurationTimer();
+    state.scriptGeneration.currentJobId = "";
+    state.scriptGeneration.cancelRequested = false;
     renderContent();
-    renderScriptStreamStatus("failed", error.message);
+    renderScriptStreamStatus(wasCancelled ? "cancelled" : "failed", error.message);
+  }
+}
+
+async function cancelScriptGeneration() {
+  const jobId = state.scriptGeneration.currentJobId;
+  if (!state.scriptGeneration.isRunning || !jobId || state.scriptGeneration.cancelRequested) {
+    return;
+  }
+  if (!window.confirm("确定终止本次生成吗？已产生的日志会保留，未完成的结果不会保存。")) {
+    return;
+  }
+
+  state.scriptGeneration.cancelRequested = true;
+  setPlanScriptGenerationRecord(state.plans.selectedModule, state.plans.selectedPlanFile, {
+    status: "cancelling",
+  });
+  renderContent();
+  try {
+    await requestJson(`/api/jobs/${encodePathPart(jobId)}/cancel`, {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
+  } catch (error) {
+    state.scriptGeneration.cancelRequested = false;
+    setPlanScriptGenerationRecord(state.plans.selectedModule, state.plans.selectedPlanFile, {
+      status: "running",
+    });
+    renderContent();
+    setNotice(error.message, "error");
   }
 }
 
@@ -1287,13 +1528,14 @@ function handleScriptStreamEvent({ event, data }, previousResult, moduleName, pl
   }
 
   if (event === "done" && data.ok === false) {
-    renderScriptStreamStatus("failed", data.error || "");
+    const status = data.status === "cancelled" ? "cancelled" : "failed";
+    renderScriptStreamStatus(status, data.error || "");
     setPlanScriptGenerationRecord(moduleName, previousResult.plan_filename || planFilename, {
-      status: "failed",
+      status,
       error: data.error || previousResult.error || "",
       logs: previousResult.logs || "",
     });
-    return { ...previousResult, status: "failed", error: data.error || previousResult.error };
+    return { ...previousResult, status, error: data.error || previousResult.error };
   }
 
   if (event === "done" && data.ok !== false) {
@@ -1348,6 +1590,8 @@ return {
   renderPlanStreamStatus,
   renderGenerationTargetPath,
   renderGenerationDuration,
+  renderPlanGenerationRecord,
+  renderPlanScriptGenerationRecord,
   refreshPlanGenerationDuration,
   startPlanGenerationDurationTimer,
   stopPlanGenerationDurationTimer,
@@ -1379,6 +1623,7 @@ return {
   pollPlanJob,
   showPlanGenerationRecordTab,
   submitPlanGeneration,
+  cancelPlanGeneration,
   readPlanGenerationStream,
   handlePlanStreamEvent,
   generatedPlanFilenames,
@@ -1392,6 +1637,7 @@ return {
   openScriptGenerationModal,
   closeScriptGenerationModal,
   submitScriptGeneration,
+  cancelScriptGeneration,
   readScriptGenerationStream,
   handleScriptStreamEvent,
   splitGeneratedPlanCases,

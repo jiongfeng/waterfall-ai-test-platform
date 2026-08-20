@@ -27,6 +27,7 @@ class SchemaDependencies:
     get_agent_run_events_table: Callable[..., Any]
     get_agent_run_steps_table: Callable[..., Any]
     get_agent_runs_table: Callable[..., Any]
+    get_script_preparation_runs_table: Callable[..., Any]
     get_page_inventory_table: Callable[..., Any]
     get_platform_projects_table: Callable[..., Any]
     get_requirement_module_plans_table: Callable[..., Any]
@@ -74,6 +75,7 @@ def ensure_platform_database_schema(config=None, *, dependencies, state=None):
     get_agent_run_events_table = dependencies.get_agent_run_events_table
     get_agent_run_steps_table = dependencies.get_agent_run_steps_table
     get_agent_runs_table = dependencies.get_agent_runs_table
+    get_script_preparation_runs_table = dependencies.get_script_preparation_runs_table
     get_page_inventory_table = dependencies.get_page_inventory_table
     get_platform_projects_table = dependencies.get_platform_projects_table
     get_requirement_module_plans_table = dependencies.get_requirement_module_plans_table
@@ -139,6 +141,7 @@ def ensure_platform_database_schema(config=None, *, dependencies, state=None):
         agent_run_events_table = get_agent_run_events_table(config)
         agent_run_attempts_table = get_agent_run_attempts_table(config)
         agent_item_retry_flows_table = get_agent_item_retry_flows_table(config)
+        script_preparation_runs_table = get_script_preparation_runs_table(config)
         users_table = platform_table_sql(config, "platform_users")
         roles_table = platform_table_sql(config, "platform_roles")
         permissions_table = platform_table_sql(config, "platform_permissions")
@@ -276,6 +279,8 @@ def ensure_platform_database_schema(config=None, *, dependencies, state=None):
                       coverage_profile VARCHAR(32) NOT NULL DEFAULT 'core',
                       prompt_customized TINYINT(1) NOT NULL DEFAULT 0,
                       prompt_context_json LONGTEXT NULL,
+                      cancel_requested TINYINT(1) NOT NULL DEFAULT 0,
+                      opencode_session_id VARCHAR(128) NULL,
                       log_path TEXT NULL,
                       log_tail LONGTEXT NULL,
                       log_size BIGINT NOT NULL DEFAULT 0,
@@ -705,6 +710,54 @@ def ensure_platform_database_schema(config=None, *, dependencies, state=None):
                 )
                 cursor.execute(
                     f"""
+                    CREATE TABLE IF NOT EXISTS {script_preparation_runs_table} (
+                      id BIGINT NOT NULL AUTO_INCREMENT,
+                      project_id BIGINT NOT NULL,
+                      run_id VARCHAR(64) NOT NULL,
+                      module_name VARCHAR(255) NOT NULL,
+                      status VARCHAR(32) NOT NULL,
+                      active_scope_key VARCHAR(512) NULL,
+                      client_request_id VARCHAR(128) NULL,
+                      plan_filenames_json LONGTEXT NOT NULL,
+                      plan_snapshots_json LONGTEXT NOT NULL,
+                      state_json LONGTEXT NULL,
+                      action_queue_json LONGTEXT NOT NULL,
+                      recent_actions_json LONGTEXT NOT NULL,
+                      cancel_requested TINYINT(1) NOT NULL DEFAULT 0,
+                      current_job_id VARCHAR(64) NULL,
+                      worker_token VARCHAR(64) NULL,
+                      worker_lease_until BIGINT NULL,
+                      error TEXT NULL,
+                      created_by VARCHAR(255) NULL,
+                      started_at BIGINT NULL,
+                      finished_at BIGINT NULL,
+                      created_at BIGINT NOT NULL,
+                      updated_at BIGINT NOT NULL,
+                      PRIMARY KEY (id),
+                      UNIQUE KEY uk_project_script_preparation_run (project_id, run_id),
+                      UNIQUE KEY uk_project_script_preparation_request (project_id, client_request_id),
+                      UNIQUE KEY uk_project_script_preparation_scope (project_id, active_scope_key),
+                      INDEX idx_project_script_preparation_module (project_id, module_name, updated_at),
+                      INDEX idx_project_script_preparation_status (project_id, status, updated_at)
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+                    """
+                )
+                ensure_mysql_column(
+                    cursor,
+                    config,
+                    "script_preparation_runs",
+                    "worker_token",
+                    "worker_token VARCHAR(64) NULL AFTER current_job_id",
+                )
+                ensure_mysql_column(
+                    cursor,
+                    config,
+                    "script_preparation_runs",
+                    "worker_lease_until",
+                    "worker_lease_until BIGINT NULL AFTER worker_token",
+                )
+                cursor.execute(
+                    f"""
                     CREATE TABLE IF NOT EXISTS {agent_run_steps_table} (
                       id BIGINT NOT NULL AUTO_INCREMENT,
                       project_id BIGINT NOT NULL,
@@ -1005,6 +1058,8 @@ def ensure_platform_database_schema(config=None, *, dependencies, state=None):
                 ensure_mysql_column(cursor, config, "test_jobs", "coverage_profile", "coverage_profile VARCHAR(32) NOT NULL DEFAULT 'core'")
                 ensure_mysql_column(cursor, config, "test_jobs", "prompt_customized", "prompt_customized TINYINT(1) NOT NULL DEFAULT 0")
                 ensure_mysql_column(cursor, config, "test_jobs", "prompt_context_json", "prompt_context_json LONGTEXT NULL")
+                ensure_mysql_column(cursor, config, "test_jobs", "cancel_requested", "cancel_requested TINYINT(1) NOT NULL DEFAULT 0")
+                ensure_mysql_column(cursor, config, "test_jobs", "opencode_session_id", "opencode_session_id VARCHAR(128) NULL")
                 ensure_mysql_column(cursor, config, "agent_runs", "plan_generation_json", "plan_generation_json LONGTEXT NULL")
                 ensure_mysql_index(
                     cursor,

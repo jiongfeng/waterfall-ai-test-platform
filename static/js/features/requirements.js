@@ -32,6 +32,7 @@ function createRequirementsFeature(deps) {
     populateCoverageSelect,
     composeCoveragePrompt,
     getProjectRequestHeaders,
+    createClientJobId,
     persistViewState,
     formatModuleRepairDuration,
     createStatusBadge,
@@ -437,7 +438,13 @@ function handleRequirementBatchPlanGenerationEvent({ event, data }, previousResu
     if (updated) {
       mergeRequirementModuleUpdate(updated);
     }
-    const status = data.ok === false ? "failed" : previousResult.status === "running" ? "succeeded" : previousResult.status;
+    const status = data.status === "cancelled"
+      ? "cancelled"
+      : data.ok === false
+        ? "failed"
+        : previousResult.status === "running"
+          ? "succeeded"
+          : previousResult.status;
     const nextResult = {
       ...previousResult,
       status,
@@ -574,6 +581,8 @@ async function generateSelectedRequirementModulePlans() {
   );
 
   state.requirements.planGenerationRunning = true;
+  state.requirements.planGenerationCancelRequested = false;
+  state.requirements.planGenerationJobId = "";
   state.requirements.bulkSelectionMode = false;
   state.requirements.selectedModuleUids.clear();
   state.requirements.activeTab = REQUIREMENT_VIEW_TAB.PLAN_GENERATION_BATCH;
@@ -592,11 +601,18 @@ async function generateSelectedRequirementModulePlans() {
   setNotice("正在批量生成计划，请稍候。");
 
   let hasFailure = false;
+  let wasCancelled = false;
   const renderTimer = window.setInterval(() => renderRequirementPlanGenerationBatchRecord(), 1000);
 
   try {
     for (const moduleItem of modules) {
+      if (state.requirements.planGenerationCancelRequested) {
+        wasCancelled = true;
+        break;
+      }
       const moduleUid = moduleItem.module_uid;
+      const jobId = createClientJobId("planner");
+      state.requirements.planGenerationJobId = jobId;
       const prompt = composeCoveragePrompt(moduleItem.planner_prompt || "", coveragePrompt);
       const itemStartedAt = Date.now();
       setRequirementPlanGenerationBatch(requirementUid, {
@@ -610,6 +626,7 @@ async function generateSelectedRequirementModulePlans() {
         error: "",
         started_at: itemStartedAt,
         finished_at: null,
+        job_id: jobId,
       });
       renderRequirementModules();
 
@@ -632,6 +649,7 @@ async function generateSelectedRequirementModulePlans() {
               coverage_profile: coverageProfile,
               coverage_prompt: coveragePrompt,
               prompt_customized: promptCustomized,
+              job_id: jobId,
             }),
           },
         );
@@ -652,7 +670,7 @@ async function generateSelectedRequirementModulePlans() {
 
         const result = await readRequirementBatchPlanGenerationStream(response, requirementUid, moduleItem);
         const finishedAt = Date.now();
-        if (result.status !== "succeeded" && result.status !== "failed") {
+        if (!["succeeded", "failed", "cancelled"].includes(result.status)) {
           result.status = "failed";
           result.error = "流式响应提前结束。";
         }
@@ -686,25 +704,39 @@ async function generateSelectedRequirementModulePlans() {
         });
         if (result.status === "failed") {
           hasFailure = true;
+        } else if (result.status === "cancelled") {
+          wasCancelled = true;
+          break;
         }
       } catch (error) {
-        hasFailure = true;
+        const cancelled = state.requirements.planGenerationCancelRequested;
+        hasFailure = hasFailure || !cancelled;
+        wasCancelled = wasCancelled || cancelled;
         const finishedAt = Date.now();
         const batch = state.requirements.planGenerationBatches[getRequirementPlanGenerationBatchKey(requirementUid)] || {};
         const item = batch.items?.[moduleUid] || {};
         const prefix = item.logs && !item.logs.endsWith("\n") ? "\n" : "";
         const logs = `${item.logs || ""}${prefix}${error.message}\n`;
         setRequirementPlanGenerationBatchItem(requirementUid, moduleUid, {
-          status: "failed",
+          status: cancelled ? "cancelled" : "failed",
           error: error.message,
           logs,
           finished_at: finishedAt,
         });
+        if (cancelled) {
+          break;
+        }
+      } finally {
+        state.requirements.planGenerationJobId = "";
       }
     }
 
+    if (wasCancelled || state.requirements.planGenerationCancelRequested) {
+      markRequirementPlanGenerationItemsCancelled(requirementUid);
+      wasCancelled = true;
+    }
     setRequirementPlanGenerationBatch(requirementUid, {
-      status: hasFailure ? "failed" : "succeeded",
+      status: wasCancelled ? "cancelled" : hasFailure ? "failed" : "succeeded",
       active_module_uid: "",
       finished_at: Date.now(),
     });
@@ -714,11 +746,59 @@ async function generateSelectedRequirementModulePlans() {
     state.requirements.activeTab = REQUIREMENT_VIEW_TAB.PLAN_GENERATION_BATCH;
     persistViewState();
     renderSideList();
-    setNotice(hasFailure ? "批量生成计划完成，存在失败模块。" : "批量生成计划完成。", hasFailure ? "error" : "success");
+    setNotice(
+      wasCancelled ? "批量生成计划已终止。" : hasFailure ? "批量生成计划完成，存在失败模块。" : "批量生成计划完成。",
+      wasCancelled ? "" : hasFailure ? "error" : "success",
+    );
   } finally {
     window.clearInterval(renderTimer);
     state.requirements.planGenerationRunning = false;
+    state.requirements.planGenerationCancelRequested = false;
+    state.requirements.planGenerationJobId = "";
     renderContent();
+  }
+}
+
+function markRequirementPlanGenerationItemsCancelled(requirementUid) {
+  const batch = state.requirements.planGenerationBatches[getRequirementPlanGenerationBatchKey(requirementUid)];
+  (batch?.module_uids || []).forEach((moduleUid) => {
+    const item = batch.items?.[moduleUid];
+    if (item && ["queued", "running", "cancelling"].includes(item.status)) {
+      setRequirementPlanGenerationBatchItem(requirementUid, moduleUid, {
+        status: "cancelled",
+        error: item.error || "用户终止了生成任务。",
+        finished_at: Date.now(),
+      });
+    }
+  });
+}
+
+async function cancelRequirementPlanGenerationBatch() {
+  if (!state.requirements.planGenerationRunning || state.requirements.planGenerationCancelRequested) {
+    return;
+  }
+  if (!window.confirm("确定终止本次生成吗？已产生的日志会保留，未完成的结果不会保存。")) {
+    return;
+  }
+
+  const requirementUid = state.requirements.selectedUid;
+  const jobId = state.requirements.planGenerationJobId;
+  state.requirements.planGenerationCancelRequested = true;
+  setRequirementPlanGenerationBatch(requirementUid, { status: "cancelling" });
+  renderContent();
+  try {
+    if (jobId) {
+      await requestJson(`/api/jobs/${encodePathPart(jobId)}/cancel`, {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+    }
+    markRequirementPlanGenerationItemsCancelled(requirementUid);
+  } catch (error) {
+    state.requirements.planGenerationCancelRequested = false;
+    setRequirementPlanGenerationBatch(requirementUid, { status: "running" });
+    renderContent();
+    setNotice(error.message, "error");
   }
 }
 
@@ -734,6 +814,16 @@ function renderRequirementsPanel() {
   window.WaterfallI18n?.markDynamic?.(elements.requirementMeta);
   elements.requirementMeta.textContent = `${requirement.filename || "-"} · ${formatTimestampMs(requirement.updated_at)}`;
   elements.requirementDownloadLink.href = `/api/requirements/${encodePathPart(requirement.requirement_uid)}/download`;
+  elements.requirementDeleteButton.disabled =
+    state.requirements.isDeleting ||
+    state.requirements.analysisRunning ||
+    state.requirements.planGenerationRunning ||
+    state.requirements.bulkDeletingModules ||
+    isAnyScriptJobRunning();
+  elements.requirementDeleteButton.textContent =
+    window.WaterfallI18n?.source?.(
+      state.requirements.isDeleting ? "删除中" : "删除",
+    ) || (state.requirements.isDeleting ? "删除中" : "删除");
   elements.requirementPreview.innerHTML = state.requirements.html || "";
   elements.requirementPreviewTab.classList.toggle("active", activeTab === REQUIREMENT_VIEW_TAB.PREVIEW);
   elements.requirementPreviewTab.setAttribute(
@@ -759,9 +849,18 @@ function renderRequirementsPanel() {
     "hidden",
     activeTab !== REQUIREMENT_VIEW_TAB.PLAN_GENERATION_BATCH,
   );
-  elements.analyzeRequirementButton.disabled =
-    state.requirements.analysisRunning || state.requirements.planGenerationRunning || state.requirements.bulkDeletingModules;
-  elements.analyzeRequirementButton.textContent = state.requirements.analysisRunning ? "解析中" : "解析需求";
+  elements.analyzeRequirementButton.classList.toggle("primary-button", !state.requirements.analysisRunning);
+  elements.analyzeRequirementButton.classList.toggle("danger-primary-button", state.requirements.analysisRunning);
+  elements.analyzeRequirementButton.disabled = state.requirements.analysisRunning
+    ? state.requirements.analysisCancelRequested
+    : state.requirements.planGenerationRunning || state.requirements.bulkDeletingModules;
+  elements.analyzeRequirementButton.textContent = state.requirements.analysisRunning
+    ? state.requirements.analysisCancelRequested
+      ? "正在终止…"
+      : "终止解析"
+    : state.requirements.analysisStatus === "cancelled"
+      ? "重新解析"
+      : "解析需求";
   elements.importInventoryButton.disabled =
     state.requirements.analysisRunning || state.requirements.planGenerationRunning || state.requirements.bulkDeletingModules;
 
@@ -776,6 +875,11 @@ function renderRequirementsPanel() {
   } else if (state.requirements.analysisStatus === "failed") {
     elements.requirementAnalysisStatus.textContent = `解析失败${state.requirements.analysisError ? `：${state.requirements.analysisError}` : ""}`;
     elements.requirementAnalysisStatus.classList.add("error");
+  } else if (state.requirements.analysisStatus === "cancelled") {
+    elements.requirementAnalysisStatus.textContent = "解析已取消";
+    elements.requirementAnalysisStatus.classList.add("cancelled");
+  } else if (state.requirements.analysisStatus === "cancelling") {
+    elements.requirementAnalysisStatus.textContent = "正在终止解析";
   } else {
     elements.requirementAnalysisStatus.textContent = state.requirements.analysisRunning ? "解析进行中" : "解析日志";
   }
@@ -995,7 +1099,9 @@ function renderRequirementPlanGenerationBatchRecord() {
   elements.requirementPlanGenerationBatchList.classList.toggle("hidden", !hasBatch);
   elements.requirementPlanGenerationBatchHeader.classList.toggle("hidden", !hasBatch);
   elements.requirementPlanGenerationBatchSummary.textContent =
-    batch?.status === "running" || isRunningBatch
+    batch?.status === "cancelling"
+      ? `正在终止批量生成：已取消 ${statusCounts.cancelled || 0}，成功 ${statusCounts.succeeded || 0}，失败 ${statusCounts.failed || 0}`
+      : batch?.status === "running" || isRunningBatch
       ? requirementText("requirements.batchRunningSummary", {
           succeeded: statusCounts.succeeded || 0,
           failed: statusCounts.failed || 0,
@@ -1005,7 +1111,15 @@ function renderRequirementPlanGenerationBatchRecord() {
       : requirementText("requirements.batchRecordSummary", {
           succeeded: statusCounts.succeeded || 0,
           failed: statusCounts.failed || 0,
-        }, `批量生成计划记录：成功 ${statusCounts.succeeded || 0}，失败 ${statusCounts.failed || 0}`);
+        }, `批量生成计划记录：成功 ${statusCounts.succeeded || 0}，失败 ${statusCounts.failed || 0}，取消 ${statusCounts.cancelled || 0}`);
+  if (elements.requirementPlanGenerationBatchCancelButton) {
+    const canCancel = state.requirements.planGenerationRunning && ["running", "cancelling"].includes(batch?.status);
+    elements.requirementPlanGenerationBatchCancelButton.classList.toggle("hidden", !canCancel);
+    elements.requirementPlanGenerationBatchCancelButton.disabled = state.requirements.planGenerationCancelRequested;
+    elements.requirementPlanGenerationBatchCancelButton.textContent = state.requirements.planGenerationCancelRequested
+      ? "正在终止…"
+      : "终止生成";
+  }
 
   elements.requirementPlanGenerationBatchList.replaceChildren();
   if (!hasBatch) {
@@ -1100,6 +1214,111 @@ function closeRequirementModuleDetail() {
   state.requirements.detailModuleUid = "";
   elements.requirementModuleDetailModal.classList.add("hidden");
   elements.requirementModuleDetailBody.innerHTML = "";
+}
+
+function updateRequirementDeleteSubmitState() {
+  const requirement = state.requirements.current;
+  const isSelectedRequirement = Boolean(
+    requirement &&
+      requirement.requirement_uid === state.requirements.deletingUid,
+  );
+  elements.requirementDeleteSubmit.disabled =
+    !isSelectedRequirement ||
+    state.requirements.isDeleting ||
+    elements.requirementDeleteConfirmation.value.trim() !==
+      String(requirement?.title || "").trim();
+}
+
+function openRequirementDeleteModal() {
+  const requirement = state.requirements.current;
+  if (!requirement || state.requirements.isDeleting) {
+    return;
+  }
+  state.requirements.deletingUid = requirement.requirement_uid;
+  elements.requirementDeleteName.textContent = requirement.title;
+  elements.requirementDeleteConfirmation.value = "";
+  elements.requirementDeleteConfirmation.setCustomValidity("");
+  updateRequirementDeleteSubmitState();
+  elements.requirementDeleteModal.classList.remove("hidden");
+  window.WaterfallI18n?.markDynamic?.(
+    elements.requirementDeleteName,
+  );
+  window.WaterfallI18n?.localizeDom?.(
+    elements.requirementDeleteModal,
+  );
+  window.requestAnimationFrame(() =>
+    elements.requirementDeleteConfirmation.focus(),
+  );
+}
+
+function closeRequirementDeleteModal() {
+  if (state.requirements.isDeleting) {
+    return;
+  }
+  elements.requirementDeleteModal.classList.add("hidden");
+  elements.requirementDeleteConfirmation.value = "";
+  elements.requirementDeleteConfirmation.setCustomValidity("");
+  state.requirements.deletingUid = "";
+  elements.requirementDeleteButton.focus();
+}
+
+async function submitRequirementDelete() {
+  const requirement = state.requirements.current;
+  if (
+    !requirement ||
+    state.requirements.isDeleting ||
+    requirement.requirement_uid !== state.requirements.deletingUid
+  ) {
+    return;
+  }
+  const confirmationName =
+    elements.requirementDeleteConfirmation.value.trim();
+  if (confirmationName !== String(requirement.title || "").trim()) {
+    elements.requirementDeleteConfirmation.setCustomValidity(
+      window.WaterfallI18n?.source?.("输入的需求名称不匹配。") ||
+        "输入的需求名称不匹配。",
+    );
+    elements.requirementDeleteConfirmation.reportValidity();
+    return;
+  }
+
+  state.requirements.isDeleting = true;
+  updateRequirementDeleteSubmitState();
+  renderContent();
+  try {
+    await requestJson(
+      `/api/requirements/${encodePathPart(requirement.requirement_uid)}`,
+      {
+        method: "DELETE",
+        body: JSON.stringify({
+          confirmation_name: confirmationName,
+        }),
+      },
+    );
+    elements.requirementDeleteModal.classList.add("hidden");
+    elements.requirementDeleteConfirmation.value = "";
+    state.requirements.deletingUid = "";
+    await loadRequirements();
+    setNotice(
+      window.WaterfallI18n?.source?.(
+        "需求已删除，已生成的计划、脚本、测试集和执行记录已保留。",
+      ) || "需求已删除，已生成的计划、脚本、测试集和执行记录已保留。",
+      "success",
+    );
+  } catch (error) {
+    const rawMessage =
+      error.message ||
+      "需求删除失败。";
+    const message =
+      window.WaterfallI18n?.source?.(rawMessage) || rawMessage;
+    elements.requirementDeleteConfirmation.setCustomValidity(message);
+    elements.requirementDeleteConfirmation.reportValidity();
+    setNotice(message, "error");
+  } finally {
+    state.requirements.isDeleting = false;
+    updateRequirementDeleteSubmitState();
+    renderContent();
+  }
 }
 
 function renderRequirementModuleDetailModal() {
@@ -1366,6 +1585,8 @@ async function analyzeSelectedRequirement() {
     return;
   }
   state.requirements.analysisRunning = true;
+  state.requirements.analysisCancelRequested = false;
+  state.requirements.analysisJobId = createClientJobId("requirement-analysis");
   state.requirements.analysisLogs = "";
   state.requirements.analysisStatus = "running";
   state.requirements.analysisError = "";
@@ -1374,7 +1595,7 @@ async function analyzeSelectedRequirement() {
     const response = await fetch(`/api/requirements/${encodePathPart(requirementUid)}/analysis-stream`, {
       method: "POST",
       headers: getProjectRequestHeaders({ "Content-Type": "application/json" }),
-      body: JSON.stringify({}),
+      body: JSON.stringify({ job_id: state.requirements.analysisJobId }),
     });
     if (!response.ok) {
       let data;
@@ -1392,13 +1613,41 @@ async function analyzeSelectedRequirement() {
     await loadRequirements();
     await selectRequirement(requirementUid, true);
   } catch (error) {
-    state.requirements.analysisStatus = "failed";
+    const wasCancelled = state.requirements.analysisCancelRequested;
+    state.requirements.analysisStatus = wasCancelled ? "cancelled" : "failed";
     state.requirements.analysisError = error.message;
     state.requirements.analysisLogs += `${state.requirements.analysisLogs.endsWith("\n") ? "" : "\n"}${error.message}\n`;
-    setNotice(error.message, "error");
+    setNotice(wasCancelled ? "需求解析已终止。" : error.message, wasCancelled ? "" : "error");
   } finally {
     state.requirements.analysisRunning = false;
+    state.requirements.analysisCancelRequested = false;
+    state.requirements.analysisJobId = "";
     renderContent();
+  }
+}
+
+async function cancelRequirementAnalysis() {
+  const jobId = state.requirements.analysisJobId;
+  if (!state.requirements.analysisRunning || !jobId || state.requirements.analysisCancelRequested) {
+    return;
+  }
+  if (!window.confirm("确定终止本次生成吗？已产生的日志会保留，未完成的结果不会保存。")) {
+    return;
+  }
+
+  state.requirements.analysisCancelRequested = true;
+  state.requirements.analysisStatus = "cancelling";
+  renderContent();
+  try {
+    await requestJson(`/api/jobs/${encodePathPart(jobId)}/cancel`, {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
+  } catch (error) {
+    state.requirements.analysisCancelRequested = false;
+    state.requirements.analysisStatus = "running";
+    renderContent();
+    setNotice(error.message, "error");
   }
 }
 
@@ -1440,7 +1689,7 @@ function handleRequirementAnalysisEvent(event) {
   } else if (event.event === "delta") {
     state.requirements.analysisLogs += data.text ? `${data.text}\n` : "";
   } else if (event.event === "done") {
-    state.requirements.analysisStatus = data.ok === false ? "failed" : "succeeded";
+    state.requirements.analysisStatus = data.status === "cancelled" ? "cancelled" : data.ok === false ? "failed" : "succeeded";
     state.requirements.analysisError = data.error || "";
     if (Array.isArray(data.modules)) {
       state.requirements.modules = data.modules.map(normalizeRequirementModule).filter(Boolean);
@@ -1516,8 +1765,9 @@ function handleRequirementPlanStreamEvent(event, moduleUid) {
   } else if (event.event === "delta") {
     appendRequirementModulePlanLog(moduleUid, data.text || "");
   } else if (event.event === "done") {
+    const status = data.status === "cancelled" ? "cancelled" : data.ok === false ? "failed" : "succeeded";
     if (moduleItem) {
-      moduleItem.generation_status = data.ok === false ? "failed" : "succeeded";
+      moduleItem.generation_status = status;
       moduleItem.generation_error = data.error || "";
       const updated = normalizeRequirementModule(data.requirement_module);
       if (updated) {
@@ -1713,12 +1963,18 @@ return {
   changeRequirementBatchCoverageProfile,
   resetRequirementBatchCoveragePrompt,
   generateSelectedRequirementModulePlans,
+  cancelRequirementPlanGenerationBatch,
   renderRequirementsPanel,
   getRequirementModuleByUid,
   mergeRequirementModuleUpdate,
   closeRequirementModuleDetail,
+  openRequirementDeleteModal,
+  closeRequirementDeleteModal,
+  updateRequirementDeleteSubmitState,
+  submitRequirementDelete,
   saveRequirementModule,
   analyzeSelectedRequirement,
+  cancelRequirementAnalysis,
   importInventoryFromDefaultDoc,
   loadRequirements,
   selectRequirement,

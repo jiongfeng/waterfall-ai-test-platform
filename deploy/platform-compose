@@ -10,6 +10,7 @@ readonly REPOSITORY_ROOT
 readonly COMPOSE_FILE="${SCRIPT_DIR}/compose.yaml"
 readonly BUILD_COMPOSE_FILE="${SCRIPT_DIR}/compose.build.yaml"
 readonly CONFIG_CONTROL="${SCRIPT_DIR}/configctl.py"
+readonly NATIVE_OPENCODE_CONTROL="${SCRIPT_DIR}/native-opencode.py"
 readonly INSTALL_PREFLIGHT="${SCRIPT_DIR}/preflight-install.py"
 readonly DEFAULT_COMPOSE_PROJECT="waterfall-ai-test-platform"
 readonly SOURCE_CONFIG="${PLATFORM_CONFIG_FILE:-${REPOSITORY_ROOT}/config.json}"
@@ -17,6 +18,9 @@ readonly ENV_FILE="${PLATFORM_ENV_FILE:-${REPOSITORY_ROOT}/.env}"
 readonly RUNTIME_ROOT="${PLATFORM_RUNTIME_DIR:-${SCRIPT_DIR}/.runtime}"
 readonly RUNTIME_CONFIG="${RUNTIME_ROOT}/secrets/platform-config.json"
 COMPOSE_PROJECT=""
+OPENCODE_MODE=""
+PROJECTS_RUNTIME_ROOT=""
+WORKSPACES_RUNTIME_ROOT=""
 
 fail() {
     printf 'platform-compose: %s\n' "$*" >&2
@@ -37,6 +41,10 @@ Supported commands:
   preflight-install  Verify a fresh source install using the secured project identity.
   validate-config    Validate the source config without staging it.
   apply-config       Stage config and force-recreate only the platform service.
+  migrate-native-opencode
+                     Switch an existing macOS volume deployment to native OpenCode.
+  native-opencode-status
+                     Show the native OpenCode health response.
   runtime-id         Print the final platform image's pwuser UID and GID.
   repair-opencode-volumes
                      Repair all four existing OpenCode volumes, then recreate OpenCode.
@@ -46,6 +54,8 @@ Environment:
   PLATFORM_CONFIG_FILE  Source config.json (default: repository config.json).
   PLATFORM_ENV_FILE     Compose environment file (default: repository .env).
   PLATFORM_RUNTIME_DIR  Persistent private runtime directory (default: deploy/.runtime).
+  PLATFORM_OPENCODE_MODE
+                        auto (default), native, or container. auto uses native on macOS.
 
 Run this wrapper from any directory. Direct `docker compose` usage is unsupported.
 EOF
@@ -63,19 +73,34 @@ require_no_arguments() {
 }
 
 stage_runtime_config() {
+    if [[ "${OPENCODE_MODE}" == "native" ]]; then
+        python3 "${CONFIG_CONTROL}" stage \
+            --source "${SOURCE_CONFIG}" \
+            --destination "${RUNTIME_CONFIG}" \
+            --projects-root "${PROJECTS_RUNTIME_ROOT}" \
+            --workspaces-root "${WORKSPACES_RUNTIME_ROOT}" \
+            --opencode-url "http://host.docker.internal:4096" >/dev/null \
+            || fail "Configuration staging failed."
+    else
+        python3 "${CONFIG_CONTROL}" stage \
+            --source "${SOURCE_CONFIG}" \
+            --destination "${RUNTIME_CONFIG}" >/dev/null \
+            || fail "Configuration staging failed."
+    fi
+    export PLATFORM_RUNTIME_CONFIG_FILE="${RUNTIME_CONFIG}"
+}
+
+stage_legacy_runtime_config() {
     python3 "${CONFIG_CONTROL}" stage \
         --source "${SOURCE_CONFIG}" \
         --destination "${RUNTIME_CONFIG}" >/dev/null \
-        || fail "Configuration staging failed."
+        || fail "Legacy configuration staging failed."
     export PLATFORM_RUNTIME_CONFIG_FILE="${RUNTIME_CONFIG}"
 }
 
 reuse_or_stage_runtime_config() {
-    if python3 "${CONFIG_CONTROL}" validate-runtime \
-        --source "${RUNTIME_CONFIG}" >/dev/null 2>&1; then
-        export PLATFORM_RUNTIME_CONFIG_FILE="${RUNTIME_CONFIG}"
-        return
-    fi
+    # Staging is cheap and prevents a valid config from the other topology
+    # (native versus container) from being reused accidentally.
     stage_runtime_config
 }
 
@@ -96,6 +121,49 @@ resolve_compose_project_identity() {
     fi
 }
 
+configure_runtime_topology() {
+    local requested="${PLATFORM_OPENCODE_MODE:-auto}"
+    case "${requested}" in
+        auto)
+            if [[ "$(uname -s)" == "Darwin" ]]; then
+                OPENCODE_MODE="native"
+            else
+                OPENCODE_MODE="container"
+            fi
+            ;;
+        native | container)
+            OPENCODE_MODE="${requested}"
+            ;;
+        *)
+            fail "PLATFORM_OPENCODE_MODE must be auto, native, or container."
+            ;;
+    esac
+
+    if [[ "${OPENCODE_MODE}" == "native" ]]; then
+        [[ "$(uname -s)" == "Darwin" ]] \
+            || fail "Native OpenCode mode is supported only on macOS."
+        PROJECTS_RUNTIME_ROOT="${RUNTIME_ROOT}/data/playwright-projects"
+        WORKSPACES_RUNTIME_ROOT="${RUNTIME_ROOT}/data/playwright-workspaces"
+        export PLATFORM_PROJECTS_MOUNT_TYPE=bind
+        export PLATFORM_PROJECTS_MOUNT_SOURCE="${PROJECTS_RUNTIME_ROOT}"
+        export PLATFORM_PROJECTS_MOUNT_TARGET="${PROJECTS_RUNTIME_ROOT}"
+        export PLATFORM_WORKSPACES_MOUNT_TYPE=bind
+        export PLATFORM_WORKSPACES_MOUNT_SOURCE="${WORKSPACES_RUNTIME_ROOT}"
+        export PLATFORM_WORKSPACES_MOUNT_TARGET="${WORKSPACES_RUNTIME_ROOT}"
+        unset COMPOSE_PROFILES || true
+    else
+        PROJECTS_RUNTIME_ROOT=/data/playwright-projects
+        WORKSPACES_RUNTIME_ROOT=/data/playwright-workspaces
+        export PLATFORM_PROJECTS_MOUNT_TYPE=volume
+        export PLATFORM_PROJECTS_MOUNT_SOURCE=platform_projects
+        export PLATFORM_PROJECTS_MOUNT_TARGET=/data/playwright-projects
+        export PLATFORM_WORKSPACES_MOUNT_TYPE=volume
+        export PLATFORM_WORKSPACES_MOUNT_SOURCE=platform_workspaces
+        export PLATFORM_WORKSPACES_MOUNT_TARGET=/data/playwright-workspaces
+        export COMPOSE_PROFILES=container-opencode
+    fi
+}
+
 run_compose() {
     docker compose \
         --env-file "${ENV_FILE}" \
@@ -103,6 +171,33 @@ run_compose() {
         --project-name "${COMPOSE_PROJECT}" \
         --file "${COMPOSE_FILE}" \
         "$@"
+}
+
+run_legacy_container_compose() (
+    export PLATFORM_PROJECTS_MOUNT_TYPE=volume
+    export PLATFORM_PROJECTS_MOUNT_SOURCE=platform_projects
+    export PLATFORM_PROJECTS_MOUNT_TARGET=/data/playwright-projects
+    export PLATFORM_WORKSPACES_MOUNT_TYPE=volume
+    export PLATFORM_WORKSPACES_MOUNT_SOURCE=platform_workspaces
+    export PLATFORM_WORKSPACES_MOUNT_TARGET=/data/playwright-workspaces
+    docker compose \
+        --env-file "${ENV_FILE}" \
+        --project-directory "${REPOSITORY_ROOT}" \
+        --project-name "${COMPOSE_PROJECT}" \
+        --file "${COMPOSE_FILE}" \
+        --profile container-opencode \
+        "$@"
+)
+
+run_native_opencode() {
+    python3 "${NATIVE_OPENCODE_CONTROL}" "$@" \
+        --runtime-root "${RUNTIME_ROOT}" \
+        --env-file "${ENV_FILE}"
+}
+
+start_native_opencode() {
+    [[ "${OPENCODE_MODE}" == "native" ]] || return 0
+    run_native_opencode start --wait-seconds 60
 }
 
 run_source_build() {
@@ -149,6 +244,8 @@ run_release_up() {
         esac
     done
 
+    start_native_opencode \
+        || fail "Native OpenCode failed to start. Run migrate-native-opencode first for an existing volume deployment."
     run_compose up --no-build --pull never "${runtime_options[@]}"
 }
 
@@ -200,6 +297,8 @@ run_compose_up() {
 
         pull_missing_source_runtime_images
         run_source_build
+        start_native_opencode \
+            || fail "Native OpenCode failed to start. Run migrate-native-opencode first for an existing volume deployment."
         run_compose up --no-build --pull never "${runtime_options[@]}"
         return
     fi
@@ -207,6 +306,8 @@ run_compose_up() {
         run_release_up "$@"
         return
     fi
+    start_native_opencode \
+        || fail "Native OpenCode failed to start. Run migrate-native-opencode first for an existing volume deployment."
     run_compose up "$@"
 }
 
@@ -217,9 +318,9 @@ import json
 import sys
 
 config = json.load(sys.stdin)
-image = config.get("services", {}).get("opencode", {}).get("image", "")
+image = config.get("services", {}).get("platform", {}).get("image", "")
 if not image:
-    raise SystemExit("platform-compose: resolved Compose config has no OpenCode image")
+    raise SystemExit("platform-compose: resolved Compose config has no platform image")
 print(image)
 '
 }
@@ -283,9 +384,15 @@ verify_container_contract() {
 verify_stack() {
     local service
 
-    for service in mysql opencode platform; do
+    for service in mysql platform; do
         verify_container_contract "${service}"
     done
+    if [[ "${OPENCODE_MODE}" == "container" ]]; then
+        verify_container_contract opencode
+    else
+        run_native_opencode verify \
+            || fail "Native OpenCode verification failed."
+    fi
     # Variables are intentionally expanded in the container.
     # shellcheck disable=SC2016
     run_compose exec --no-TTY --interactive=false platform /bin/sh -ceu '
@@ -293,9 +400,10 @@ verify_stack() {
         test -r "$PLATFORM_CONFIG_PATH"
         test ! -w "$PLATFORM_CONFIG_PATH"
     '
-    # Variables are intentionally expanded in the container.
-    # shellcheck disable=SC2016
-    run_compose exec --no-TTY --interactive=false opencode /bin/sh -ceu '
+    if [[ "${OPENCODE_MODE}" == "container" ]]; then
+        # Variables are intentionally expanded in the container.
+        # shellcheck disable=SC2016
+        run_compose exec --no-TTY --interactive=false opencode /bin/sh -ceu '
         runtime_home="${HOME:-/home/pwuser}"
         config_root="${XDG_CONFIG_HOME:-${runtime_home}/.config}/opencode"
         data_root="${XDG_DATA_HOME:-${runtime_home}/.local/share}/opencode"
@@ -322,7 +430,15 @@ verify_stack() {
             test "$(stat --format="%a" "${probe}")" = "600"
             rm -f -- "${probe}"
         done
-    '
+        '
+    else
+        # Positional parameters are intentionally expanded in the container.
+        # shellcheck disable=SC2016
+        run_compose exec --no-TTY --interactive=false platform /bin/sh -ceu '
+            test -d "$1"
+            test -d "$2"
+        ' helper "${PROJECTS_RUNTIME_ROOT}" "${WORKSPACES_RUNTIME_ROOT}"
+    fi
     printf 'waterfall-ai-test-platform: verified\n'
 }
 
@@ -602,6 +718,68 @@ repair_state_volume() {
         "${state_volume}" "${runtime_uid}" "${runtime_gid}"
 }
 
+restore_legacy_topology() {
+    local database_migrated="$1"
+
+    run_native_opencode stop >/dev/null 2>&1 || true
+    if [[ "${database_migrated}" == "true" ]]; then
+        python3 "${NATIVE_OPENCODE_CONTROL}" migrate-database \
+            --runtime-root "${RUNTIME_ROOT}" \
+            --compose-project "${COMPOSE_PROJECT}" \
+            --projects-root "${PROJECTS_RUNTIME_ROOT}" \
+            --workspaces-root "${WORKSPACES_RUNTIME_ROOT}" \
+            --reverse || true
+    fi
+    stage_legacy_runtime_config
+    run_legacy_container_compose up --detach --no-build --pull never \
+        --wait --wait-timeout 180 mysql opencode platform || true
+}
+
+migrate_native_opencode() {
+    local image_ref
+    local database_migrated="false"
+
+    [[ "${OPENCODE_MODE}" == "native" ]] \
+        || fail "migrate-native-opencode requires native mode on macOS."
+    image_ref="$(resolve_platform_image)"
+    ensure_local_image "${image_ref}"
+
+    printf 'platform-compose: stopping platform and legacy OpenCode writers ...\n'
+    run_legacy_container_compose stop platform opencode
+
+    if ! python3 "${NATIVE_OPENCODE_CONTROL}" migrate-volumes \
+        --runtime-root "${RUNTIME_ROOT}" \
+        --compose-project "${COMPOSE_PROJECT}" \
+        --platform-image "${image_ref}"; then
+        restore_legacy_topology "false"
+        fail "Docker volume migration failed; the legacy topology was restored."
+    fi
+
+    if python3 "${NATIVE_OPENCODE_CONTROL}" migrate-database \
+        --runtime-root "${RUNTIME_ROOT}" \
+        --compose-project "${COMPOSE_PROJECT}" \
+        --projects-root "${PROJECTS_RUNTIME_ROOT}" \
+        --workspaces-root "${WORKSPACES_RUNTIME_ROOT}"; then
+        database_migrated="true"
+    else
+        restore_legacy_topology "false"
+        fail "Database path migration failed; the legacy topology was restored."
+    fi
+
+    stage_runtime_config
+    if start_native_opencode \
+        && run_compose up --detach --no-build --pull never --wait --wait-timeout 180 mysql platform \
+        && verify_stack; then
+        run_legacy_container_compose stop opencode >/dev/null 2>&1 || true
+        printf 'platform-compose: native OpenCode migration completed; legacy Docker volumes were retained.\n'
+        return 0
+    fi
+
+    printf 'platform-compose: native migration verification failed; restoring legacy topology ...\n' >&2
+    restore_legacy_topology "${database_migrated}"
+    fail "Native migration failed and the legacy topology was restored."
+}
+
 main() {
     local command_name="${1:-}"
     local option
@@ -615,7 +793,7 @@ main() {
     shift
 
     case "${command_name}" in
-        up | ps | logs | stop | down | verify | preflight-install | validate-config | apply-config | runtime-id | repair-opencode-volumes | repair-state)
+        up | ps | logs | stop | down | verify | preflight-install | validate-config | apply-config | runtime-id | repair-opencode-volumes | repair-state | migrate-native-opencode | native-opencode-status)
             ;;
         *)
             usage >&2
@@ -643,14 +821,15 @@ main() {
     require_command docker
     validate_environment_file
     resolve_compose_project_identity
+    configure_runtime_topology
     docker compose version >/dev/null 2>&1 \
         || fail "Docker Compose v2 is required."
 
     case "${command_name}" in
-        up | apply-config)
+        up | apply-config | migrate-native-opencode)
             stage_runtime_config
             ;;
-        ps | logs | stop | down | verify | runtime-id | repair-opencode-volumes | repair-state)
+        ps | logs | stop | down | verify | runtime-id | repair-opencode-volumes | repair-state | native-opencode-status)
             reuse_or_stage_runtime_config
             ;;
     esac
@@ -661,10 +840,16 @@ main() {
                 run_compose_up "$@"
             else
                 run_compose "${command_name}" "$@"
+                if [[ "${command_name}" == "stop" && "${OPENCODE_MODE}" == "native" ]]; then
+                    run_native_opencode stop
+                fi
             fi
             ;;
         down)
             run_compose down "$@"
+            if [[ "${OPENCODE_MODE}" == "native" ]]; then
+                run_native_opencode stop
+            fi
             ;;
         verify)
             require_no_arguments "${command_name}" "$@"
@@ -678,6 +863,8 @@ main() {
             ;;
         apply-config)
             require_no_arguments "${command_name}" "$@"
+            start_native_opencode \
+                || fail "Native OpenCode failed to start."
             run_compose up --detach --no-deps --force-recreate \
                 --no-build --pull never platform
             ;;
@@ -689,11 +876,25 @@ main() {
             ;;
         repair-opencode-volumes)
             require_no_arguments "${command_name}" "$@"
+            [[ "${OPENCODE_MODE}" == "container" ]] \
+                || fail "OpenCode Docker volume repair is available only in container mode."
             repair_opencode_volumes
             ;;
         repair-state)
             require_no_arguments "${command_name}" "$@"
+            [[ "${OPENCODE_MODE}" == "container" ]] \
+                || fail "OpenCode Docker state repair is available only in container mode."
             repair_state_volume
+            ;;
+        migrate-native-opencode)
+            require_no_arguments "${command_name}" "$@"
+            migrate_native_opencode
+            ;;
+        native-opencode-status)
+            require_no_arguments "${command_name}" "$@"
+            [[ "${OPENCODE_MODE}" == "native" ]] \
+                || fail "native-opencode-status requires native mode."
+            run_native_opencode status
             ;;
     esac
 }

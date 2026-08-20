@@ -134,6 +134,17 @@ def parse_and_validate(raw: bytes) -> dict[str, object]:
     if default_project_key not in project_keys:
         raise ConfigError("default_project_key must reference an entry in projects")
 
+    configured_language = config.get("default_project_language")
+    if configured_language is not None:
+        default_project_language = _require_nonempty_text(
+            configured_language,
+            "default_project_language",
+        )
+        if default_project_language.lower() not in {"zh-cn", "en"}:
+            raise ConfigError(
+                "default_project_language must be 'zh-CN' or 'en'"
+            )
+
     database = config.get("platform_database")
     if not isinstance(database, dict):
         raise ConfigError("platform_database must be an object")
@@ -319,8 +330,78 @@ def _ensure_private_directory(path: Path) -> None:
     _validate_private_directory(path)
 
 
-def stage_config(source: Path, destination: Path) -> None:
+def _replace_path_prefix(value: object, old_root: str, new_root: str) -> object:
+    if not isinstance(value, str):
+        return value
+    if value == old_root:
+        return new_root
+    prefix = old_root.rstrip("/") + "/"
+    if value.startswith(prefix):
+        return new_root.rstrip("/") + "/" + value[len(prefix) :]
+    return value
+
+
+def apply_runtime_overrides(
+    config: dict[str, object],
+    *,
+    projects_root: Path | None = None,
+    workspaces_root: Path | None = None,
+    opencode_url: str | None = None,
+) -> dict[str, object]:
+    """Return a staged-only config adapted to the local runtime topology."""
+    if projects_root is None and workspaces_root is None and opencode_url is None:
+        return config
+
+    overridden = json.loads(json.dumps(config))
+    replacements: list[tuple[str, str]] = []
+    if projects_root is not None:
+        if not projects_root.is_absolute():
+            raise ConfigError("projects runtime root must be an absolute path")
+        replacements.append(("/data/playwright-projects", str(projects_root)))
+    if workspaces_root is not None:
+        if not workspaces_root.is_absolute():
+            raise ConfigError("workspaces runtime root must be an absolute path")
+        replacements.append(("/data/playwright-workspaces", str(workspaces_root)))
+
+    for field in (
+        "project_workspace_root",
+        "project_template_dependency_source_root",
+    ):
+        value = overridden.get(field)
+        for old_root, new_root in replacements:
+            value = _replace_path_prefix(value, old_root, new_root)
+        overridden[field] = value
+
+    projects = overridden.get("projects")
+    if isinstance(projects, list):
+        for project in projects:
+            if not isinstance(project, dict):
+                continue
+            value = project.get("playwright_project_root")
+            for old_root, new_root in replacements:
+                value = _replace_path_prefix(value, old_root, new_root)
+            project["playwright_project_root"] = value
+
+    if opencode_url is not None:
+        overridden["opencode_server_url"] = opencode_url
+    return parse_and_validate(canonical_bytes(overridden))
+
+
+def stage_config(
+    source: Path,
+    destination: Path,
+    *,
+    projects_root: Path | None = None,
+    workspaces_root: Path | None = None,
+    opencode_url: str | None = None,
+) -> None:
     config = parse_and_validate(read_secure_source(source))
+    config = apply_runtime_overrides(
+        config,
+        projects_root=projects_root,
+        workspaces_root=workspaces_root,
+        opencode_url=opencode_url,
+    )
     canonical = canonical_bytes(config)
 
     runtime_directory = destination.parent.parent
@@ -428,6 +509,9 @@ def build_parser() -> argparse.ArgumentParser:
     stage_parser = subparsers.add_parser("stage")
     stage_parser.add_argument("--source", type=Path, required=True)
     stage_parser.add_argument("--destination", type=Path, required=True)
+    stage_parser.add_argument("--projects-root", type=Path)
+    stage_parser.add_argument("--workspaces-root", type=Path)
+    stage_parser.add_argument("--opencode-url")
     return parser
 
 
@@ -446,7 +530,13 @@ def main() -> int:
         elif args.command == "compose-project":
             result = resolve_compose_project(args.source, args.default)
         else:
-            stage_config(args.source, args.destination)
+            stage_config(
+                args.source,
+                args.destination,
+                projects_root=args.projects_root,
+                workspaces_root=args.workspaces_root,
+                opencode_url=args.opencode_url,
+            )
             result = "staged"
     except ConfigError as exc:
         print(f"configctl: {exc}", file=sys.stderr)

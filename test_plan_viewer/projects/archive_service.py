@@ -666,6 +666,7 @@ class ProjectArchiveService:
                 config
             )
             tables_by_project = [
+                "script_preparation_runs",
                 "setup_runs",
                 "setup_bindings",
                 "setup_scripts",

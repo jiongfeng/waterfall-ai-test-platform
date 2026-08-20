@@ -2,6 +2,12 @@
 Thumbs.db
 .agents/
 .codex/
+!.codex/
+.codex/*
+!.codex/skills/
+.codex/skills/*
+!.codex/skills/update-local-mac-platform/
+!.codex/skills/build-centos-offline-upgrade/
 .codex-audits/
 
 __pycache__/
@@ -40,3 +46,22 @@ playwright-report/
 *.db
 *.sqlite
 *.sqlite3
+
+# Generated release/offline artifacts belong in GitHub Releases or artifact storage.
+/artifacts/
+/deploy-packages/
+/offline-packages/
+/*.tar
+/*.tar.gz
+/*.tar.zst
+/*.tgz
+/*.zip
+
+# Local acceptance output, retained scratch copies, and offline binary caches.
+/outputs/
+/test-plan-viewer/
+/third_party/
+
+# Local operational notes and environment-specific documents.
+/AGENT-STREAM-PERSISTENCE-REMEDIATION-PLAN.md
+/项目说明书.md

@@ -12,12 +12,23 @@ vm.runInContext(
 );
 
 function element() {
+  const classes = new Set(["hidden"]);
   return {
     value: "",
     textContent: "",
     disabled: false,
     children: [],
-    classList: { add() {}, remove() {}, toggle() {} },
+    classList: {
+      add(value) { classes.add(value); },
+      remove(value) { classes.delete(value); },
+      toggle(value, force) {
+        const enabled = force === undefined ? !classes.has(value) : force;
+        if (enabled) classes.add(value);
+        else classes.delete(value);
+        return enabled;
+      },
+      contains(value) { return classes.has(value); },
+    },
     appendChild(child) {
       this.children.push(child);
       return child;
@@ -38,9 +49,16 @@ const state = {
     currentKey: "",
     current: null,
     defaultKey: "",
+    defaultLanguage: "en",
     workspaceRoot: "",
     isExporting: false,
     isImporting: false,
+    isCreating: false,
+    isUpdating: false,
+    isDeleting: false,
+    manageView: "list",
+    editingKey: "",
+    deletingKey: "",
   },
   requirements: {
     items: [],
@@ -125,20 +143,36 @@ const state = {
 };
 const elements = {
   projectSelect: element(),
-  createProjectButton: element(),
-  exportProjectButton: element(),
-  importProjectButton: element(),
+  manageProjectButton: element(),
   testSuiteProgressModal: element(),
 };
 for (const name of [
+  "projectManageModal",
+  "projectManageClose",
+  "projectManageBack",
+  "projectManageTitle",
+  "projectManageDescription",
+  "projectManageFeedback",
+  "projectManageListView",
+  "projectManageSearch",
+  "projectManageCreate",
+  "projectManageImport",
+  "projectManageSummary",
+  "projectManageTableBody",
+  "projectManageEmpty",
+  "projectCreateView",
+  "projectImportView",
+  "projectEditView",
+  "projectCreateFooter",
+  "projectImportFooter",
+  "projectEditFooter",
   "newProjectKey",
   "newProjectName",
+  "newProjectLanguage",
   "newProjectSpecsDir",
   "newProjectTestsDir",
   "newProjectDescription",
   "projectCreateWorkspaceHint",
-  "projectCreateModal",
-  "projectImportModal",
   "projectImportWorkspaceHint",
   "projectImportFile",
   "importProjectKey",
@@ -146,12 +180,31 @@ for (const name of [
   "importProjectSpecsDir",
   "importProjectTestsDir",
   "importProjectDescription",
+  "projectCreateSubmit",
+  "projectCreateCancel",
+  "projectImportSubmit",
+  "projectImportCancel",
+  "projectEditSubmit",
+  "projectEditCancel",
+  "editProjectKey",
+  "editProjectName",
+  "editProjectDescription",
+  "projectDeleteModal",
+  "projectDeleteClose",
+  "projectDeleteCancel",
+  "projectDeleteSubmit",
+  "projectDeleteName",
+  "projectDeleteKey",
+  "projectDeleteConfirmation",
 ]) {
   elements[name] = element();
 }
+elements.projectManageTableBody.innerHTML = "";
+elements.projectManageTableBody.querySelector = () => null;
 
 const stored = new Map();
 const calls = { render: 0, hydrate: 0, load: 0, history: 0 };
+const createdPayloads = [];
 const project = {
   project_id: 1,
   project_key: "alpha",
@@ -193,13 +246,18 @@ const feature = context.window.createProjectsFeature({
   isPlainObject: (value) =>
     Boolean(value && typeof value === "object" && !Array.isArray(value)),
   getProjectRequestHeaders: (headers) => headers,
-  requestJson: async (url) => {
+  requestJson: async (url, options = {}) => {
     assert.strictEqual(url, "/api/projects");
+    if (options.method === "POST") {
+      createdPayloads.push(JSON.parse(options.body));
+      return { project };
+    }
     return {
       projects: [project],
       current_project: project,
       default_project: project,
       project_workspace_root: "/workspace",
+      default_project_language: "zh-CN",
     };
   },
   readFetchError: async () => ({}),
@@ -218,6 +276,7 @@ const feature = context.window.createProjectsFeature({
     calls.render += 1;
   },
   setNotice: () => {},
+  escapeHtml: (value) => String(value ?? ""),
 });
 
 (async () => {
@@ -232,8 +291,16 @@ const feature = context.window.createProjectsFeature({
   await feature.loadProjects();
   assert.strictEqual(state.project.currentKey, "alpha");
   assert.strictEqual(state.project.current.name, "Alpha");
+  assert.strictEqual(state.project.defaultLanguage, "zh-CN");
   assert.strictEqual(stored.get("current-project"), "alpha");
   assert.strictEqual(elements.projectSelect.children.length, 1);
+  feature.openProjectCreateModal();
+  assert.strictEqual(elements.newProjectLanguage.value, "zh-CN");
+  elements.newProjectKey.value = "alpha";
+  elements.newProjectName.value = "Alpha";
+  await feature.submitProjectCreate();
+  assert.strictEqual(createdPayloads.length, 1);
+  assert.strictEqual(createdPayloads[0].language, "zh-CN");
 
   state.project.projects.push({
     project_key: "beta",

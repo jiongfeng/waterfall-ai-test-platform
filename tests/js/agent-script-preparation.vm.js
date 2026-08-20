@@ -313,6 +313,17 @@ const waitingItem = {
       finished_at: 1785456020500,
     },
     {
+      stage_id: "stage-cancelled",
+      sequence_no: 4.75,
+      stage_type: "generate",
+      stage_name: "生成脚本",
+      status: "failed",
+      error: "脚本准备任务已取消。",
+      result: { error: "脚本准备任务已取消。", error_type: "cancelled" },
+      started_at: 1785456020600,
+      finished_at: 1785456020700,
+    },
+    {
       stage_id: "stage-human",
       sequence_no: 5,
       stage_type: "human_review",
@@ -379,6 +390,7 @@ const snapshot = {
 let currentSnapshot = snapshot;
 let snapshotInterceptor = null;
 let itemActionMessage = "";
+let itemActionError = "";
 
 const requests = [];
 async function requestJson(url, options = {}) {
@@ -404,6 +416,11 @@ async function requestJson(url, options = {}) {
     };
   }
   if (url.endsWith("/script-items/script-1/actions")) {
+    if (itemActionError) {
+      const message = itemActionError;
+      itemActionError = "";
+      throw new Error(message);
+    }
     const updatedItem = {
       ...waitingItem,
       status: "ready",
@@ -535,6 +552,10 @@ const feature = context.window.createAgentScriptPreparationFeature(root, {
   assert.ok(elements.detailMeta.innerHTML.includes("Script preparation</span>"));
   assert.ok(elements.detailMeta.innerHTML.includes("data-i18n-dynamic>登录模块</span>"));
 
+  feature.selectHistory("stage-cancelled");
+  assert.ok(elements.detailContent.innerHTML.includes("The script-preparation task was cancelled."));
+  assert.ok(!elements.detailContent.innerHTML.includes("脚本准备任务已取消。"));
+
   feature.selectHistory("stage-vendor");
   assert.ok(elements.detailContent.innerHTML.includes('data-i18n-dynamic>计划</span>'));
   assert.ok(elements.detailContent.innerHTML.includes('data-i18n-dynamic>角色</strong>'));
@@ -575,11 +596,28 @@ const feature = context.window.createAgentScriptPreparationFeature(root, {
   assert.strictEqual(elements.detailModal.inert, false);
   assert.strictEqual(elements.detailModal.getAttribute("aria-hidden"), "false");
 
+  feature.openEditor("edit");
+  const concurrentItem = {
+    ...waitingItem,
+    current_revision_id: "revision-3-concurrent",
+    current_script: { content: "test('newer remote version', async () => {});" },
+  };
+  feature.applyEvent({ payload: { script_preparation: { ...currentSnapshot, items: [concurrentItem, readyItem] } } });
+  assert.strictEqual(elements.editorSave.disabled, true);
+  assert.ok(elements.editorDescription.textContent.includes("脚本版本已更新"));
+  itemActionError = "脚本版本已变化，请刷新后重试。";
+  await assert.rejects(feature.submitEditor(), /脚本版本已变化/);
+  const staleEditRequest = requests.filter((entry) => entry.url.endsWith("/script-1/actions")).at(-1);
+  assert.strictEqual(staleEditRequest.body.action, "edit");
+  assert.strictEqual(staleEditRequest.body.expected_revision_id, "revision-2");
+  feature.closeEditor();
+  await feature.refresh();
+
   await feature.performItemAction("repair", {
     original_prompt: "人工更新后的修复 Prompt",
     supplemental_prompt: "仅匹配可见按钮",
   });
-  const actionRequest = requests.find((entry) => entry.url.endsWith("/script-1/actions"));
+  const actionRequest = requests.filter((entry) => entry.url.endsWith("/script-1/actions")).at(-1);
   assert.strictEqual(actionRequest.body.action, "repair");
   assert.strictEqual(actionRequest.body.expected_revision_id, "revision-2");
   assert.strictEqual(actionRequest.body.supplemental_prompt, "仅匹配可见按钮");
@@ -697,6 +735,195 @@ const feature = context.window.createAgentScriptPreparationFeature(root, {
   assert.strictEqual(elements.batchExecute.disabled, true);
   assert.strictEqual(elements.batchRepair.disabled, true);
   feature.closeDetail();
+
+  const environmentBlockedItem = {
+    item_id: "script-environment-blocked",
+    module_name: "支付模块",
+    plan_filename: "环境阻断.md",
+    filename: "环境阻断.spec.ts",
+    status: "awaiting_human",
+    current_revision_id: "environment-revision-1",
+    current_script: { content: "test('environment', async () => {});" },
+    latest_analysis: {
+      summary: "测试执行被平台环境策略阻止。请由管理员启用执行环境后重新执行。",
+      recommended_action: "execute",
+      analysis_status: "blocked",
+      blocked_by_environment: true,
+      prompt_options: {
+        regenerate: { original_prompt: "重新生成环境脚本", supplemental_prompt: "", enabled: true },
+        repair: { original_prompt: "修复环境脚本", supplemental_prompt: "", enabled: false },
+      },
+    },
+    history: [
+      {
+        stage_id: "environment-generate",
+        sequence_no: 1,
+        stage_type: "generate",
+        status: "succeeded",
+        output_revision_id: "environment-revision-1",
+      },
+      {
+        stage_id: "environment-blocked",
+        sequence_no: 2,
+        stage_type: "execute",
+        status: "blocked",
+        error: "执行环境未启用",
+      },
+      {
+        stage_id: "environment-human",
+        sequence_no: 3,
+        stage_type: "human_review",
+        status: "pending",
+      },
+    ],
+  };
+  currentSnapshot = {
+    status: "awaiting_action",
+    counts: { total: 1, ready: 0, awaiting_human: 1, abandoned: 0, busy: 0, queued: 0 },
+    items: [environmentBlockedItem],
+  };
+  await feature.activate("agent-environment-blocked");
+  await feature.openDetail("script-environment-blocked");
+  assert.ok(elements.detailContent.innerHTML.includes("环境阻断"));
+  assert.ok(elements.detailContent.innerHTML.includes("修复环境后重新执行"));
+  assert.ok(!elements.detailContent.innerHTML.includes("分析失败"));
+  assert.ok(!elements.detailContent.innerHTML.includes("未形成自动推荐"));
+  assert.match(
+    elements.actionPanel.innerHTML,
+    /primary-button[^>]*data-script-preparation-action="item-execute"/,
+  );
+  assert.match(elements.actionPanel.innerHTML, /data-script-preparation-action="item-repair" disabled/);
+  assert.ok(elements.actionPanel.innerHTML.includes("环境配置恢复后可直接重新执行当前候选"));
+  assert.ok(!elements.actionPanel.innerHTML.includes("AI 未形成有效推荐"));
+  assert.strictEqual(
+    (elements.actionPanel.innerHTML.match(/data-script-preparation-action="item-execute"/g) || []).length,
+    1,
+    "an execute recommendation must not duplicate the ordinary execute action",
+  );
+  feature.closeDetail();
+
+  const externalChangeItem = {
+    ...environmentBlockedItem,
+    item_id: "script-external-change",
+    plan_filename: "外部版本更新.md",
+    filename: "external-change.spec.ts",
+    latest_analysis: {
+      summary: "脚本资产已在准备流程外更新。",
+      recommended_action: "execute",
+      analysis_status: "external_change",
+    },
+    history: [
+      environmentBlockedItem.history[0],
+      {
+        stage_id: "external-change-human",
+        sequence_no: 2,
+        stage_type: "human_review",
+        status: "pending",
+      },
+    ],
+  };
+  currentSnapshot = {
+    status: "awaiting_action",
+    counts: { total: 1, ready: 0, awaiting_human: 1, abandoned: 0, busy: 0, queued: 0 },
+    items: [externalChangeItem],
+  };
+  await feature.activate("agent-external-change");
+  assert.ok(elements.tableBody.innerHTML.includes("脚本版本已更新，请重新执行当前版本"));
+  await feature.openDetail("script-external-change");
+  assert.ok(elements.detailContent.innerHTML.includes("脚本版本已更新，请重新执行当前版本"));
+  assert.ok(!elements.detailContent.innerHTML.includes("分析失败"));
+  assert.ok(elements.actionPanel.innerHTML.includes("脚本版本已更新，请重新执行当前版本"));
+  assert.ok(elements.actionPanel.innerHTML.includes("当前候选脚本已更新，无需修改 Prompt"));
+  assert.ok(!elements.actionPanel.innerHTML.includes("环境配置恢复后"));
+  assert.strictEqual(
+    (elements.actionPanel.innerHTML.match(/data-script-preparation-action="item-execute"/g) || []).length,
+    1,
+    "external-change guidance and the execute action must share one CTA",
+  );
+  activeLocale = "en";
+  feature.render();
+  assert.ok(elements.actionPanel.innerHTML.includes("The script version was updated. Run the current version again"));
+  feature.closeDetail();
+
+  const genericExecuteItem = {
+    ...externalChangeItem,
+    item_id: "script-generic-execute",
+    plan_filename: "瞬时失败.md",
+    latest_analysis: {
+      summary: "The last execution failed because of a transient condition.",
+      recommended_action: "execute",
+      analysis_status: "complete",
+    },
+  };
+  currentSnapshot = {
+    status: "awaiting_action",
+    counts: { total: 1, ready: 0, awaiting_human: 1, abandoned: 0, busy: 0, queued: 0 },
+    items: [genericExecuteItem],
+  };
+  await feature.activate("agent-generic-execute");
+  assert.ok(elements.tableBody.innerHTML.includes("Run the current version again"));
+  await feature.openDetail("script-generic-execute");
+  assert.ok(!elements.detailContent.innerHTML.includes("Analysis failed"));
+  assert.ok(elements.actionPanel.innerHTML.includes("Use recommendation: Run current version again"));
+  assert.strictEqual(
+    (elements.actionPanel.innerHTML.match(/data-script-preparation-action="item-execute"/g) || []).length,
+    1,
+    "a generic execute recommendation must also render one execute CTA",
+  );
+  activeLocale = "zh-CN";
+  feature.closeDetail();
+
+  currentSnapshot = {
+    status: "running",
+    counts: { total: 1, ready: 0, awaiting_human: 1, abandoned: 0, busy: 0, queued: 0 },
+    items: [environmentBlockedItem],
+    pending_actions: [
+      { action_id: "action-cas-1", item_id: "script-environment-blocked", action: "execute", state: "queued" },
+    ],
+    action_results: [],
+  };
+  await feature.activate("agent-action-results");
+  assert.ok(elements.tableBody.innerHTML.includes("重新执行当前版本已排队"));
+  assert.match(elements.tableBody.innerHTML, /data-item-id="script-environment-blocked"[\s\S]*?disabled/);
+  assert.strictEqual(elements.bulkToggle.disabled, true);
+  feature.toggleBatchMode(true);
+  feature.setSelectedItems(["script-environment-blocked"]);
+  assert.deepStrictEqual(Array.from(feature.getState().selectedIds), []);
+  assert.strictEqual(elements.selectAll.disabled, true);
+  await feature.openDetail("script-environment-blocked");
+  assert.ok(elements.actionPanel.innerHTML.includes("完成后可继续处理"));
+  ["edit", "execute", "abandon", "regenerate", "repair"].forEach((action) => {
+    assert.match(
+      elements.actionPanel.innerHTML,
+      new RegExp(`data-script-preparation-action="item-${action}" disabled`),
+    );
+  });
+  const requestCountBeforeDuplicate = requests.length;
+  assert.strictEqual(await feature.performItemAction("execute"), null);
+  assert.strictEqual(requests.length, requestCountBeforeDuplicate, "a queued item must not issue a duplicate action request");
+  feature.closeDetail();
+  currentSnapshot = {
+    ...currentSnapshot,
+    status: "failed",
+    pending_actions: [],
+    action_results: [
+      {
+        action_id: "action-cas-1",
+        item_id: "script-environment-blocked",
+        action: "execute",
+        state: "failed",
+        error: "脚本已被其他操作更新，请刷新后重试。",
+      },
+    ],
+  };
+  const noticesBeforeActionFailure = notices.length;
+  await feature.refresh();
+  assert.strictEqual(elements.stageStatus.textContent, "任务失败");
+  assert.strictEqual(notices.length, noticesBeforeActionFailure + 1);
+  assert.ok(notices.at(-1).message.includes("环境阻断.md"));
+  assert.ok(notices.at(-1).message.includes("脚本已被其他操作更新"));
+  await feature.refresh();
+  assert.strictEqual(notices.length, noticesBeforeActionFailure + 1, "the same action failure is reported once");
 
   const deferredResolvers = {};
   snapshotInterceptor = (url) => new Promise((resolve) => {

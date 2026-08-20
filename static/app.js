@@ -66,6 +66,7 @@ let SCRIPT_PROMPT_NOTE_DEFAULT = "注意：每个Step下面尽量生成实际代
 
 const SCRIPT_VIEW_TAB = {
   SCRIPT: "script",
+  PREPARATION: "preparation",
   EXECUTION: "execution",
   REPAIR: "repair",
 };
@@ -475,6 +476,13 @@ function normalizeRequirementModule(moduleItem) {
   };
 }
 
+function createClientJobId(prefix = "job") {
+  if (window.crypto?.randomUUID) {
+    return `${prefix}-${window.crypto.randomUUID()}`;
+  }
+  return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
 function normalizeViewStateRecord(parsed) {
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     return {};
@@ -500,6 +508,9 @@ function normalizeViewStateRecord(parsed) {
     scriptModule: typeof parsed.scriptModule === "string" ? parsed.scriptModule : null,
     scriptFile: typeof parsed.scriptFile === "string" ? parsed.scriptFile : null,
     scriptActiveTab: activeTab,
+    preparationRunId: typeof parsed.preparationRunId === "string" ? parsed.preparationRunId : "",
+    preparationModule: typeof parsed.preparationModule === "string" ? parsed.preparationModule : "",
+    preparationRuns: normalizeModuleScriptPreparationRuns(parsed.preparationRuns, parsed.preparationModule, parsed.preparationRunId),
     testSuiteId: typeof parsed.testSuiteId === "string" ? parsed.testSuiteId : null,
     testSuiteModule:
       typeof parsed.testSuiteModule === "string" && parsed.testSuiteModule
@@ -530,9 +541,16 @@ const state = {
     currentKey: getStoredProjectKey(),
     current: null,
     defaultKey: "",
+    defaultLanguage: "en",
     workspaceRoot: "",
     isExporting: false,
     isImporting: false,
+    isCreating: false,
+    isUpdating: false,
+    isDeleting: false,
+    manageView: "list",
+    editingKey: "",
+    deletingKey: "",
   },
   requirements: {
     items: [],
@@ -545,7 +563,11 @@ const state = {
     analysisStatus: "",
     analysisError: "",
     analysisRunning: false,
+    analysisCancelRequested: false,
+    analysisJobId: "",
     planGenerationRunning: false,
+    planGenerationCancelRequested: false,
+    planGenerationJobId: "",
     generatingModuleUid: "",
     modulePlanLogs: {},
     activeTab: REQUIREMENT_VIEW_TAB.PREVIEW,
@@ -553,6 +575,8 @@ const state = {
     bulkSelectionMode: false,
     selectedModuleUids: new Set(),
     bulkDeletingModules: false,
+    isDeleting: false,
+    deletingUid: "",
     planGenerationBatches: loadRequirementPlanGenerationBatchesFromStorage(),
   },
   plans: {
@@ -585,6 +609,8 @@ const state = {
     pollTimer: null,
     durationTimer: null,
     isRunning: false,
+    cancelRequested: false,
+    currentJobId: "",
     source: "plans",
     requirementUid: "",
     requirementModuleUid: "",
@@ -597,6 +623,8 @@ const state = {
   },
   scriptGeneration: {
     isRunning: false,
+    cancelRequested: false,
+    currentJobId: "",
     durationTimer: null,
   },
   scriptExecution: {
@@ -616,6 +644,7 @@ const state = {
     isGeneratingSeed: false,
     isTestingSeed: false,
     seedScriptPath: "tests/seed/seed.spec.ts",
+    seedMode: "",
     targetSystem: {
       base_url: "",
       login_url: "/login",
@@ -673,6 +702,8 @@ const state = {
   },
   scriptRun: {
     isRunning: false,
+    cancelRequested: false,
+    currentJobId: "",
     durationTimer: null,
   },
   moduleRepair: {
@@ -694,7 +725,12 @@ const state = {
     revisions: [],
     sourcePlan: null,
     recentResults: [],
+    selectedExecutionRunId: "",
+    editBaselineRevisionId: null,
     activeTab: initialViewState.scriptActiveTab || SCRIPT_VIEW_TAB.SCRIPT,
+    preparationRunId: initialViewState.preparationRunId || "",
+    preparationModule: initialViewState.preparationModule || "",
+    preparationRuns: initialViewState.preparationRuns || {},
     runRecords: loadScriptRunRecordsFromStorage(),
     repairRecords: loadScriptRepairRecordsFromStorage(),
     moduleExecutionRecords: loadModuleExecutionRecordsFromStorage(),
@@ -758,6 +794,9 @@ function persistViewState() {
     scriptModule: state.scripts.selectedModule,
     scriptFile: state.scripts.selectedFile,
     scriptActiveTab: state.scripts.activeTab,
+    preparationRunId: state.scripts.preparationRunId,
+    preparationModule: state.scripts.preparationModule,
+    preparationRuns: state.scripts.preparationRuns,
     expandedModules: Array.from(state.scripts.expandedModules),
     testSuiteId: state.testSuites.selectedSuiteId,
     testSuiteModule: state.testSuites.selectedModule,
@@ -871,9 +910,7 @@ const elements = {
   usersNav: document.getElementById("usersNav"),
   rolesNav: document.getElementById("rolesNav"),
   projectSelect: document.getElementById("projectSelect"),
-  createProjectButton: document.getElementById("createProjectButton"),
-  exportProjectButton: document.getElementById("exportProjectButton"),
-  importProjectButton: document.getElementById("importProjectButton"),
+  manageProjectButton: document.getElementById("manageProjectButton"),
   languageMenuControl: document.getElementById("languageMenuControl"),
   languageMenuButton: document.getElementById("languageMenuButton"),
   languageMenu: document.getElementById("languageMenu"),
@@ -884,6 +921,8 @@ const elements = {
   uploadRequirementButton: document.getElementById("uploadRequirementButton"),
   requirementFileInput: document.getElementById("requirementFileInput"),
   createModuleButton: document.getElementById("createModuleButton"),
+  exportPlansButton: document.getElementById("exportPlansButton"),
+  importPlansButton: document.getElementById("importPlansButton"),
   moduleList: document.getElementById("moduleList"),
   moduleSearch: document.getElementById("moduleSearch"),
   refreshButton: document.getElementById("refreshButton"),
@@ -896,6 +935,20 @@ const elements = {
   editSaveButton: document.getElementById("editSaveButton"),
   cancelButton: document.getElementById("cancelButton"),
   notice: document.getElementById("notice"),
+  planExportModal: document.getElementById("planExportModal"),
+  planExportClose: document.getElementById("planExportClose"),
+  planExportCancel: document.getElementById("planExportCancel"),
+  planExportSubmit: document.getElementById("planExportSubmit"),
+  planExportSearch: document.getElementById("planExportSearch"),
+  planExportSelectAll: document.getElementById("planExportSelectAll"),
+  planExportSelectionCount: document.getElementById("planExportSelectionCount"),
+  planExportTree: document.getElementById("planExportTree"),
+  planImportModal: document.getElementById("planImportModal"),
+  planImportClose: document.getElementById("planImportClose"),
+  planImportCancel: document.getElementById("planImportCancel"),
+  planImportSubmit: document.getElementById("planImportSubmit"),
+  planImportFile: document.getElementById("planImportFile"),
+  planImportConflictPolicy: document.getElementById("planImportConflictPolicy"),
   viewerArea: document.getElementById("viewerArea"),
   emptyState: document.getElementById("emptyState"),
   userAdminPanel: document.getElementById("userAdminPanel"),
@@ -908,6 +961,7 @@ const elements = {
   planScriptGenerationRecordTab: document.getElementById("planScriptGenerationRecordTab"),
   planRelatedScriptsTab: document.getElementById("planRelatedScriptsTab"),
   scriptContentTab: document.getElementById("scriptContentTab"),
+  scriptPreparationTab: document.getElementById("scriptPreparationTab"),
   executionRecordTab: document.getElementById("executionRecordTab"),
   repairRecordTab: document.getElementById("repairRecordTab"),
   preview: document.getElementById("preview"),
@@ -916,6 +970,7 @@ const elements = {
   planGenerationRecordContent: document.getElementById("planGenerationRecordContent"),
   planRecordPrompt: document.getElementById("planRecordPrompt"),
   planRecordTargetPath: document.getElementById("planRecordTargetPath"),
+  planGenerationCancelButton: document.getElementById("planGenerationCancelButton"),
   planRecordJobOutput: document.getElementById("planRecordJobOutput"),
   planRecordJobStatus: document.getElementById("planRecordJobStatus"),
   planRecordJobLogs: document.getElementById("planRecordJobLogs"),
@@ -944,6 +999,7 @@ const elements = {
   modulePlanScriptBatchRecord: document.getElementById("modulePlanScriptBatchRecord"),
   modulePlanScriptBatchHeader: document.getElementById("modulePlanScriptBatchHeader"),
   modulePlanScriptBatchSummary: document.getElementById("modulePlanScriptBatchSummary"),
+  modulePlanScriptBatchCancelButton: document.getElementById("modulePlanScriptBatchCancelButton"),
   modulePlanScriptBatchEmpty: document.getElementById("modulePlanScriptBatchEmpty"),
   modulePlanScriptBatchList: document.getElementById("modulePlanScriptBatchList"),
   assetInfoPanel: document.getElementById("assetInfoPanel"),
@@ -960,6 +1016,14 @@ const elements = {
   requirementPlanGenerationBatchTabPanel: document.getElementById("requirementPlanGenerationBatchTabPanel"),
   requirementMeta: document.getElementById("requirementMeta"),
   requirementDownloadLink: document.getElementById("requirementDownloadLink"),
+  requirementDeleteButton: document.getElementById("requirementDeleteButton"),
+  requirementDeleteModal: document.getElementById("requirementDeleteModal"),
+  requirementDeleteTitle: document.getElementById("requirementDeleteTitle"),
+  requirementDeleteName: document.getElementById("requirementDeleteName"),
+  requirementDeleteConfirmation: document.getElementById("requirementDeleteConfirmation"),
+  requirementDeleteClose: document.getElementById("requirementDeleteClose"),
+  requirementDeleteCancel: document.getElementById("requirementDeleteCancel"),
+  requirementDeleteSubmit: document.getElementById("requirementDeleteSubmit"),
   requirementPreview: document.getElementById("requirementPreview"),
   requirementModuleSummary: document.getElementById("requirementModuleSummary"),
   analyzeRequirementButton: document.getElementById("analyzeRequirementButton"),
@@ -980,6 +1044,7 @@ const elements = {
   requirementPlanGenerationBatchRecord: document.getElementById("requirementPlanGenerationBatchRecord"),
   requirementPlanGenerationBatchHeader: document.getElementById("requirementPlanGenerationBatchHeader"),
   requirementPlanGenerationBatchSummary: document.getElementById("requirementPlanGenerationBatchSummary"),
+  requirementPlanGenerationBatchCancelButton: document.getElementById("requirementPlanGenerationBatchCancelButton"),
   requirementPlanGenerationBatchEmpty: document.getElementById("requirementPlanGenerationBatchEmpty"),
   requirementPlanGenerationBatchList: document.getElementById("requirementPlanGenerationBatchList"),
   requirementModuleDetailModal: document.getElementById("requirementModuleDetailModal"),
@@ -1033,6 +1098,7 @@ const elements = {
   scriptPreview: document.getElementById("scriptPreview"),
   scriptCode: document.getElementById("scriptCode"),
   moduleScriptPanel: document.getElementById("moduleScriptPanel"),
+  moduleScriptPreparationPanel: document.querySelector('[data-script-preparation-scope="module"]'),
   moduleScriptSummary: document.getElementById("moduleScriptSummary"),
   moduleScriptActions: document.getElementById("moduleScriptActions"),
   moduleBulkToggle: document.getElementById("moduleBulkToggle"),
@@ -1121,27 +1187,6 @@ const elements = {
   scriptPromptNote: document.getElementById("scriptPromptNote"),
   scriptJobStatus: document.getElementById("scriptJobStatus"),
   scriptJobLogs: document.getElementById("scriptJobLogs"),
-  projectCreateModal: document.getElementById("projectCreateModal"),
-  projectCreateClose: document.getElementById("projectCreateClose"),
-  projectCreateCancel: document.getElementById("projectCreateCancel"),
-  projectCreateSubmit: document.getElementById("projectCreateSubmit"),
-  projectCreateWorkspaceHint: document.getElementById("projectCreateWorkspaceHint"),
-  newProjectKey: document.getElementById("newProjectKey"),
-  newProjectName: document.getElementById("newProjectName"),
-  newProjectSpecsDir: document.getElementById("newProjectSpecsDir"),
-  newProjectTestsDir: document.getElementById("newProjectTestsDir"),
-  newProjectDescription: document.getElementById("newProjectDescription"),
-  projectImportModal: document.getElementById("projectImportModal"),
-  projectImportClose: document.getElementById("projectImportClose"),
-  projectImportCancel: document.getElementById("projectImportCancel"),
-  projectImportSubmit: document.getElementById("projectImportSubmit"),
-  projectImportWorkspaceHint: document.getElementById("projectImportWorkspaceHint"),
-  projectImportFile: document.getElementById("projectImportFile"),
-  importProjectKey: document.getElementById("importProjectKey"),
-  importProjectName: document.getElementById("importProjectName"),
-  importProjectSpecsDir: document.getElementById("importProjectSpecsDir"),
-  importProjectTestsDir: document.getElementById("importProjectTestsDir"),
-  importProjectDescription: document.getElementById("importProjectDescription"),
   scriptRunSubmit: document.getElementById("scriptRunSubmit"),
   scriptRunPromptFixed: document.getElementById("scriptRunPromptFixed"),
   scriptRunPromptNote: document.getElementById("scriptRunPromptNote"),
@@ -1168,6 +1213,7 @@ const elements = {
   suiteScriptPickerTitle: document.getElementById("suiteScriptPickerTitle"),
   suiteScriptSelectionCount: document.getElementById("suiteScriptSelectionCount"),
 };
+Object.assign(elements, window.getProjectManagementElements(document));
 
 function projectLanguage() {
   return state.project.current?.language === "zh-CN" ? "zh-CN" : "en";
@@ -1608,6 +1654,7 @@ function normalizeRunResult(result) {
     run_type: typeof result.run_type === "string" ? result.run_type : "",
     execution_mode: typeof result.execution_mode === "string" ? result.execution_mode : "",
     database_reset_mode: typeof result.database_reset_mode === "string" ? result.database_reset_mode : "",
+    command: typeof result.command === "string" ? result.command : "",
     script_revision_id: Number(result.script_revision_id) || null,
     plan_revision_id: Number(result.plan_revision_id) || null,
     status: typeof result.status === "string" ? result.status : "",
@@ -1616,7 +1663,19 @@ function normalizeRunResult(result) {
     started_at: Number(result.started_at) || null,
     finished_at: Number(result.finished_at) || null,
     updated_at: Number(result.updated_at) || null,
+    report: normalizeTestSuiteExecutionArtifact(result.report),
+    video: normalizeTestSuiteExecutionArtifact(result.video),
   };
+}
+
+function updateRecentScriptResults(items, { selectLatest = false } = {}) {
+  const results = normalizeRunResultList(items);
+  const selectedRunId = state.scripts.selectedExecutionRunId;
+  const selectionStillExists = results.some((result) => result.run_id === selectedRunId);
+  state.scripts.recentResults = results;
+  if (selectLatest || !selectionStillExists) {
+    state.scripts.selectedExecutionRunId = results[0]?.run_id || "";
+  }
 }
 
 function normalizeAssetList(items) {
@@ -1888,22 +1947,32 @@ const projectsFeature = createProjectsFeature({
   renderSideList,
   renderContent,
   setNotice,
+  escapeHtml,
 });
 const {
   normalizeProject,
   resetProjectScopedState,
   renderProjectSelect,
   loadProjects,
-  openProjectCreateModal,
-  closeProjectCreateModal,
-  submitProjectCreate,
-  openProjectImportModal,
-  closeProjectImportModal,
-  exportCurrentProject,
-  submitProjectImport,
   switchProject,
 } = projectsFeature;
+projectsFeature.bindProjectManagementEvents();
 
+const planTransferFeature = createPlanTransferFeature({
+  state,
+  elements,
+  document,
+  window,
+  fetch: (...args) => fetch(...args),
+  FormData,
+  getProjectRequestHeaders,
+  readFetchError,
+  getDownloadFilename,
+  loadPlanModules,
+  setNotice,
+  stripMarkdownSuffix,
+});
+planTransferFeature.bind();
 
 function isPlainObject(value) {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
@@ -1924,6 +1993,9 @@ function applyViewStateRecord(record) {
   state.scripts.selectedModule = next.scriptModule || null;
   state.scripts.selectedFile = next.scriptFile || null;
   state.scripts.activeTab = next.scriptActiveTab || state.scripts.activeTab;
+  state.scripts.preparationRunId = next.preparationRunId || "";
+  state.scripts.preparationModule = next.preparationModule || "";
+  state.scripts.preparationRuns = next.preparationRuns || {};
   state.scripts.expandedModules = new Set(next.expandedModules || []);
   state.testSuites.selectedSuiteId = next.testSuiteId || null;
   state.testSuites.selectedModule = next.testSuiteModule || TEST_SUITE_ALL_MODULE;
@@ -2007,7 +2079,6 @@ async function hydratePlatformRecords() {
   });
 }
 
-
 const generationFeature = createGenerationFeature({
   state,
   elements,
@@ -2050,12 +2121,12 @@ const generationFeature = createGenerationFeature({
   requestJson,
   encodePathPart,
   getProjectRequestHeaders,
+  createClientJobId,
   parseSseBlock,
   setNotice,
   persistViewState,
   renderContent,
   renderSideList,
-  renderPlanGenerationRecord,
   loadPlanModules,
   selectPlan,
   selectPlanModule,
@@ -2064,6 +2135,8 @@ const generationFeature = createGenerationFeature({
 });
 const {
   renderGenerationDuration,
+  renderPlanGenerationRecord,
+  renderPlanScriptGenerationRecord,
   ensurePlanScriptGenerationRecord,
   setPlanScriptGenerationRecord,
   updatePlanScriptGenerationPromptFromInputs,
@@ -2081,10 +2154,12 @@ const {
   openRequirementPlanGenerationModal,
   closePlanGenerationModal,
   submitPlanGeneration,
+  cancelPlanGeneration,
   renderScriptPromptFromTemplate,
   openScriptGenerationModal,
   closeScriptGenerationModal,
   submitScriptGeneration,
+  cancelScriptGeneration,
 } = generationFeature;
 const scriptRepairFeature = createScriptRepairFeature({
   state,
@@ -2110,6 +2185,7 @@ const scriptRepairFeature = createScriptRepairFeature({
   renderContent,
   setNotice,
   getProjectRequestHeaders,
+  createClientJobId,
   refreshScriptMetadata,
   confirmDiscardEdit,
 });
@@ -2123,6 +2199,7 @@ const {
   executeSelectedScript,
   openScriptRepairRecord,
   submitScriptRun,
+  cancelScriptRun,
   updateScriptRepairPromptFromInputs,
 } = scriptRepairFeature;
 
@@ -2183,7 +2260,6 @@ const {
   renderScriptRepairRecord,
 } = moduleExecutionFeature;
 
-
 async function recordSelectedScript() {
   const moduleName = state.scripts.selectedModule;
   const filename = state.scripts.selectedFile;
@@ -2240,9 +2316,6 @@ async function recordSelectedScript() {
     renderContent();
   }
 }
-
-
-
 
 function switchPlanViewTab(nextTab) {
   if (
@@ -2305,11 +2378,11 @@ function filteredPlanModules() {
 
 function filteredScriptModules() {
   const query = getSearchQuery();
+  const modules = moduleScriptPreparationFeature.withModulePlaceholders(state.scripts.modules);
   if (!query) {
-    return state.scripts.modules;
+    return modules;
   }
-
-  return state.scripts.modules
+  return modules
     .map((moduleItem) => {
       const moduleMatches = moduleItem.name.toLowerCase().includes(query);
       const scripts = moduleMatches
@@ -2319,10 +2392,9 @@ function filteredScriptModules() {
             const displayName = (script.display_name || stripSpecSuffix(script.name)).toLowerCase();
             return scriptName.includes(query) || displayName.includes(query);
           });
-
       return { ...moduleItem, scripts };
     })
-    .filter((moduleItem) => moduleItem.scripts.length > 0);
+    .filter((moduleItem) => moduleItem.scripts.length > 0 || moduleItem.preparationPlaceholder && moduleItem.name.toLowerCase().includes(query));
 }
 
 function renderSideList() {
@@ -2423,7 +2495,7 @@ function renderScriptTree() {
   if (!modules.length) {
     const empty = document.createElement("div");
     empty.className = "module-item";
-    empty.textContent = state.scripts.modules.length ? "没有匹配的脚本" : "未找到测试脚本";
+    empty.textContent = state.scripts.modules.length ? t("scripts.empty.noMatches") : t("scripts.empty.noScripts");
     elements.moduleList.appendChild(empty);
     return;
   }
@@ -2562,14 +2634,15 @@ function renderAssetInfoPanel() {
     restoreButton.className = "secondary-button";
     restoreButton.textContent = "恢复";
     restoreButton.disabled = revision.revision_id === asset.current_revision_id || isAnyScriptJobRunning();
-    restoreButton.addEventListener("click", () => restoreAssetRevision(asset.asset_id, revision.revision_id));
+    const expectedRevisionId = asset.current_revision_id;
+    restoreButton.addEventListener("click", () => restoreAssetRevision(asset.asset_id, revision.revision_id, expectedRevisionId));
     item.append(main, commit, restoreButton);
     list.appendChild(item);
   });
   elements.assetInfoPanel.appendChild(list);
 }
 
-async function restoreAssetRevision(assetId, revisionId) {
+async function restoreAssetRevision(assetId, revisionId, expectedRevisionId) {
   if (!assetId || !revisionId || isAnyScriptJobRunning()) {
     return;
   }
@@ -2578,7 +2651,7 @@ async function restoreAssetRevision(assetId, revisionId) {
     return;
   }
   try {
-    await requestJson(`/api/assets/${assetId}/revisions/${revisionId}/restore`, { method: "POST" });
+    await requestJson(`/api/assets/${assetId}/revisions/${revisionId}/restore`, { method: "POST", body: JSON.stringify({ expected_revision_id: expectedRevisionId }) });
     setNotice("版本已恢复。", "success");
     if (state.activeSection === SECTION.PLANS && state.plans.selectedModule && state.plans.selectedPlanFile) {
       await selectPlan(state.plans.selectedModule, state.plans.selectedPlanFile, true);
@@ -2661,7 +2734,6 @@ function renderPlanRelatedScripts() {
   });
 }
 
-
 function renderPlanTabs() {
   const showTabs = state.activeSection === SECTION.PLANS && hasSelection();
   elements.planTabs.classList.toggle("hidden", !showTabs);
@@ -2685,129 +2757,21 @@ function renderPlanTabs() {
 function renderScriptTabs() {
   const showTabs = state.activeSection === SECTION.SCRIPTS && hasSelection();
   elements.scriptTabs.classList.toggle("hidden", !showTabs);
-
   const isScriptTab = state.scripts.activeTab === SCRIPT_VIEW_TAB.SCRIPT;
+  const isPreparationTab = state.scripts.activeTab === SCRIPT_VIEW_TAB.PREPARATION;
   const isExecutionTab = state.scripts.activeTab === SCRIPT_VIEW_TAB.EXECUTION;
   const isRepairTab = state.scripts.activeTab === SCRIPT_VIEW_TAB.REPAIR;
   elements.scriptContentTab.classList.toggle("active", isScriptTab);
   elements.scriptContentTab.setAttribute("aria-selected", String(isScriptTab));
+  elements.scriptPreparationTab.classList.toggle("hidden", Boolean(state.scripts.selectedFile));
+  elements.scriptPreparationTab.classList.toggle("active", isPreparationTab);
+  elements.scriptPreparationTab.setAttribute("aria-selected", String(isPreparationTab));
   elements.executionRecordTab.classList.toggle("active", isExecutionTab);
   elements.executionRecordTab.setAttribute("aria-selected", String(isExecutionTab));
   elements.repairRecordTab.classList.toggle("active", isRepairTab);
   elements.repairRecordTab.setAttribute("aria-selected", String(isRepairTab));
   return showTabs;
 }
-
-function getCurrentPlanGenerationRecord() {
-  if (!state.plans.selectedModule) {
-    return null;
-  }
-  if (state.plans.selectedPlanFile) {
-    return state.plans.generationRecords[getPlanRecordKey()] || null;
-  }
-  return Object.values(state.plans.generationRecords)
-    .filter((record) => record?.module_name === state.plans.selectedModule)
-    .sort((left, right) => (right.updated_at || 0) - (left.updated_at || 0))[0] || null;
-}
-
-function renderPlanGenerationRecord() {
-  const record = getCurrentPlanGenerationRecord();
-  const hasRecord = Boolean(record);
-
-  elements.planGenerationRecordEmpty.classList.toggle("hidden", hasRecord);
-  elements.planGenerationRecordContent.classList.toggle("hidden", !hasRecord);
-
-  if (!hasRecord) {
-    elements.planRecordPrompt.value = "";
-    elements.planRecordTargetPath.textContent = "";
-    elements.planRecordJobLogs.textContent = "";
-    elements.planRecordJobOutput.classList.add("hidden");
-    renderGenerationDuration(elements.planRecordDuration, null);
-    return;
-  }
-
-  elements.planRecordPrompt.value = record.prompt || "";
-  elements.planRecordTargetPath.textContent = record.target_path || "";
-  elements.planRecordJobLogs.textContent = window.WaterfallI18n?.log(record.logs || "") || record.logs || "";
-  elements.planRecordJobLogs.scrollTop = elements.planRecordJobLogs.scrollHeight;
-  elements.planRecordJobOutput.classList.toggle("hidden", !record.logs && record.status === "idle");
-  elements.planRecordJobStatus.className = "job-status";
-  const coverageMeta = record.coverage_profile
-    ? `模板来源：${getCoverageProfile(record.coverage_profile)?.label || "核心回归"}${record.prompt_customized ? " · 已自定义" : ""}`
-    : "";
-  renderGenerationDuration(elements.planRecordDuration, record);
-
-  if (record.status === "succeeded") {
-    elements.planRecordJobStatus.textContent = coverageMeta ? `任务成功 · ${coverageMeta}` : "任务成功";
-    elements.planRecordJobStatus.classList.add("success");
-    return;
-  }
-
-  if (record.status === "failed") {
-    elements.planRecordJobStatus.textContent = `任务失败${coverageMeta ? ` · ${coverageMeta}` : ""}${record.error ? `：${record.error}` : ""}`;
-    elements.planRecordJobStatus.classList.add("error");
-    return;
-  }
-
-  if (record.status === "running") {
-    elements.planRecordJobStatus.textContent = `任务进行中${coverageMeta ? ` · ${coverageMeta}` : ""}，正在接收实时输出`;
-    return;
-  }
-
-  elements.planRecordJobStatus.textContent = "任务进行中";
-}
-
-function renderPlanScriptGenerationRecord() {
-  const record = ensurePlanScriptGenerationRecord();
-  if (!record) {
-    elements.planScriptPromptFixed.value = "";
-    elements.planScriptPromptNote.value = "";
-    elements.planScriptRecordTargetPath.textContent = "";
-    elements.planScriptJobLogs.textContent = "";
-    elements.planScriptJobOutput.classList.add("hidden");
-    renderGenerationDuration(elements.planScriptDuration, null);
-    elements.planScriptGenerationSubmit.disabled = true;
-    elements.planScriptGenerationSubmit.textContent = "确认生成";
-    return;
-  }
-
-  elements.planScriptPromptFixed.value = record.prompt_fixed;
-  elements.planScriptPromptNote.value = record.prompt_note;
-  elements.planScriptRecordTargetPath.textContent = record.target_path || getDefaultScriptTargetPath(record.module_name);
-  elements.planScriptJobLogs.textContent = window.WaterfallI18n?.log(record.logs || "") || record.logs || "";
-  elements.planScriptJobLogs.scrollTop = elements.planScriptJobLogs.scrollHeight;
-  elements.planScriptJobOutput.classList.toggle("hidden", !record.logs && record.status === "idle");
-  elements.planScriptJobStatus.className = "job-status";
-  renderGenerationDuration(elements.planScriptDuration, record);
-
-  if (record.status === "succeeded") {
-    elements.planScriptJobStatus.textContent = "任务成功";
-    elements.planScriptJobStatus.classList.add("success");
-    elements.planScriptGenerationSubmit.disabled = state.scriptGeneration.isRunning;
-    elements.planScriptGenerationSubmit.textContent = "重新生成";
-    return;
-  }
-
-  if (record.status === "failed") {
-    elements.planScriptJobStatus.textContent = `任务失败${record.error ? `：${record.error}` : ""}`;
-    elements.planScriptJobStatus.classList.add("error");
-    elements.planScriptGenerationSubmit.disabled = state.scriptGeneration.isRunning;
-    elements.planScriptGenerationSubmit.textContent = "重试";
-    return;
-  }
-
-  if (record.status === "running" || state.scriptGeneration.isRunning) {
-    elements.planScriptJobStatus.textContent = "任务进行中，正在接收实时输出";
-    elements.planScriptGenerationSubmit.disabled = true;
-    elements.planScriptGenerationSubmit.textContent = "生成中";
-    return;
-  }
-
-  elements.planScriptJobStatus.textContent = "任务进行中";
-  elements.planScriptGenerationSubmit.disabled = state.scriptGeneration.isRunning;
-  elements.planScriptGenerationSubmit.textContent = "确认生成";
-}
-
 
 function getGenerationStatusInfo(recordOrItem) {
   if (recordOrItem?.status === "queued") {
@@ -2816,11 +2780,17 @@ function getGenerationStatusInfo(recordOrItem) {
   if (recordOrItem?.status === "running") {
     return { label: "生成中", className: "running" };
   }
+  if (recordOrItem?.status === "cancelling") {
+    return { label: "终止中", className: "running" };
+  }
   if (recordOrItem?.status === "succeeded") {
     return { label: "成功", className: "success" };
   }
   if (recordOrItem?.status === "failed") {
     return { label: "失败", className: "error" };
+  }
+  if (recordOrItem?.status === "cancelled") {
+    return { label: "已取消", className: "cancelled" };
   }
   return { label: t("status.notGenerated"), className: "" };
 }
@@ -2890,8 +2860,8 @@ const {
   executeSelectedTestSuite,
   loadTestSuites,
 } = testSuitesFeature;
-
-
+const moduleScriptPreparationFeature = createModuleScriptPreparationFeature({ root: elements.moduleScriptPreparationPanel,
+  state, SECTION, SCRIPT_VIEW_TAB, requestJson, encodePathPart, persistViewState, renderSideList, renderContent, refreshScriptTree: loadScriptTree, window, document });
 const modulePlanGenerationFeature = createModulePlanGenerationFeature({
   state,
   elements,
@@ -2920,12 +2890,15 @@ const modulePlanGenerationFeature = createModulePlanGenerationFeature({
   parseSseBlock,
   getDefaultScriptTargetPath,
   getProjectRequestHeaders,
+  createClientJobId,
   persistViewState,
   loadScriptTree,
   renderSideList,
   createStatusBadge,
   getGenerationStatusInfo,
   getPlanRecordKey,
+  openScriptPreparationRun: moduleScriptPreparationFeature.openRun,
+  canOpenScriptPreparation: () => hasMenu(SECTION.SCRIPTS),
 });
 const {
   getCurrentModulePlans,
@@ -2944,10 +2917,10 @@ const {
   readModulePlanScriptGenerationStream,
   handleModulePlanScriptStreamEvent,
   generateSelectedModulePlanScripts,
+  cancelModulePlanScriptGenerationBatch,
   renderModulePlanList,
   renderModulePlanScriptBatchRecord,
 } = modulePlanGenerationFeature;
-
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -2957,7 +2930,6 @@ function escapeHtml(value) {
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
 }
-
 
 const projectSettingsFeature = createProjectSettingsFeature({
   state,
@@ -2978,6 +2950,7 @@ const projectSettingsFeature = createProjectSettingsFeature({
   isPlainObject,
   escapeHtml,
   t,
+  document,
 });
 const {
   loadProjectSettings,
@@ -3017,6 +2990,7 @@ const requirementsFeature = createRequirementsFeature({
   populateCoverageSelect,
   composeCoveragePrompt,
   getProjectRequestHeaders,
+  createClientJobId,
   persistViewState,
   formatModuleRepairDuration,
   createStatusBadge,
@@ -3040,12 +3014,18 @@ const {
   changeRequirementBatchCoverageProfile,
   resetRequirementBatchCoveragePrompt,
   generateSelectedRequirementModulePlans,
+  cancelRequirementPlanGenerationBatch,
   renderRequirementsPanel,
   getRequirementModuleByUid,
   mergeRequirementModuleUpdate,
   closeRequirementModuleDetail,
+  openRequirementDeleteModal,
+  closeRequirementDeleteModal,
+  updateRequirementDeleteSubmitState,
+  submitRequirementDelete,
   saveRequirementModule,
   analyzeSelectedRequirement,
+  cancelRequirementAnalysis,
   importInventoryFromDefaultDoc,
   loadRequirements,
   uploadRequirementFile,
@@ -3138,6 +3118,7 @@ function renderContent() {
   elements.testSuiteDetailPanel.classList.add("hidden");
   elements.agentPanel.classList.add("hidden");
   elements.moduleScriptPanel.classList.add("hidden");
+  elements.moduleScriptPreparationPanel.classList.add("hidden");
   elements.moduleExecutionRecord.classList.add("hidden");
   elements.moduleRepairRecord.classList.add("hidden");
   elements.executionRecord.classList.add("hidden");
@@ -3149,6 +3130,7 @@ function renderContent() {
   elements.editor.classList.add("hidden");
   elements.editor.classList.toggle("code-editor", state.activeSection === SECTION.SCRIPTS);
   elements.editor.wrap = state.activeSection === SECTION.SCRIPTS ? "off" : "soft";
+  moduleScriptPreparationFeature.render();
   const showPlanTabs = renderPlanTabs();
   const showScriptTabs = renderScriptTabs();
   elements.viewerArea.classList.toggle("with-tabs", showPlanTabs || showScriptTabs);
@@ -3201,6 +3183,8 @@ function renderContent() {
       setPlatformText(elements.filePath, "未选择需求");
       elements.analyzeRequirementButton.disabled = true;
       elements.analyzeRequirementButton.textContent = "解析需求";
+      elements.analyzeRequirementButton.classList.add("primary-button");
+      elements.analyzeRequirementButton.classList.remove("danger-primary-button");
       elements.importInventoryButton.disabled = state.requirements.analysisRunning || state.requirements.planGenerationRunning;
       elements.emptyState.classList.remove("hidden");
       elements.emptyState.querySelector("h3").textContent = "暂无需求";
@@ -3321,7 +3305,7 @@ function renderContent() {
         elements.moduleExecutionRecord.classList.remove("hidden");
       } else if (state.scripts.activeTab === SCRIPT_VIEW_TAB.REPAIR) {
         elements.moduleRepairRecord.classList.remove("hidden");
-      } else {
+      } else if (state.scripts.activeTab === SCRIPT_VIEW_TAB.SCRIPT) {
         elements.moduleScriptPanel.classList.remove("hidden");
       }
     } else {
@@ -3566,15 +3550,19 @@ async function selectPlan(moduleName, planFilename, skipConfirm = false) {
 async function loadScriptTree() {
   setNotice("");
   setLoading(true);
-
+  const preservePreparation = state.scripts.activeTab === SCRIPT_VIEW_TAB.PREPARATION &&
+    Boolean(state.scripts.preparationRunId && state.scripts.selectedModule);
   try {
     const data = await requestJson("/api/test-scripts");
     state.scripts.modules = data.modules || [];
-
     const selectedModule = state.scripts.modules.find((item) => item.name === state.scripts.selectedModule);
     const selectedScript = selectedModule?.scripts.find((item) => item.name === state.scripts.selectedFile);
-
     if (!state.scripts.modules.length) {
+      if (preservePreparation) {
+        renderSideList();
+        renderContent();
+        return;
+      }
       state.scripts.selectedModule = null;
       state.scripts.selectedFile = null;
       state.scripts.currentContent = "";
@@ -3583,14 +3571,19 @@ async function loadScriptTree() {
       state.scripts.revisions = [];
       state.scripts.sourcePlan = null;
       state.scripts.recentResults = [];
+      state.scripts.selectedExecutionRunId = "";
       renderSideList();
       renderContent();
       setNotice("没有找到符合 tests/<模块名>/*.spec.ts 规则的测试脚本。");
       return;
     }
-
     const nextModule = selectedModule || state.scripts.modules[0];
     const nextScript = selectedScript || null;
+    if (preservePreparation) {
+      renderSideList();
+      renderContent();
+      return;
+    }
     state.scripts.expandedModules.add(nextModule.name);
     renderSideList();
     if (nextScript) {
@@ -3600,6 +3593,12 @@ async function loadScriptTree() {
     }
   } catch (error) {
     state.scripts.modules = [];
+    if (preservePreparation) {
+      renderSideList();
+      renderContent();
+      setNotice(error.message, "error");
+      return;
+    }
     state.scripts.selectedModule = null;
     state.scripts.selectedFile = null;
     state.scripts.currentContent = "";
@@ -3608,6 +3607,7 @@ async function loadScriptTree() {
     state.scripts.revisions = [];
     state.scripts.sourcePlan = null;
     state.scripts.recentResults = [];
+    state.scripts.selectedExecutionRunId = "";
     renderSideList();
     renderContent();
     setNotice(error.message, "error");
@@ -3635,7 +3635,6 @@ function selectScriptModule(moduleName, skipConfirm = false, { preserveTab = fal
   if (!skipConfirm && !sameSelection && !confirmDiscardEdit()) {
     return;
   }
-
   state.activeSection = SECTION.SCRIPTS;
   state.scripts.selectedModule = moduleName;
   state.scripts.selectedFile = null;
@@ -3645,6 +3644,7 @@ function selectScriptModule(moduleName, skipConfirm = false, { preserveTab = fal
   state.scripts.revisions = [];
   state.scripts.sourcePlan = null;
   state.scripts.recentResults = [];
+  state.scripts.selectedExecutionRunId = "";
   state.scripts.selectedFiles.clear();
   state.scripts.bulkSelectionMode = false;
   state.scripts.activeTab = preserveTab ? state.scripts.activeTab : SCRIPT_VIEW_TAB.SCRIPT;
@@ -3667,7 +3667,9 @@ async function selectScript(moduleName, filename, skipConfirm = false) {
   state.scripts.expandedModules.add(moduleName);
   state.scripts.bulkSelectionMode = false;
   state.scripts.selectedFiles.clear();
+  state.scripts.selectedExecutionRunId = "";
   state.scripts.activeTab = sameSelection ? state.scripts.activeTab : SCRIPT_VIEW_TAB.SCRIPT;
+  moduleScriptPreparationFeature.render();
   state.isEditing = false;
   persistViewState();
   setNotice("");
@@ -3683,7 +3685,7 @@ async function selectScript(moduleName, filename, skipConfirm = false) {
     state.scripts.asset = normalizeAsset(data.asset);
     state.scripts.revisions = normalizeRevisionList(data.revisions);
     state.scripts.sourcePlan = normalizeAsset(data.source_plan);
-    state.scripts.recentResults = normalizeRunResultList(data.recent_results);
+    updateRecentScriptResults(data.recent_results, { selectLatest: true });
     renderContent();
   } catch (error) {
     state.scripts.currentContent = "";
@@ -3692,6 +3694,7 @@ async function selectScript(moduleName, filename, skipConfirm = false) {
     state.scripts.revisions = [];
     state.scripts.sourcePlan = null;
     state.scripts.recentResults = [];
+    state.scripts.selectedExecutionRunId = "";
     renderContent();
     setNotice(error.message, "error");
   } finally {
@@ -3710,7 +3713,7 @@ async function refreshScriptMetadata(moduleName = state.scripts.selectedModule, 
     state.scripts.asset = normalizeAsset(data.asset);
     state.scripts.revisions = normalizeRevisionList(data.revisions);
     state.scripts.sourcePlan = normalizeAsset(data.source_plan);
-    state.scripts.recentResults = normalizeRunResultList(data.recent_results);
+    updateRecentScriptResults(data.recent_results);
   }
 }
 
@@ -3718,7 +3721,6 @@ async function saveCurrentItem() {
   if (!canEditSelection()) {
     return;
   }
-
   state.isSaving = true;
   elements.editSaveButton.textContent = "保存中";
   elements.editSaveButton.disabled = true;
@@ -3751,7 +3753,7 @@ async function saveCurrentItem() {
         )}`,
         {
           method: "PUT",
-          body: JSON.stringify({ content: nextContent }),
+          body: JSON.stringify({ content: nextContent, expected_revision_id: state.scripts.editBaselineRevisionId }),
         },
       );
       state.scripts.currentContent = data.content || "";
@@ -3759,10 +3761,11 @@ async function saveCurrentItem() {
       state.scripts.asset = normalizeAsset(data.asset);
       state.scripts.revisions = normalizeRevisionList(data.revisions);
       state.scripts.sourcePlan = normalizeAsset(data.source_plan);
-      state.scripts.recentResults = normalizeRunResultList(data.recent_results);
+      updateRecentScriptResults(data.recent_results);
     }
 
     state.isEditing = false;
+    state.scripts.editBaselineRevisionId = null;
     renderContent();
     setNotice("保存成功。", "success");
   } catch (error) {
@@ -3779,8 +3782,8 @@ function toggleEditSave() {
   if (!canEditSelection()) {
     return;
   }
-
   if (!state.isEditing) {
+    state.scripts.editBaselineRevisionId = state.activeSection === SECTION.SCRIPTS ? state.scripts.asset?.current_revision_id ?? null : null;
     state.isEditing = true;
     renderContent();
     return;
@@ -3791,6 +3794,7 @@ function toggleEditSave() {
 
 function cancelEdit() {
   state.isEditing = false;
+  state.scripts.editBaselineRevisionId = null;
   renderContent();
   setNotice("");
 }
@@ -3824,10 +3828,6 @@ elements.agentNav.addEventListener("click", () => switchSection(SECTION.AGENT));
 elements.projectSettingsNav.addEventListener("click", () => switchSection(SECTION.PROJECT_SETTINGS));
 elements.usersNav.addEventListener("click", () => switchSection(SECTION.USERS));
 elements.rolesNav.addEventListener("click", () => switchSection(SECTION.ROLES));
-elements.projectSelect.addEventListener("change", () => switchProject(elements.projectSelect.value));
-elements.createProjectButton.addEventListener("click", openProjectCreateModal);
-elements.exportProjectButton.addEventListener("click", exportCurrentProject);
-elements.importProjectButton.addEventListener("click", openProjectImportModal);
 elements.languageMenuButton.addEventListener("click", () => {
   if (!state.auth.isAdmin) return;
   const opening = elements.languageMenu.classList.contains("hidden");
@@ -3864,8 +3864,29 @@ elements.uploadRequirementButton.addEventListener("click", () => {
   elements.requirementFileInput.click();
 });
 elements.requirementFileInput.addEventListener("change", () => uploadRequirementFile(elements.requirementFileInput.files?.[0]));
-elements.analyzeRequirementButton.addEventListener("click", analyzeSelectedRequirement);
+elements.analyzeRequirementButton.addEventListener("click", () =>
+  state.requirements.analysisRunning ? cancelRequirementAnalysis() : analyzeSelectedRequirement(),
+);
 elements.importInventoryButton.addEventListener("click", importInventoryFromDefaultDoc);
+elements.requirementDeleteButton.addEventListener("click", openRequirementDeleteModal);
+elements.requirementDeleteClose.addEventListener("click", closeRequirementDeleteModal);
+elements.requirementDeleteCancel.addEventListener("click", closeRequirementDeleteModal);
+elements.requirementDeleteSubmit.addEventListener("click", submitRequirementDelete);
+elements.requirementDeleteConfirmation.addEventListener("input", () => {
+  elements.requirementDeleteConfirmation.setCustomValidity("");
+  updateRequirementDeleteSubmitState();
+});
+elements.requirementDeleteConfirmation.addEventListener("keydown", (event) => {
+  if (event.key === "Enter" && !elements.requirementDeleteSubmit.disabled) {
+    event.preventDefault();
+    submitRequirementDelete();
+  }
+});
+elements.requirementDeleteModal.addEventListener("click", (event) => {
+  if (event.target === elements.requirementDeleteModal) {
+    closeRequirementDeleteModal();
+  }
+});
 elements.requirementPreviewTab.addEventListener("click", () => switchRequirementViewTab(REQUIREMENT_VIEW_TAB.PREVIEW));
 elements.requirementModulesTab.addEventListener("click", () => switchRequirementViewTab(REQUIREMENT_VIEW_TAB.MODULES));
 elements.requirementPlanGenerationBatchTab?.addEventListener("click", () =>
@@ -3893,49 +3914,22 @@ elements.planPromptReset.addEventListener("click", () => resetPlanPromptForCover
 elements.requirementBatchPlanClose.addEventListener("click", closeRequirementBatchPlanModal);
 elements.requirementBatchPlanCancel.addEventListener("click", closeRequirementBatchPlanModal);
 elements.requirementBatchPlanSubmit.addEventListener("click", generateSelectedRequirementModulePlans);
+elements.requirementPlanGenerationBatchCancelButton?.addEventListener("click", cancelRequirementPlanGenerationBatch);
 elements.requirementBatchCoverageProfile.addEventListener("change", changeRequirementBatchCoverageProfile);
 elements.requirementBatchCoveragePrompt.addEventListener("input", renderRequirementBatchPromptState);
 elements.requirementBatchPromptReset.addEventListener("click", resetRequirementBatchCoveragePrompt);
 elements.scriptGenerationClose.addEventListener("click", closeScriptGenerationModal);
 elements.scriptGenerationCancel.addEventListener("click", closeScriptGenerationModal);
 elements.scriptGenerationSubmit.addEventListener("click", submitScriptGeneration);
-elements.projectCreateClose.addEventListener("click", closeProjectCreateModal);
-elements.projectCreateCancel.addEventListener("click", closeProjectCreateModal);
-elements.projectCreateSubmit.addEventListener("click", submitProjectCreate);
-elements.projectImportClose.addEventListener("click", closeProjectImportModal);
-elements.projectImportCancel.addEventListener("click", closeProjectImportModal);
-elements.projectImportSubmit.addEventListener("click", submitProjectImport);
-[
-  elements.newProjectKey,
-  elements.newProjectName,
-  elements.newProjectSpecsDir,
-  elements.newProjectTestsDir,
-  elements.newProjectDescription,
-].forEach((input) => input.addEventListener("input", () => input.setCustomValidity("")));
-[
-  elements.projectImportFile,
-  elements.importProjectKey,
-  elements.importProjectName,
-  elements.importProjectSpecsDir,
-  elements.importProjectTestsDir,
-  elements.importProjectDescription,
-].forEach((input) => input.addEventListener("input", () => input.setCustomValidity("")));
-elements.newProjectDescription.addEventListener("keydown", (event) => {
-  if (event.key === "Enter") {
-    event.preventDefault();
-    submitProjectCreate();
-  }
-});
-elements.importProjectDescription.addEventListener("keydown", (event) => {
-  if (event.key === "Enter") {
-    event.preventDefault();
-    submitProjectImport();
-  }
-});
-elements.planScriptGenerationSubmit.addEventListener("click", submitScriptGeneration);
+elements.planGenerationCancelButton.addEventListener("click", cancelPlanGeneration);
+elements.planScriptGenerationSubmit.addEventListener("click", () =>
+  state.scriptGeneration.isRunning ? cancelScriptGeneration() : submitScriptGeneration(),
+);
 elements.planScriptPromptFixed.addEventListener("input", updatePlanScriptGenerationPromptFromInputs);
 elements.planScriptPromptNote.addEventListener("input", updatePlanScriptGenerationPromptFromInputs);
-elements.scriptRunSubmit.addEventListener("click", submitScriptRun);
+elements.scriptRunSubmit.addEventListener("click", () =>
+  state.scriptRun.isRunning ? cancelScriptRun() : submitScriptRun(),
+);
 elements.scriptRunPromptFixed.addEventListener("input", updateScriptRepairPromptFromInputs);
 elements.scriptRunPromptNote.addEventListener("input", updateScriptRepairPromptFromInputs);
 elements.testSuiteCreateClose.addEventListener("click", closeTestSuiteCreateModal);
@@ -3984,6 +3978,7 @@ elements.planGenerationRecordTab.addEventListener("click", () => switchPlanViewT
 elements.planScriptGenerationRecordTab.addEventListener("click", () => switchPlanViewTab(PLAN_VIEW_TAB.SCRIPT_GENERATION));
 elements.planRelatedScriptsTab.addEventListener("click", () => switchPlanViewTab(PLAN_VIEW_TAB.RELATED_SCRIPTS));
 elements.scriptContentTab.addEventListener("click", () => switchScriptViewTab(SCRIPT_VIEW_TAB.SCRIPT));
+elements.scriptPreparationTab.addEventListener("click", () => switchScriptViewTab(SCRIPT_VIEW_TAB.PREPARATION));
 elements.executionRecordTab.addEventListener("click", () => switchScriptViewTab(SCRIPT_VIEW_TAB.EXECUTION));
 elements.repairRecordTab.addEventListener("click", () => switchScriptViewTab(SCRIPT_VIEW_TAB.REPAIR));
 elements.moduleBulkToggle.addEventListener("click", enterModuleBulkMode);
@@ -3996,6 +3991,7 @@ elements.moduleSelectAll.addEventListener("change", toggleModuleSelectAll);
 elements.modulePlanBulkToggle.addEventListener("click", enterModulePlanBulkMode);
 elements.modulePlanBulkCancel.addEventListener("click", cancelModulePlanBulkMode);
 elements.modulePlanBulkGenerate.addEventListener("click", generateSelectedModulePlanScripts);
+elements.modulePlanScriptBatchCancelButton?.addEventListener("click", cancelModulePlanScriptGenerationBatch);
 elements.modulePlanBulkDelete.addEventListener("click", deleteSelectedModulePlans);
 elements.modulePlanSelectAll.addEventListener("change", toggleModulePlanSelectAll);
 elements.addModuleNameLink.addEventListener("click", togglePlanGenerationModuleMode);
@@ -4025,6 +4021,10 @@ window.addEventListener("keydown", (event) => {
   }
   if (event.key === "Escape" && !elements.requirementBatchPlanModal.classList.contains("hidden")) {
     closeRequirementBatchPlanModal();
+    return;
+  }
+  if (event.key === "Escape" && !elements.requirementDeleteModal.classList.contains("hidden")) {
+    closeRequirementDeleteModal();
     return;
   }
   if (event.key === "Escape" && !elements.requirementModuleDetailModal.classList.contains("hidden")) {
