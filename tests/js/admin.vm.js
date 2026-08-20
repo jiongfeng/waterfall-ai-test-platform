@@ -7,11 +7,28 @@ const appDir = path.resolve(__dirname, "../..");
 const context = {
   window: {
     WaterfallTranslations: {
-      "zh-CN": { "auth.builtInAdminDisplayName": "管理员" },
+      "zh-CN": {
+        "auth.builtInAdminDisplayName": "管理员",
+        "auth.builtInAdminRoleName": "管理员",
+      },
     },
     WaterfallI18n: {
       source: (value) => value,
-      t: (key) => (key === "auth.builtInAdminDisplayName" ? "Administrator" : key),
+      getLocale: () => "en",
+      t: (key) => ({
+        "auth.builtInAdminDisplayName": "Administrator",
+        "auth.builtInAdminRoleName": "Administrator",
+        "auth.status.active": "Enable",
+        "auth.status.disabled": "Disable",
+        "auth.initialPassword": "Initial password",
+        "auth.resetPassword": "Reset password",
+        "auth.newPassword": "New password",
+        "auth.confirmNewPassword": "Confirm new password",
+        "auth.confirmReset": "Confirm reset",
+        "auth.systemRoleTag": "System",
+        "auth.permission.menu.plans": "Test plans",
+        "auth.permission.menu.users": "User management",
+      })[key] || key,
     },
   },
 };
@@ -192,11 +209,48 @@ const feature = context.window.createAdminFeature({
   assert.strictEqual(state.admin.rolesLoaded, true);
   assert.strictEqual(state.admin.usersLoaded, true);
   assert.strictEqual(feature.getRoleSummary(state.admin.users[0].roles), "测试");
+  assert.strictEqual(feature.getStatusText("active"), "Enable");
+  assert.strictEqual(feature.getPermissionDisplayName({ code: "menu.users", name: "用户" }), "User management");
   assert.strictEqual(
     feature.getPermissionSummary(["menu.plans", "unknown"]),
-    "测试计划、unknown",
+    "Test plans, unknown",
   );
   assert.ok(feature.renderRoleCheckboxes([1]).includes("checked"));
+
+  state.admin.userEditingId = "new";
+  const newUserForm = feature.renderUserAdminForm();
+  assert.ok(newUserForm.includes(">Enable</option>"));
+  assert.ok(newUserForm.includes(">Disable</option>"));
+  assert.ok(newUserForm.includes(">Initial password</span>"));
+  assert.ok(!newUserForm.includes("初始密码"));
+
+  state.admin.userEditingId = null;
+  state.admin.passwordResetUserId = 2;
+  const passwordResetForm = feature.renderPasswordResetForm();
+  for (const label of ["Reset password", "New password", "Confirm new password", "Confirm reset"]) {
+    assert.ok(passwordResetForm.includes(label), label);
+  }
+  assert.ok(!passwordResetForm.includes("重置密码"));
+
+  state.admin.passwordResetUserId = null;
+  state.admin.roleEditingId = "new";
+  const newRoleForm = feature.renderRoleAdminForm();
+  assert.ok(newRoleForm.includes(">Enable</option>"));
+  assert.ok(newRoleForm.includes(">Disable</option>"));
+  assert.ok(newRoleForm.includes(">Test plans</span>"));
+
+  state.admin.roleEditingId = null;
+  state.admin.roles.push({
+    id: 99,
+    code: "admin",
+    name: "管理员",
+    status: "active",
+    is_system: true,
+    permissions: ["menu.plans", "menu.users"],
+  });
+  feature.renderRoleAdminPanel();
+  assert.ok(elements.roleAdminPanel.innerHTML.includes('<span class="system-tag">System</span>'));
+  assert.ok(elements.roleAdminPanel.innerHTML.includes("Test plans, User management"));
   assert.ok(renderContentCalls >= 1);
   process.stdout.write("admin feature VM smoke: ok\n");
 })().catch((error) => {

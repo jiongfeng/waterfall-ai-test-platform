@@ -313,6 +313,17 @@ const waitingItem = {
       finished_at: 1785456020500,
     },
     {
+      stage_id: "stage-cancelled",
+      sequence_no: 4.75,
+      stage_type: "generate",
+      stage_name: "生成脚本",
+      status: "failed",
+      error: "脚本准备任务已取消。",
+      result: { error: "脚本准备任务已取消。", error_type: "cancelled" },
+      started_at: 1785456020600,
+      finished_at: 1785456020700,
+    },
+    {
       stage_id: "stage-human",
       sequence_no: 5,
       stage_type: "human_review",
@@ -540,6 +551,10 @@ const feature = context.window.createAgentScriptPreparationFeature(root, {
   assert.strictEqual(elements.detailMeta.getAttribute("data-i18n-dynamic"), null);
   assert.ok(elements.detailMeta.innerHTML.includes("Script preparation</span>"));
   assert.ok(elements.detailMeta.innerHTML.includes("data-i18n-dynamic>登录模块</span>"));
+
+  feature.selectHistory("stage-cancelled");
+  assert.ok(elements.detailContent.innerHTML.includes("The script-preparation task was cancelled."));
+  assert.ok(!elements.detailContent.innerHTML.includes("脚本准备任务已取消。"));
 
   feature.selectHistory("stage-vendor");
   assert.ok(elements.detailContent.innerHTML.includes('data-i18n-dynamic>计划</span>'));

@@ -27,6 +27,9 @@ function createScriptPreparationFeature(root, options = {}) {
     return translated && translated !== key ? translated : fallback;
   };
   const platformText = (value) => windowRef.WaterfallI18n?.source?.(value) || value;
+  const localizePlatformError = (value) => value === "脚本准备任务已取消。"
+    ? translate("scriptPreparation.cancelledError", {}, value)
+    : value;
   const markDynamic = (element, enabled = true) => windowRef.WaterfallI18n?.markDynamic?.(element, enabled);
   const setMixedText = (element, parts) => {
     markDynamic(element, false);
@@ -220,6 +223,21 @@ function createScriptPreparationFeature(root, options = {}) {
 
   function isPlainObject(value) {
     return Boolean(value && typeof value === "object" && !Array.isArray(value));
+  }
+
+  function localizePlatformErrorPayload(value) {
+    if (typeof value === "string") {
+      return localizePlatformError(value);
+    }
+    if (Array.isArray(value)) {
+      return value.map(localizePlatformErrorPayload);
+    }
+    if (isPlainObject(value)) {
+      return Object.fromEntries(
+        Object.entries(value).map(([key, entry]) => [key, localizePlatformErrorPayload(entry)]),
+      );
+    }
+    return value;
   }
 
   function asArray(value) {
@@ -665,7 +683,7 @@ function createScriptPreparationFeature(root, options = {}) {
       return pendingActionText(pendingAction);
     }
     if (item.progress_message) {
-      return item.progress_message;
+      return localizePlatformError(item.progress_message);
     }
     const group = statusGroup(item.status);
     if (group === "ready") {
@@ -1105,7 +1123,7 @@ function createScriptPreparationFeature(root, options = {}) {
                 )
               : platformText("重新执行当前版本")
           : platformText("暂无有效推荐");
-    const summary = firstText(
+    const summary = localizePlatformError(firstText(
       analysis.summary,
       analysis.root_cause,
       analysis.failure_reason,
@@ -1119,7 +1137,7 @@ function createScriptPreparationFeature(root, options = {}) {
               "脚本版本已更新，请重新执行当前版本",
             )
           : failed ? "AI 未能形成有效建议，请结合失败详情人工选择下一步。" : "AI 已完成失败分析，请结合证据选择下一步。",
-    );
+    ));
     const facts = analysisList(analysis.facts || analysis.confirmed_facts);
     const evidence = analysisList(analysis.evidence_refs || analysis.evidence_references);
     const risks = analysisList(analysis.risks);
@@ -1143,7 +1161,7 @@ function createScriptPreparationFeature(root, options = {}) {
         ${
           facts.length || evidence.length
             ? `<ul>${[...facts, ...evidence].slice(0, 8).map((entry) => `<li data-i18n-dynamic>${escapeHtml(entry)}</li>`).join("")}</ul>`
-            : `<p ${item.error ? "data-i18n-dynamic" : ""}>${escapeHtml(firstText(item.error, "详细证据会随执行记录一并保留。"))}</p>`
+            : `<p ${item.error ? "data-i18n-dynamic" : ""}>${escapeHtml(localizePlatformError(firstText(item.error, "详细证据会随执行记录一并保留。")))}</p>`
         }
       </section>
       <section class="script-preparation-content-card">
@@ -1176,7 +1194,7 @@ function createScriptPreparationFeature(root, options = {}) {
   function failureMarkup(item, stage) {
     const detail = stageDetailObject(stage);
     const rawError = firstText(stage.error, detail.error, detail.error_message, item.error);
-    const error = firstText(stage.error, detail.error, detail.error_message, item.error, "本次处理失败。");
+    const error = localizePlatformError(firstText(stage.error, detail.error, detail.error_message, item.error, "本次处理失败。"));
     const rawTitle = firstText(detail.title, detail.failure_step);
     const labelInfo = stageLabelInfo(stage, item);
     const inputVersion = firstNumber(
@@ -1205,7 +1223,7 @@ function createScriptPreparationFeature(root, options = {}) {
       </div>
       <section class="script-preparation-content-card">
         <h4>失败详情</h4>
-        <pre class="script-preparation-code-box">${escapeHtml(Object.keys(detail).length ? previewJson(detail) : error)}</pre>
+        <pre class="script-preparation-code-box">${escapeHtml(Object.keys(detail).length ? previewJson(localizePlatformErrorPayload(detail)) : error)}</pre>
       </section>
     `;
   }

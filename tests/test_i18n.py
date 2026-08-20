@@ -14,6 +14,14 @@ class PlatformErrorLocalizationTests(unittest.TestCase):
             localize_platform_error("创建 Agent 任务失败：需求不存在。", "en"),
             "Could not create Agent task: Requirement not found.",
         )
+        self.assertEqual(
+            localize_platform_error("脚本准备任务已取消。", "en"),
+            "The script-preparation task was cancelled.",
+        )
+        self.assertEqual(
+            localize_platform_error("重置密码失败：需求不存在。", "en"),
+            "Could not reset password: Requirement not found.",
+        )
 
     def test_chinese_and_unknown_errors_are_preserved(self):
         self.assertEqual(localize_platform_error("需求不存在。", "zh-CN"), "需求不存在。")

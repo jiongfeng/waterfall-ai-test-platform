@@ -2495,7 +2495,9 @@ function renderScriptTree() {
   if (!modules.length) {
     const empty = document.createElement("div");
     empty.className = "module-item";
-    empty.textContent = state.scripts.modules.length ? "没有匹配的脚本" : "未找到测试脚本";
+    empty.textContent = state.scripts.modules.length
+      ? t("scripts.empty.noMatches")
+      : t("scripts.empty.noScripts");
     elements.moduleList.appendChild(empty);
     return;
   }

@@ -101,6 +101,15 @@ assert.strictEqual(
   "Passed scripts remain in the current module; ignoring applies only to this preparation task",
 );
 assert.match(
+  fs.readFileSync(path.join(appDir, "static/app.js"), "utf8"),
+  /t\("scripts\.empty\.(?:noMatches|noScripts)"\)/,
+  "Script-tree empty states must use semantic translation keys.",
+);
+const adminFeatureSource = fs.readFileSync(path.join(appDir, "static/js/features/admin.js"), "utf8");
+for (const key of ["auth.resetPassword", "auth.systemRoleTag", "auth.permission."]) {
+  assert.ok(adminFeatureSource.includes(key), `Admin UI must use the ${key} translation path.`);
+}
+assert.match(
   fs.readFileSync(path.join(appDir, "templates/index.html"), "utf8"),
   /data-i18n-key="moduleScriptPreparation\.bulkGenerate"/,
   "The module preparation button must use its semantic translation key.",
@@ -141,6 +150,10 @@ vm.runInContext(i18nRuntime, runtimeContext);
 const runtime = runtimeContext.window.WaterfallI18n;
 assert.strictEqual(runtime.source("管理员"), "管理员", "User-authored text must not be translated globally.");
 assert.strictEqual(runtime.t("auth.builtInAdminDisplayName"), "Administrator");
+assert.strictEqual(runtime.t("scripts.empty.noScripts"), "No test scripts found");
+assert.strictEqual(runtime.t("auth.resetPassword"), "Reset password");
+assert.strictEqual(runtime.t("auth.permission.menu.plans"), "Test plans");
+assert.strictEqual(runtime.t("scriptPreparation.cancelledError"), "The script-preparation task was cancelled.");
 assert.strictEqual(
   runtime.source("项目目录将自动创建为：/workspace/<项目标识>"),
   "The project directory will be created as: /workspace/<project-key>",
