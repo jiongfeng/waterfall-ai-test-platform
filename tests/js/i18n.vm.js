@@ -22,13 +22,166 @@ assert.deepStrictEqual(
 );
 
 const sourceCatalog = english.source;
+
+function extractJavaScriptStrings(source) {
+  const tokens = [];
+  let index = 0;
+  let line = 1;
+
+  function readQuoted(quote) {
+    const startLine = line;
+    let value = "";
+    index += 1;
+    while (index < source.length) {
+      const character = source[index];
+      if (character === "\\") {
+        value += character;
+        index += 1;
+        if (index < source.length) {
+          value += source[index];
+          if (source[index] === "\n") line += 1;
+          index += 1;
+        }
+        continue;
+      }
+      if (character === quote) {
+        index += 1;
+        tokens.push({ type: "quoted", value, line: startLine });
+        return;
+      }
+      if (character === "\n") line += 1;
+      value += character;
+      index += 1;
+    }
+  }
+
+  function skipComment() {
+    if (source[index] !== "/") return false;
+    if (source[index + 1] === "/") {
+      index += 2;
+      while (index < source.length && source[index] !== "\n") index += 1;
+      return true;
+    }
+    if (source[index + 1] === "*") {
+      index += 2;
+      while (index < source.length - 1 && !(source[index] === "*" && source[index + 1] === "/")) {
+        if (source[index] === "\n") line += 1;
+        index += 1;
+      }
+      index += 2;
+      return true;
+    }
+    return false;
+  }
+
+  function skipRegularExpression() {
+    if (source[index] !== "/" || source[index + 1] === "/" || source[index + 1] === "*") return false;
+    let cursor = index + 1;
+    let inCharacterClass = false;
+    while (cursor < source.length && source[cursor] !== "\n") {
+      if (source[cursor] === "\\") {
+        cursor += 2;
+        continue;
+      }
+      if (source[cursor] === "[") inCharacterClass = true;
+      if (source[cursor] === "]") inCharacterClass = false;
+      if (source[cursor] === "/" && !inCharacterClass) {
+        index = cursor + 1;
+        while (/[a-z]/i.test(source[index] || "")) index += 1;
+        return true;
+      }
+      cursor += 1;
+    }
+    return false;
+  }
+
+  function readTemplate() {
+    const startLine = line;
+    let chunkLine = line;
+    let chunk = "";
+    let interpolated = false;
+    index += 1;
+    while (index < source.length) {
+      const character = source[index];
+      if (character === "\\") {
+        chunk += character;
+        index += 1;
+        if (index < source.length) {
+          chunk += source[index];
+          if (source[index] === "\n") line += 1;
+          index += 1;
+        }
+        continue;
+      }
+      if (character === "`") {
+        if (chunk) tokens.push({ type: interpolated ? "templateChunk" : "template", value: chunk, line: chunkLine });
+        index += 1;
+        return;
+      }
+      if (character === "$" && source[index + 1] === "{") {
+        if (chunk) tokens.push({ type: "templateChunk", value: chunk, line: chunkLine });
+        chunk = "";
+        interpolated = true;
+        index += 2;
+        readExpression();
+        chunkLine = line;
+        continue;
+      }
+      if (character === "\n") line += 1;
+      chunk += character;
+      index += 1;
+    }
+    if (chunk) tokens.push({ type: interpolated ? "templateChunk" : "template", value: chunk, line: startLine });
+  }
+
+  function readExpression() {
+    let depth = 1;
+    while (index < source.length && depth > 0) {
+      if (skipComment()) continue;
+      if (skipRegularExpression()) continue;
+      const character = source[index];
+      if (character === '"' || character === "'") {
+        readQuoted(character);
+        continue;
+      }
+      if (character === "`") {
+        readTemplate();
+        continue;
+      }
+      if (character === "{") depth += 1;
+      if (character === "}") depth -= 1;
+      if (character === "\n") line += 1;
+      index += 1;
+    }
+  }
+
+  while (index < source.length) {
+    if (skipComment()) continue;
+    if (skipRegularExpression()) continue;
+    const character = source[index];
+    if (character === '"' || character === "'") {
+      readQuoted(character);
+      continue;
+    }
+    if (character === "`") {
+      readTemplate();
+      continue;
+    }
+    if (character === "\n") line += 1;
+    index += 1;
+  }
+  return tokens;
+}
 const templateDirectory = path.join(appDir, "templates");
-const templateFiles = [
-  "templates/index.html",
-  ...fs.readdirSync(path.join(templateDirectory, "partials"))
-    .filter((name) => name.endsWith(".html"))
-    .map((name) => `templates/partials/${name}`),
-];
+function collectFiles(directory, suffix) {
+  return fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    const absolutePath = path.join(directory, entry.name);
+    if (entry.isDirectory()) return collectFiles(absolutePath, suffix);
+    return entry.name.endsWith(suffix) ? [absolutePath] : [];
+  });
+}
+const templateFiles = collectFiles(templateDirectory, ".html")
+  .map((filename) => path.relative(appDir, filename));
 for (const filename of templateFiles) {
   const template = fs.readFileSync(path.join(appDir, filename), "utf8");
   const values = [
@@ -51,34 +204,73 @@ for (const filename of templateFiles) {
 // an English project.  Prompt/asset content is safe: those controls are
 // excluded by i18n.js and must remain in its original language.
 const featureDirectory = path.join(appDir, "static/js/features");
-const agentAcceptanceFeatures = new Set([
-  "agent.js",
-  "agent-failure-workspace.js",
-  "agent-script-preparation.js",
-  "requirements.js",
+const coreDirectory = path.join(appDir, "static/js/core");
+const runtimeJavaScriptFiles = [
+  "static/app.js",
+  "static/js/login.js",
+  ...fs.readdirSync(coreDirectory)
+    .filter((name) => name.endsWith(".js"))
+    .map((name) => `static/js/core/${name}`),
+  ...fs.readdirSync(featureDirectory)
+    .filter((name) => name.endsWith(".js"))
+    .map((name) => `static/js/features/${name}`),
+];
+const semanticOnlyFeatures = new Set(["setup-preparation.js"]);
+const nonUiLiteralAllowlist = new Map([
+  ["注意：每个Step下面尽量生成实际代码，如果实在没有代码，需要说明为什么。", "default model instruction"],
+  [`要求：
+1. 不允许删除或注释任何 STEP。
+2. 保留执行视频`, "default model instruction"],
+  [".md, 运行并修复 tests/", "model instruction containing path placeholders"],
+  ["测试用例", "Chinese artifact filename fallback"],
+  ["用例索引", "Chinese artifact index filename"],
+  ["-用例索引", "Chinese artifact index suffix"],
 ]);
-for (const filename of fs.readdirSync(featureDirectory).filter((name) => name.endsWith(".js"))) {
-  const source = fs.readFileSync(path.join(featureDirectory, filename), "utf8");
-  const literals = [...source.matchAll(/"([^"\n]*[\u3400-\u9fff][^"\n]*)"/g)]
-    .map((match) => match[1])
-    .filter((value) => !value.includes("${") && !/[<>]/.test(value));
-  const missing = [...new Set(literals.filter((value) => !sourceCatalog[value]))];
+for (const relativePath of runtimeJavaScriptFiles) {
+  const filename = path.basename(relativePath);
+  const source = fs.readFileSync(path.join(appDir, relativePath), "utf8");
+  if (semanticOnlyFeatures.has(filename)) {
+    assert.doesNotMatch(
+      source,
+      /[\u3400-\u9fff]/,
+      `${relativePath} must use semantic translation keys instead of Chinese UI literals.`,
+    );
+    const semanticKeys = [...source.matchAll(/setup(?:Text|Html)\(\s*["']([^"']+)["']/g)]
+      .map((match) => `setupPreparation.${match[1]}`);
+    const missingSemanticKeys = [...new Set(semanticKeys.filter(
+      (key) => !english[key] || !chinese[key],
+    ))];
+    assert.deepStrictEqual(
+      missingSemanticKeys,
+      [],
+      `${relativePath} references missing setup-preparation translation keys.`,
+    );
+  }
+  const tokens = extractJavaScriptStrings(source);
+  const literals = tokens
+    .filter((token) => token.type !== "templateChunk")
+    .map((token) => (token.type === "quoted" ? token.value : token.value.trim()))
+    .filter((value) => /[\u3400-\u9fff]/.test(value) && !/[<>]/.test(value));
+  const missing = [...new Set(literals.filter(
+    (value) => !sourceCatalog[value] && !nonUiLiteralAllowlist.has(value),
+  ))];
   assert.deepStrictEqual(
     missing,
     [],
-    `${filename} contains a legacy Chinese literal without an English source catalog entry.`,
+    `${relativePath} contains a legacy Chinese literal without an English source catalog entry.`,
   );
-  if (agentAcceptanceFeatures.has(filename)) {
-    const embeddedHtmlValues = [...source.matchAll(/>([^<>`]*[\u3400-\u9fff][^<>`]*)</g)]
-      .map((match) => match[1].trim())
-      .filter((value) => value && !value.includes("${"));
-    const missingEmbeddedHtml = [...new Set(embeddedHtmlValues.filter((value) => !sourceCatalog[value]))];
-    assert.deepStrictEqual(
-      missingEmbeddedHtml,
-      [],
-      `${filename} contains an embedded first-party Chinese UI literal without an English translation.`,
-    );
-  }
+  const embeddedHtmlValues = tokens.flatMap((token) => [
+    ...token.value.matchAll(/>([^<>`]*[\u3400-\u9fff][^<>`]*)</g),
+    ...token.value.matchAll(/(?:title|aria-label|placeholder)=(["'])([^"']*[\u3400-\u9fff][^"']*)\1/g),
+  ]).map((match) => (match[2] || match[1]).trim()).filter(Boolean);
+  const missingEmbeddedHtml = [...new Set(embeddedHtmlValues.filter(
+    (value) => !sourceCatalog[value] && !nonUiLiteralAllowlist.has(value),
+  ))];
+  assert.deepStrictEqual(
+    missingEmbeddedHtml,
+    [],
+    `${relativePath} contains embedded first-party Chinese UI copy without an English translation.`,
+  );
 }
 
 assert.strictEqual(sourceCatalog["当前项目"], "Current project");
