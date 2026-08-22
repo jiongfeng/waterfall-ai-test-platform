@@ -1853,6 +1853,8 @@ class TestSuiteExecutionResultTests(unittest.TestCase):
         self.assertIn('state.activeStepKey === "run_suite"', source)
         self.assertIn("function normalizeAgentExecutionResultStatus(status)", agent_source)
         self.assertIn("normalizeAgentExecutionResultStatus(scriptResults[item.key])", agent_source)
+        self.assertIn("function buildAgentExecutionSummaryFromResults(scriptResults)", agent_source)
+        self.assertIn("buildAgentExecutionSummaryFromResults(materializedResults)", agent_source)
 
 
 class PlanCoveragePromptTests(unittest.TestCase):
