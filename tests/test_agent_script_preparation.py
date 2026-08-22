@@ -778,6 +778,7 @@ class ScriptPreparationStateMachineTests(unittest.TestCase):
             )
         self.assertTrue(result)
         self.assertFalse(active["value"])
+        runtime.get_agent_step_output.assert_not_called()
 
     def test_agent_failure_analysis_redacts_payload_before_model_call(self):
         runtime = MagicMock()
