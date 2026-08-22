@@ -257,6 +257,10 @@ function asArray(value) {
   return Array.isArray(value) ? value : [];
 }
 
+function normalizeAgentExecutionResultStatus(status) {
+  return status === "succeeded" ? "passed" : status || "unknown";
+}
+
 function isPlainObject(value) {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
@@ -1585,7 +1589,7 @@ function buildAgentLocalExecutionRecord(context) {
   const running = ["queued", "running"].includes(result.status || context.step?.status);
   const results = normalizedItems.map((item, index) => {
     const status = Object.prototype.hasOwnProperty.call(scriptResults, item.key)
-      ? normalizeExecutionResultStatus(scriptResults[item.key])
+      ? normalizeAgentExecutionResultStatus(scriptResults[item.key])
       : running
         ? "running"
         : "unknown";
