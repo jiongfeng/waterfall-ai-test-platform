@@ -1839,6 +1839,7 @@ class TestSuiteExecutionResultTests(unittest.TestCase):
 
     def test_agent_execution_stage_reuses_test_suite_result_panel(self):
         source = read_platform_javascript()
+        agent_source = (app.APP_DIR / "static/js/features/agent.js").read_text(encoding="utf-8")
         template = render_index_template()
 
         self.assertIn(
@@ -1850,6 +1851,8 @@ class TestSuiteExecutionResultTests(unittest.TestCase):
         self.assertIn("function loadAgentExecutionResult(options = {})", source)
         self.assertIn("/execution-records?limit=20", source)
         self.assertIn('state.activeStepKey === "run_suite"', source)
+        self.assertIn("function normalizeAgentExecutionResultStatus(status)", agent_source)
+        self.assertIn("normalizeAgentExecutionResultStatus(scriptResults[item.key])", agent_source)
 
 
 class PlanCoveragePromptTests(unittest.TestCase):
