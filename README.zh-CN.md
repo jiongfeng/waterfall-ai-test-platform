@@ -22,7 +22,17 @@
 </p>
 
 <p align="center">
-  <img src="./docs/assets/waterfall-ai-demo.gif" alt="Waterfall AI 将 SauceDemo 购物需求转换为测试计划、Playwright 脚本和购物车验证结果" width="960">
+  <a href="./docs/assets/waterfall-ai-introduction-zh-CN.mp4">
+    <img src="./docs/assets/waterfall-ai-demo.gif" alt="Waterfall AI 将 SauceDemo 购物需求转换为测试计划、Playwright 脚本和购物车验证结果" width="960">
+  </a>
+</p>
+
+<p align="center">
+  <video src="./docs/assets/waterfall-ai-introduction-zh-CN.mp4" controls width="960"></video>
+</p>
+
+<p align="center">
+  <a href="./docs/assets/waterfall-ai-introduction-zh-CN.mp4"><strong>▶ 观看中文版介绍视频（MP4）</strong></a>
 </p>
 
 ## Agent 驱动的工作流
@@ -50,25 +60,6 @@ Waterfall AI 是基于 Playwright 构建的独立开源项目，与 Microsoft �
 界面和工作流仍在演进。采用 Beta 前请阅读[路线图](./ROADMAP.md)、
 [变更日志](./CHANGELOG.md)和[支持矩阵](./docs/support-matrix.md)。
 代码边界和扩展规则见 [ARCHITECTURE.md](./ARCHITECTURE.md)。
-
-## 安全边界
-
-受支持的部署假设：
-
-- 只有一个组织和一个信任域；
-- 运维人员、平台用户、仓库、生成代码和准备脚本均可信；
-- Linux/amd64 Docker 上只运行一个应用实例；
-- 被测系统已获授权、隔离、可恢复且不是生产环境；
-- 网络只允许访问必要的 MySQL、OpenCode/模型服务和被测系统；
-- 平台前方配置 TLS 和外部访问控制。
-
-Playwright 测试和准备脚本会执行代码。它们与平台共享应用容器的操作系统边界，
-**不能**作为敌对代码运行沙箱。默认关闭开关和容器限制只能减少误暴露，
-不能把容器变成沙箱。不要给不可信用户执行权限，不要挂载 Docker Socket，也
-不要连接生产凭据或生产数据。
-
-完整边界见[安全模型](./docs/security-model.md)和
-[部署指南](./docs/deployment.md)。
 
 ## Docker 快速开始（源码检出）
 
@@ -284,6 +275,25 @@ Compose 快速开始固定使用 `deploy/config.example.json` 中的数据库名
 `platform_database.user`；只修改一侧会导致平台无法连接数据库。
 
 完整字段和优先级见[配置参考](./docs/configuration.md)。
+
+## 安全边界
+
+受支持的部署假设：
+
+- 只有一个组织和一个信任域；
+- 运维人员、平台用户、仓库、生成代码和准备脚本均可信；
+- Linux/amd64 Docker 上只运行一个应用实例；
+- 被测系统已获授权、隔离、可恢复且不是生产环境；
+- 网络只允许访问必要的 MySQL、OpenCode/模型服务和被测系统；
+- 平台前方配置 TLS 和外部访问控制。
+
+Playwright 测试和准备脚本会执行代码。它们与平台共享应用容器的操作系统边界，
+**不能**作为敌对代码运行沙箱。默认关闭开关和容器限制只能减少误暴露，
+不能把容器变成沙箱。不要给不可信用户执行权限，不要挂载 Docker Socket，也
+不要连接生产凭据或生产数据。
+
+完整边界见[安全模型](./docs/security-model.md)和
+[部署指南](./docs/deployment.md)。
 
 ## 数据库基线：仅支持 file 模式
 
