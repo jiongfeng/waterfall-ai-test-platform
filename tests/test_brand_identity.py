@@ -31,6 +31,16 @@ class BrandIdentityTests(unittest.TestCase):
             "## Playwright Test Agents 的可视化工作台",
             readme_zh,
         )
+        self.assertIn(
+            "| Conversation-driven Playwright Test Agents | Waterfall AI |\n"
+            "| --- | --- |\n",
+            readme,
+        )
+        self.assertIn(
+            "| Playwright Test Agents 的对话式使用方式 | Waterfall AI |\n"
+            "| --- | --- |\n",
+            readme_zh,
+        )
         self.assertIn("not affiliated with, sponsored by, or endorsed", readme)
         self.assertIn("Waterfall AI", index)
         self.assertIn("Agent-driven test automation platform", index)
