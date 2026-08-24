@@ -1,12 +1,7 @@
 <p align="right"><a href="./README.md">English</a></p>
 
 <h1 align="center">Waterfall AI</h1>
-<p align="center"><strong>Agent 驱动的自动化测试平台</strong></p>
-
-<p align="center">
-把测试需求变成可审查的测试计划、可运行的 Playwright 测试和完整执行证据。<br>
-在一个自托管工作区中，由 AI Agent 完成规划、生成、审查、执行与修复。
-</p>
+<p align="center"><strong>基于 Playwright Test Agents 的开源可视化测试工作台</strong></p>
 
 <p align="center">
   <a href="https://github.com/jiongfeng/waterfall-ai-test-platform/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/jiongfeng/waterfall-ai-test-platform/actions/workflows/ci.yml/badge.svg"></a>
@@ -16,30 +11,30 @@
 </p>
 
 <p align="center">
-  <a href="#agent-驱动的工作流"><strong>了解工作流</strong></a> ·
+  <a href="#playwright-test-agents-的可视化工作台"><strong>了解工作流</strong></a> ·
   <a href="./docs/deployment.md"><strong>安装已签名 Beta</strong></a> ·
   <a href="./docs/security-model.md"><strong>了解安全边界</strong></a>
 </p>
 
-<p align="center">
-  <a href="./docs/assets/waterfall-ai-introduction-zh-CN.mp4">
-    <img src="./docs/assets/waterfall-ai-demo.gif" alt="Waterfall AI 将 SauceDemo 购物需求转换为测试计划、Playwright 脚本和购物车验证结果" width="960">
-  </a>
-</p>
-
-<p align="center">
-  <video src="./docs/assets/waterfall-ai-introduction-zh-CN.mp4" controls width="960"></video>
-</p>
+<!-- GitHub 附件地址需要独占一行，README 才会渲染原生视频播放控件。 -->
+https://github.com/user-attachments/assets/98697c2f-9b2a-45c5-bd0a-7dd617e7573c
 
 <p align="center">
   <a href="./docs/assets/waterfall-ai-introduction-zh-CN.mp4"><strong>▶ 观看中文版介绍视频（MP4）</strong></a>
 </p>
 
-## Agent 驱动的工作流
+## Playwright Test Agents 的可视化工作台
 
-| 规划 | 生成 | 执行与修复 |
+Playwright Test Agents 主要通过对话内容和文件目录交付结果；Waterfall AI
+把 Agent 能力组织为有状态、可操作、可追溯的测试流程：
+
+| Playwright Test Agents 的对话式使用方式 | Waterfall AI |
 | --- | --- | --- |
-| 把需求转换为可审查的 Markdown 计划 | 由 Agent 生成 Playwright 测试，并保留本地 Git 历史 | 真实执行测试、收集证据、修复失败并复验结果 |
+| 进度隐藏在聊天记录中 | 七阶段流程和任务状态清晰可见 |
+| 交付物散落在文件目录中 | 可视化管理模块、计划、脚本、测试集和报告 |
+| 修改依赖继续对话 | 在页面中直接查看、编辑或重新生成 |
+| 中断后需要重新解释上下文 | 保留执行阶段、版本、任务和已有产物 |
+| 失败信息散落在对话和文件中 | 集中关联日志、报告、视频、截图和追踪文件 |
 
 > **公开 Beta：**当前已签名预发布版本仅支持可信团队在 Linux/amd64 Docker
 > 上进行单租户部署；只支持全新安装，不是敌对代码安全沙箱。
@@ -49,13 +44,12 @@ Waterfall AI 是基于 Playwright 构建的独立开源项目，与 Microsoft �
 
 ## 主要能力
 
-- 项目、需求、测试计划、脚本和测试集管理；
-- 工作区测试资产的本地 Git 版本；
-- 基于 OpenCode 的计划、生成、审查、修复和 Agent 流程；
-- Playwright 执行，以及日志、报告、截图、视频和 trace；
-- 项目级准备脚本、绑定和执行记录；
-- 登录认证、角色、菜单权限和按 HTTP method 授权的 API；
-- MySQL 元数据、项目导入导出、诊断和恢复记录。
+- **自动推进，人工可控：**既可以由 Agent 一键推进完整流程，也可以在任意阶段查看、编辑、重新生成或人工接管。
+- **需求生成测试资产：**从产品需求出发，完成测试模块拆分、测试计划生成、UI 探索、Playwright 脚本生成和测试集组装。
+- **真实浏览器验证：**生成的测试会在真实浏览器中执行，只有验证通过的脚本才能进入测试集。
+- **失败修复闭环：**保留失败现场，支持重试、智能修复和重新验证，使修复结果能够被再次执行确认。
+- **测试资产版本化：**模块、计划和脚本均可查看与修改，并通过本地 Git 记录版本，支持历史追溯和恢复。
+- **完整执行证据：**每次测试执行都关联汇总结果、Run ID、日志、测试报告，以及按 Playwright 配置生成的视频、截图和追踪文件。
 
 界面和工作流仍在演进。采用 Beta 前请阅读[路线图](./ROADMAP.md)、
 [变更日志](./CHANGELOG.md)和[支持矩阵](./docs/support-matrix.md)。

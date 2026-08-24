@@ -1,13 +1,7 @@
 <p align="right"><a href="./README.zh-CN.md">简体中文</a></p>
 
 <h1 align="center">Waterfall AI</h1>
-<p align="center"><strong>Agent-driven test automation platform</strong></p>
-
-<p align="center">
-Turn test requirements into reviewable plans, runnable Playwright tests,<br>
-and evidence-rich results in one self-hosted workspace.<br>
-Plan, generate, review, execute, and repair with an AI agent.
-</p>
+<p align="center"><strong>Open-source visual test workbench for Playwright Test Agents</strong></p>
 
 <p align="center">
   <a href="https://github.com/jiongfeng/waterfall-ai-test-platform/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/jiongfeng/waterfall-ai-test-platform/actions/workflows/ci.yml/badge.svg"></a>
@@ -17,30 +11,31 @@ Plan, generate, review, execute, and repair with an AI agent.
 </p>
 
 <p align="center">
-  <a href="#agent-driven-workflow"><strong>Explore the workflow</strong></a> ·
+  <a href="#a-visual-workbench-for-playwright-test-agents"><strong>Explore the workflow</strong></a> ·
   <a href="./docs/deployment.md"><strong>Install the signed Beta</strong></a> ·
   <a href="./docs/security-model.md"><strong>Understand the security boundary</strong></a>
 </p>
 
-<p align="center">
-  <a href="./docs/assets/waterfall-ai-introduction-en.mp4">
-    <img src="./docs/assets/waterfall-ai-demo.gif" alt="Waterfall AI turns a SauceDemo shopping requirement into a test plan, a Playwright script, and a verified cart result" width="960">
-  </a>
-</p>
-
-<p align="center">
-  <video src="./docs/assets/waterfall-ai-introduction-en.mp4" controls width="960"></video>
-</p>
+<!-- Keep this GitHub attachment URL on its own line so the README renders native video controls. -->
+https://github.com/user-attachments/assets/5aff4173-5871-4e76-a9bb-1460ab5ceb1a
 
 <p align="center">
   <a href="./docs/assets/waterfall-ai-introduction-en.mp4"><strong>▶ Watch the English introduction video (MP4)</strong></a>
 </p>
 
-## Agent-driven workflow
+## A visual workbench for Playwright Test Agents
 
-| Plan | Generate | Run and repair |
+Playwright Test Agents primarily deliver results through conversations and file
+directories. Waterfall AI organizes those Agent capabilities into a stateful,
+operable, and traceable testing workflow:
+
+| Conversation-driven Playwright Test Agents | Waterfall AI |
 | --- | --- | --- |
-| Turn requirements into reviewable Markdown plans | Generate Playwright tests with Agent assistance and local Git history | Execute tests, collect evidence, repair failures, and verify the result |
+| Progress is hidden in chat history | Seven workflow stages and task states stay visible |
+| Deliverables are scattered across file directories | Visually manage modules, plans, scripts, suites, and reports |
+| Changes depend on continuing the conversation | View, edit, or regenerate directly in the UI |
+| Interruptions require context to be explained again | Preserve stages, versions, tasks, and existing artifacts |
+| Failure details are scattered across conversations and files | Connect logs, reports, videos, screenshots, and traces in one place |
 
 > **Public Beta:** The current signed prerelease supports trusted,
 > single-tenant Linux/amd64 Docker deployments only. Fresh installation only;
@@ -50,16 +45,22 @@ Waterfall AI is an independent open-source project built with Playwright. It is
 not affiliated with, sponsored by, or endorsed by Microsoft or the Playwright
 project.
 
-## What it includes
+## Core capabilities
 
-- project, requirement, test-plan, script, and test-suite management;
-- local Git revisions for workspace test assets;
-- OpenCode-assisted planning, generation, review, repair, and Agent workflows;
-- Playwright execution with logs, reports, screenshots, video, and trace;
-- project-scoped setup scripts and execution records;
-- authentication, roles, menu permissions, and method-aware API authorization;
-- MySQL metadata, project import/export, diagnostics, and recovery-oriented
-  records.
+- **One-click automation with human control:** Let the Agent advance the full
+  workflow automatically, or inspect, edit, regenerate, and take over at any
+  stage.
+- **Requirements into test assets:** Start from product requirements and build
+  test modules, plans, UI exploration, Playwright scripts, and test suites.
+- **Real-browser verification:** Run generated tests in a real browser and
+  admit only verified scripts into the test suite.
+- **A closed failure-repair loop:** Retain failure context, retry, repair, and
+  reverify so every fix is confirmed by another execution.
+- **Versioned test assets:** View and edit modules, plans, and scripts while
+  local Git history supports traceability and restoration.
+- **Complete execution evidence:** Associate every run with a summary, Run ID,
+  logs, and test reports, plus videos, screenshots, and traces captured
+  according to the Playwright configuration.
 
 The interface and workflows are still evolving. See the
 [roadmap](./ROADMAP.md), [changelog](./CHANGELOG.md), and
