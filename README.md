@@ -30,7 +30,7 @@ directories. Waterfall AI organizes those Agent capabilities into a stateful,
 operable, and traceable testing workflow:
 
 | Conversation-driven Playwright Test Agents | Waterfall AI |
-| --- | --- | --- |
+| --- | --- |
 | Progress is hidden in chat history | Seven workflow stages and task states stay visible |
 | Deliverables are scattered across file directories | Visually manage modules, plans, scripts, suites, and reports |
 | Changes depend on continuing the conversation | View, edit, or regenerate directly in the UI |
