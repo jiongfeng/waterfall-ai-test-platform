@@ -23,7 +23,17 @@ Plan, generate, review, execute, and repair with an AI agent.
 </p>
 
 <p align="center">
-  <img src="./docs/assets/waterfall-ai-demo.gif" alt="Waterfall AI turns a SauceDemo shopping requirement into a test plan, a Playwright script, and a verified cart result" width="960">
+  <a href="./docs/assets/waterfall-ai-introduction-en.mp4">
+    <img src="./docs/assets/waterfall-ai-demo.gif" alt="Waterfall AI turns a SauceDemo shopping requirement into a test plan, a Playwright script, and a verified cart result" width="960">
+  </a>
+</p>
+
+<p align="center">
+  <video src="./docs/assets/waterfall-ai-introduction-en.mp4" controls width="960"></video>
+</p>
+
+<p align="center">
+  <a href="./docs/assets/waterfall-ai-introduction-en.mp4"><strong>▶ Watch the English introduction video (MP4)</strong></a>
 </p>
 
 ## Agent-driven workflow
@@ -56,28 +66,6 @@ The interface and workflows are still evolving. See the
 [support matrix](./docs/support-matrix.md) before adopting the Beta.
 Code boundaries and extension rules are maintained in
 [ARCHITECTURE.md](./ARCHITECTURE.md).
-
-## Security boundary
-
-The supported deployment assumes:
-
-- one organization and one trust domain;
-- trusted operators, platform users, repositories, generated code, and setup
-  scripts;
-- one application instance on Linux/amd64 Docker;
-- an authorized, isolated, recoverable non-production target system;
-- restricted network access to MySQL, OpenCode/model services, and the target;
-- TLS and an external access-control layer in front of the platform.
-
-Playwright tests and setup scripts execute code. They share the application
-container's operating-system boundary and are **not** isolated from the
-platform as hostile code. Default-off switches and container restrictions
-reduce accidental exposure; they do not turn the container into a sandbox.
-Do not give untrusted users execution permissions, mount a Docker socket, or
-connect the platform to production credentials or production data.
-
-Read the complete [security model](./docs/security-model.md) and
-[deployment guide](./docs/deployment.md).
 
 ## Docker quickstart (source checkout)
 
@@ -329,6 +317,28 @@ connecting.
 
 See [configuration.md](./docs/configuration.md) for the full schema and
 precedence rules.
+
+## Security boundary
+
+The supported deployment assumes:
+
+- one organization and one trust domain;
+- trusted operators, platform users, repositories, generated code, and setup
+  scripts;
+- one application instance on Linux/amd64 Docker;
+- an authorized, isolated, recoverable non-production target system;
+- restricted network access to MySQL, OpenCode/model services, and the target;
+- TLS and an external access-control layer in front of the platform.
+
+Playwright tests and setup scripts execute code. They share the application
+container's operating-system boundary and are **not** isolated from the
+platform as hostile code. Default-off switches and container restrictions
+reduce accidental exposure; they do not turn the container into a sandbox.
+Do not give untrusted users execution permissions, mount a Docker socket, or
+connect the platform to production credentials or production data.
+
+Read the complete [security model](./docs/security-model.md) and
+[deployment guide](./docs/deployment.md).
 
 ## Database baseline: file mode only
 
