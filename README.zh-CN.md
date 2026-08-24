@@ -1,6 +1,6 @@
 <p align="right"><a href="./README.md">English</a></p>
 
-<h1 align="center">Waterfall AI</h1>
+<h1 align="center">Waterfall AI Test</h1>
 <p align="center"><strong>基于 Playwright Test Agents 的开源可视化测试工作台</strong></p>
 
 <p align="center">
@@ -25,10 +25,10 @@ https://github.com/user-attachments/assets/98697c2f-9b2a-45c5-bd0a-7dd617e7573c
 
 ## Playwright Test Agents 的可视化工作台
 
-Playwright Test Agents 主要通过对话内容和文件目录交付结果；Waterfall AI
+Playwright Test Agents 主要通过对话内容和文件目录交付结果；Waterfall AI Test
 把 Agent 能力组织为有状态、可操作、可追溯的测试流程：
 
-| Playwright Test Agents 的对话式使用方式 | Waterfall AI |
+| Playwright Test Agents 的对话式使用方式 | Waterfall AI Test |
 | --- | --- |
 | 进度隐藏在聊天记录中 | 七阶段流程和任务状态清晰可见 |
 | 交付物散落在文件目录中 | 可视化管理模块、计划、脚本、测试集和报告 |
@@ -39,7 +39,7 @@ Playwright Test Agents 主要通过对话内容和文件目录交付结果；Wat
 > **公开 Beta：**当前已签名预发布版本仅支持可信团队在 Linux/amd64 Docker
 > 上进行单租户部署；只支持全新安装，不是敌对代码安全沙箱。
 
-Waterfall AI 是基于 Playwright 构建的独立开源项目，与 Microsoft 或 Playwright
+Waterfall AI Test 是基于 Playwright 构建的独立开源项目，与 Microsoft 或 Playwright
 项目不存在隶属、赞助或官方背书关系。
 
 ## 主要能力
@@ -220,7 +220,7 @@ Playwright 报告、截图、视频、trace、浏览器下载、工作区 Git �
 旧仓库地址重定向到新地址。不可变的 `v0.1.0-beta.3` Release 会保留原有
 `playwright-test-platform-*` 制品名和
 `ghcr.io/jiongfeng/playwright-test-platform` 镜像地址；改名后的新 Release 使用
-Waterfall AI 命名。为保障现有部署兼容，`playwright_platform` 数据库、Python 包路径、
+Waterfall AI Test 命名。为保障现有部署兼容，`playwright_platform` 数据库、Python 包路径、
 容器内部路径和既有 Session Cookie 名称保持不变。
 
 ## 仅支持全新安装的升级边界
