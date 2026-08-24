@@ -15,6 +15,14 @@ function createSetupPreparation(deps) {
     renderHost,
   } = deps;
 
+function setupText(key, params = {}) {
+  return window.WaterfallI18n?.t?.(`setupPreparation.${key}`, params) || `setupPreparation.${key}`;
+}
+
+function setupHtml(key, params = {}) {
+  return escapeHtml(setupText(key, params));
+}
+
 function setupValue(value, ...keys) {
   for (const key of keys) {
     if (value && Object.prototype.hasOwnProperty.call(value, key)) {
@@ -41,21 +49,29 @@ function setSetupNotice(message, type = "") {
 
 function setupStatusInfo(status) {
   if (["succeeded", "passed"].includes(status)) {
-    return { label: "成功", className: "success" };
+    return { label: setupText("status.success"), className: "success" };
   }
   if (status === "succeeded_with_warnings") {
-    return { label: "完成（有警告）", className: "cancelled" };
+    return { label: setupText("status.completedWithWarnings"), className: "cancelled" };
   }
   if (["failed", "timed_out"].includes(status)) {
-    return { label: "失败", className: "error" };
+    return { label: setupText("status.failed"), className: "error" };
   }
   if (["running", "queued"].includes(status)) {
-    return { label: status === "running" ? "运行中" : "等待中", className: "running" };
+    return {
+      label: setupText(status === "running" ? "status.running" : "status.queued"),
+      className: "running",
+    };
   }
   if (["skipped", "cancelled", "interrupted"].includes(status)) {
-    return { label: status === "interrupted" ? "已中断" : status === "cancelled" ? "已取消" : "已跳过", className: "cancelled" };
+    const statusKey = status === "interrupted"
+      ? "status.interrupted"
+      : status === "cancelled"
+        ? "status.cancelled"
+        : "status.skipped";
+    return { label: setupText(statusKey), className: "cancelled" };
   }
-  return { label: status || "未运行", className: "" };
+  return { label: status || setupText("status.notRun"), className: "" };
 }
 
 function formatSetupTimestamp(value) {
@@ -129,7 +145,7 @@ function normalizeSetupScript(value) {
       : {};
   return {
     uid: String(setupValue(script, "uid", "script_uid", "id") || ""),
-    name: String(script.name || "未命名准备脚本"),
+    name: String(script.name || setupText("script.untitled")),
     description: String(script.description || ""),
     script_content: String(script.script_content || script.content || ""),
     working_directory: String(script.working_directory || ""),
@@ -168,7 +184,11 @@ function getLatestSetupScriptRun(scriptUid) {
 }
 
 function setupScopeLabel(scopeType) {
-  return { project: "项目", test_suite: "测试集", script: "脚本" }[scopeType] || "项目";
+  return setupText({
+    project: "scope.project",
+    test_suite: "scope.testSuite",
+    script: "scope.script",
+  }[scopeType] || "scope.project");
 }
 
 function currentSetupProjectKey() {
@@ -176,7 +196,7 @@ function currentSetupProjectKey() {
 }
 
 function currentSetupProjectName() {
-  return getProject()?.name || currentSetupProjectKey() || "当前项目";
+  return getProject()?.name || currentSetupProjectKey() || setupText("currentProject");
 }
 
 function defaultSetupScriptBinding(scriptUid = "") {
@@ -310,12 +330,12 @@ function readSetupEnvironmentRows(strict = true) {
     }
     if (!row.key) {
       if (strict) {
-        throw new Error("环境变量名称不能为空。");
+        throw new Error(setupText("validation.environmentNameRequired"));
       }
       return;
     }
     if (Object.prototype.hasOwnProperty.call(environment, row.key) && strict) {
-      throw new Error(`环境变量“${row.key}”重复。`);
+      throw new Error(setupText("validation.environmentDuplicate", { name: row.key }));
     }
     environment[row.key] = row.value;
   });
@@ -356,13 +376,15 @@ function setupScriptPayload() {
   syncSetupScriptDraftFromForm();
   const draft = setup.scriptDraft;
   if (!draft?.name.trim()) {
-    throw new Error("请输入脚本名称。");
+    throw new Error(setupText("validation.nameRequired"));
   }
   if (!draft.script_content.trim()) {
-    throw new Error("请输入 Bash 脚本内容。");
+    throw new Error(setupText("validation.contentRequired"));
   }
   if (!setup.draftBinding?.scope_key) {
-    throw new Error(`请选择目标${setupScopeLabel(setup.draftBinding?.scope_type)}。`);
+    throw new Error(setupText("validation.targetRequired", {
+      scope: setupScopeLabel(setup.draftBinding?.scope_type),
+    }));
   }
   return {
     name: draft.name.trim(),
@@ -434,7 +456,7 @@ async function saveSetupScript(event, options = {}) {
     setup.scriptDraftSourceUid = "";
     setup.draftBinding = null;
     setup.draftEnvironmentRows = [];
-    setSetupNotice(sourceUid ? "准备脚本已保存。" : "准备脚本已创建。", "success");
+    setSetupNotice(setupText(sourceUid ? "notice.saved" : "notice.created"), "success");
     setup.isSaving = false;
     if (options.trial === true) {
       openSetupRunDetail(saved.uid);
@@ -455,7 +477,7 @@ async function saveSetupScript(event, options = {}) {
 async function deleteSetupScript(scriptUid) {
   const setup = setupState;
   const script = getSetupScript(scriptUid);
-  if (!script || !window.confirm(`删除准备脚本“${script.name}”？历史执行记录仍会保留。`)) {
+  if (!script || !window.confirm(setupText("confirmDelete", { name: script.name }))) {
     return;
   }
   setup.isSaving = true;
@@ -465,7 +487,7 @@ async function deleteSetupScript(scriptUid) {
     setup.scripts = setup.scripts.filter((item) => item.uid !== script.uid);
     setup.bindings = setup.bindings.filter((binding) => binding.script_uid !== script.uid);
     setup.selectedScriptUid = setup.scripts[0]?.uid || "";
-    setSetupNotice("准备脚本已删除。", "success");
+    setSetupNotice(setupText("notice.deleted"), "success");
   } catch (error) {
     setSetupNotice(error.message, "error");
   } finally {
@@ -506,7 +528,7 @@ async function trialRunSetupScript(scriptUid = setupState.runDetailScriptUid) {
   setup.runDetailScriptUid = script.uid;
   setup.runDetailModalOpen = true;
   setup.isRunning = true;
-  setSetupNotice("正在执行准备脚本，请稍候…", "");
+  setSetupNotice(setupText("notice.running"), "");
   renderHost();
   try {
     const data = await requestJson(`/api/setup-scripts/${encodePathPart(script.uid)}/trial-run`, {
@@ -520,7 +542,7 @@ async function trialRunSetupScript(scriptUid = setupState.runDetailScriptUid) {
       setup.selectedRunUid = normalized.uid;
     }
     await loadSetupPreparationRuns(script.uid);
-    setSetupNotice("试运行已完成。", "success");
+    setSetupNotice(setupText("notice.trialComplete"), "success");
   } catch (error) {
     try {
       await loadSetupPreparationRuns(script.uid);
@@ -553,21 +575,21 @@ function renderSetupTargetOptions(scopeType, selectedKey) {
     targets.unshift({ key: selectedKey, label: selectedKey });
   }
   if (!targets.length) {
-    return `<option value="">暂无可选${escapeHtml(setupScopeLabel(scopeType))}</option>`;
+    return `<option value="">${setupHtml("target.noneAvailable", { scope: setupScopeLabel(scopeType) })}</option>`;
   }
   return targets
-    .map((target) => `<option value="${escapeHtml(target.key)}" data-label="${escapeHtml(target.label)}" ${target.key === selectedKey ? "selected" : ""}>${escapeHtml(target.label)}</option>`)
+    .map((target) => `<option value="${escapeHtml(target.key)}" data-label="${escapeHtml(target.label)}" data-i18n-dynamic ${target.key === selectedKey ? "selected" : ""}>${escapeHtml(target.label)}</option>`)
     .join("");
 }
 
 function renderSetupBindingSummary(scriptUid) {
   const bindings = getSetupScriptBindings(scriptUid);
   if (!bindings.length) {
-    return '<span class="setup-script-binding-empty">未绑定</span>';
+    return `<span class="setup-script-binding-empty">${setupHtml("binding.unbound")}</span>`;
   }
   const visible = bindings.slice(0, 2);
   return `<div class="setup-script-binding-summary">${visible
-    .map((binding) => `<span class="setup-scope-chip">${escapeHtml(setupScopeLabel(binding.scope_type))}</span><span title="${escapeHtml(binding.scope_key)}">${escapeHtml(binding.scope_label || binding.scope_key || "当前项目")}</span>`)
+    .map((binding) => `<span class="setup-scope-chip">${escapeHtml(setupScopeLabel(binding.scope_type))}</span><span data-i18n-dynamic title="${escapeHtml(binding.scope_key)}">${escapeHtml(binding.scope_label || binding.scope_key || setupText("currentProject"))}</span>`)
     .join("")}${bindings.length > visible.length ? `<small>+${bindings.length - visible.length}</small>` : ""}</div>`;
 }
 
@@ -584,26 +606,39 @@ function renderSetupScriptModal() {
   }
   const editing = Boolean(setup.scriptDraftSourceUid);
   const binding = setup.draftBinding || defaultSetupScriptBinding(draft.uid);
+  const environmentRows = setup.draftEnvironmentRows.length
+    ? setup.draftEnvironmentRows.map((row) => `
+      <div class="setup-environment-row" data-setup-environment-row="${escapeHtml(row.uid)}">
+        <input data-setup-environment-key type="text" value="${escapeHtml(row.key)}" placeholder="${setupHtml("field.variableName")}" aria-label="${setupHtml("field.environmentName")}" />
+        <input data-setup-environment-value type="text" value="${escapeHtml(row.value)}" placeholder="${setupHtml("field.variableValue")}" aria-label="${setupHtml("field.environmentValue")}" />
+        <button type="button" data-setup-remove-environment="${escapeHtml(row.uid)}">${setupHtml("action.delete")}</button>
+      </div>`).join("")
+    : `<div class="setup-environment-empty">${setupHtml("environment.empty")}</div>`;
+  const scopeSelectors = ["project", "test_suite", "script"].map((scopeType) => `
+    <label class="${binding.scope_type === scopeType ? "active" : ""}">
+      <input type="radio" name="scope_type" value="${scopeType}" ${binding.scope_type === scopeType ? "checked" : ""} />
+      <span>${escapeHtml(setupScopeLabel(scopeType))}</span>
+    </label>`).join("");
   return `
     <div class="setup-modal-backdrop" data-setup-backdrop="script">
       <section class="setup-modal setup-script-modal" role="dialog" aria-modal="true" aria-labelledby="setupScriptModalTitle">
-        <header class="setup-modal-header"><div><h3 id="setupScriptModalTitle">${editing ? "编辑准备脚本" : "新建准备脚本"}</h3></div><button class="setup-close-button" id="setupScriptModalClose" type="button" aria-label="关闭">关闭</button></header>
+        <header class="setup-modal-header"><div><h3 id="setupScriptModalTitle">${setupHtml(editing ? "modal.editTitle" : "modal.createTitle")}</h3></div><button class="setup-close-button" id="setupScriptModalClose" type="button" aria-label="${setupHtml("action.close")}">${setupHtml("action.close")}</button></header>
         ${setup.notice ? `<div class="setup-modal-notice ${escapeHtml(setup.noticeType)}">${escapeHtml(setup.notice)}</div>` : ""}
         <form class="setup-script-form" id="setupScriptForm">
           <div class="setup-script-form-layout">
             <section class="setup-script-detail-column">
-              <h4>脚本详情</h4>
-              <label class="setup-script-field" for="setupScriptDescription"><span>脚本描述（可选）</span><textarea id="setupScriptDescription" name="description" maxlength="200" placeholder="可选，简要描述脚本的用途、前置条件和注意事项">${escapeHtml(draft.description)}</textarea><small><span data-setup-description-count>${escapeHtml(draft.description.length)}</span>/200</small></label>
-              <label class="setup-script-field setup-script-content-field" for="setupScriptContent"><span>脚本内容 <b>*</b></span><div class="setup-code-editor"><div class="setup-code-toolbar"><span>Bash</span><button type="button" id="setupCodeExpand">全屏编辑</button></div><div class="setup-code-body"><div class="setup-code-gutter" id="setupCodeGutter" aria-hidden="true">${renderSetupCodeLineNumbers(draft.script_content)}</div><textarea id="setupScriptContent" name="script_content" spellcheck="false" aria-label="Bash 脚本内容">${escapeHtml(draft.script_content)}</textarea></div></div></label>
-              <div class="setup-script-contract"><strong>执行契约</strong><span>退出码 0 表示成功，非 0 将停止测试；标准输出与错误输出会脱敏后保留到执行详情。</span></div>
+              <h4>${setupHtml("section.scriptDetails")}</h4>
+              <label class="setup-script-field" for="setupScriptDescription"><span>${setupHtml("field.descriptionOptional")}</span><textarea id="setupScriptDescription" name="description" maxlength="200" placeholder="${setupHtml("field.descriptionPlaceholder")}">${escapeHtml(draft.description)}</textarea><small><span data-setup-description-count>${escapeHtml(draft.description.length)}</span>/200</small></label>
+              <label class="setup-script-field setup-script-content-field" for="setupScriptContent"><span>${setupHtml("field.content")} <b>*</b></span><div class="setup-code-editor"><div class="setup-code-toolbar"><span>Bash</span><button type="button" id="setupCodeExpand">${setupHtml("action.expandEditor")}</button></div><div class="setup-code-body"><div class="setup-code-gutter" id="setupCodeGutter" aria-hidden="true">${renderSetupCodeLineNumbers(draft.script_content)}</div><textarea id="setupScriptContent" name="script_content" spellcheck="false" aria-label="${setupHtml("field.contentAria")}">${escapeHtml(draft.script_content)}</textarea></div></div></label>
+              <div class="setup-script-contract"><strong>${setupHtml("contract.title")}</strong><span>${setupHtml("contract.description")}</span></div>
             </section>
             <aside class="setup-script-settings-column">
-              <label class="setup-script-field" for="setupScriptName"><span>脚本名称 <b>*</b></span><input id="setupScriptName" name="name" type="text" maxlength="64" value="${escapeHtml(draft.name)}" placeholder="请输入脚本名称，便于识别和复用" /><small><span data-setup-name-count>${escapeHtml(draft.name.length)}</span>/64</small></label>
-              <section class="setup-settings-section"><h4>运行设置</h4><label class="setup-script-field" for="setupWorkingDirectory"><span>工作目录</span><input id="setupWorkingDirectory" name="working_directory" type="text" value="${escapeHtml(draft.working_directory)}" placeholder="默认使用仓库根目录" /></label><label class="setup-script-field" for="setupTimeoutSeconds"><span>超时时间</span><div class="setup-input-suffix"><input id="setupTimeoutSeconds" name="timeout_seconds" type="number" min="1" value="${escapeHtml(draft.timeout_seconds)}" /><span>秒</span></div></label><label class="setup-script-field" for="setupConcurrencyKey"><span>并发键（可选）</span><input id="setupConcurrencyKey" name="concurrency_key" type="text" value="${escapeHtml(draft.concurrency_key)}" placeholder="用于串行化运行的资源锁标识" /></label><div class="setup-environment-heading"><span>环境变量（可选）</span><button class="secondary-button compact-button" id="setupAddEnvironment" type="button">添加变量</button></div><div class="setup-environment-list">${setup.draftEnvironmentRows.length ? setup.draftEnvironmentRows.map((row) => `<div class="setup-environment-row" data-setup-environment-row="${escapeHtml(row.uid)}"><input data-setup-environment-key type="text" value="${escapeHtml(row.key)}" placeholder="变量名" aria-label="环境变量名" /><input data-setup-environment-value type="text" value="${escapeHtml(row.value)}" placeholder="变量值" aria-label="环境变量值" /><button type="button" data-setup-remove-environment="${escapeHtml(row.uid)}">删除</button></div>`).join("") : '<div class="setup-environment-empty">当前未配置环境变量</div>'}</div><label class="setup-script-enabled"><span><strong>启用脚本</strong><small>停用后不会在 OpenCode 探索和测试执行前自动运行</small></span><input id="setupScriptEnabled" name="enabled" type="checkbox" ${draft.enabled ? "checked" : ""} /></label></section>
-              <section class="setup-settings-section setup-binding-section"><h4>绑定范围</h4><span class="setup-settings-label">绑定对象</span><div class="setup-scope-selector">${["project", "test_suite", "script"].map((scopeType) => `<label class="${binding.scope_type === scopeType ? "active" : ""}"><input type="radio" name="scope_type" value="${scopeType}" ${binding.scope_type === scopeType ? "checked" : ""} /><span>${escapeHtml(setupScopeLabel(scopeType))}</span></label>`).join("")}</div><label class="setup-script-field" for="setupScopeKey"><span>目标${escapeHtml(setupScopeLabel(binding.scope_type))} <b>*</b></span><select id="setupScopeKey" name="scope_key">${renderSetupTargetOptions(binding.scope_type, binding.scope_key)}</select></label><div class="setup-binding-help">生效优先级：脚本 &gt; 测试集 &gt; 项目。试运行日志会在独立的执行详情弹窗中展示。</div></section>
+              <label class="setup-script-field" for="setupScriptName"><span>${setupHtml("field.name")} <b>*</b></span><input id="setupScriptName" name="name" type="text" maxlength="64" value="${escapeHtml(draft.name)}" placeholder="${setupHtml("field.namePlaceholder")}" /><small><span data-setup-name-count>${escapeHtml(draft.name.length)}</span>/64</small></label>
+              <section class="setup-settings-section"><h4>${setupHtml("section.runtimeSettings")}</h4><label class="setup-script-field" for="setupWorkingDirectory"><span>${setupHtml("field.workingDirectory")}</span><input id="setupWorkingDirectory" name="working_directory" type="text" value="${escapeHtml(draft.working_directory)}" placeholder="${setupHtml("field.workingDirectoryPlaceholder")}" /></label><label class="setup-script-field" for="setupTimeoutSeconds"><span>${setupHtml("field.timeout")}</span><div class="setup-input-suffix"><input id="setupTimeoutSeconds" name="timeout_seconds" type="number" min="1" value="${escapeHtml(draft.timeout_seconds)}" /><span>${setupHtml("unit.seconds")}</span></div></label><label class="setup-script-field" for="setupConcurrencyKey"><span>${setupHtml("field.concurrencyOptional")}</span><input id="setupConcurrencyKey" name="concurrency_key" type="text" value="${escapeHtml(draft.concurrency_key)}" placeholder="${setupHtml("field.concurrencyPlaceholder")}" /></label><div class="setup-environment-heading"><span>${setupHtml("field.environmentOptional")}</span><button class="secondary-button compact-button" id="setupAddEnvironment" type="button">${setupHtml("action.addVariable")}</button></div><div class="setup-environment-list">${environmentRows}</div><label class="setup-script-enabled"><span><strong>${setupHtml("field.enabled")}</strong><small>${setupHtml("field.enabledHint")}</small></span><input id="setupScriptEnabled" name="enabled" type="checkbox" ${draft.enabled ? "checked" : ""} /></label></section>
+              <section class="setup-settings-section setup-binding-section"><h4>${setupHtml("section.bindingScope")}</h4><span class="setup-settings-label">${setupHtml("field.bindingTarget")}</span><div class="setup-scope-selector">${scopeSelectors}</div><label class="setup-script-field" for="setupScopeKey"><span>${setupHtml("field.target", { scope: setupScopeLabel(binding.scope_type) })} <b>*</b></span><select id="setupScopeKey" name="scope_key">${renderSetupTargetOptions(binding.scope_type, binding.scope_key)}</select></label><div class="setup-binding-help">${setupHtml("binding.help")}</div></section>
             </aside>
           </div>
-          <footer class="setup-modal-footer"><span class="setup-modal-footer-spacer"></span><button class="secondary-button" id="setupScriptCancel" type="button">取消</button><button class="secondary-button setup-trial-button" id="setupScriptSaveTrial" type="button" ${setup.isSaving ? "disabled" : ""}>试运行</button><button class="primary-button" type="submit" ${setup.isSaving ? "disabled" : ""}>${setup.isSaving ? "保存中" : "保存脚本"}</button></footer>
+          <footer class="setup-modal-footer"><span class="setup-modal-footer-spacer"></span><button class="secondary-button" id="setupScriptCancel" type="button">${setupHtml("action.cancel")}</button><button class="secondary-button setup-trial-button" id="setupScriptSaveTrial" type="button" ${setup.isSaving ? "disabled" : ""}>${setupHtml("action.trialRun")}</button><button class="primary-button" type="submit" ${setup.isSaving ? "disabled" : ""}>${setupHtml(setup.isSaving ? "action.saving" : "action.save")}</button></footer>
         </form>
       </section>
     </div>`;
@@ -618,13 +653,22 @@ function renderSetupScriptRunDetailModal() {
   const runs = script ? getSetupScriptRuns(script.uid) : [];
   const run = runs.find((item) => item.uid === setup.selectedRunUid) || runs[0] || null;
   const runStatus = setupStatusInfo(run?.status);
-  const output = run?.output_summary || "暂无标准输出。";
+  const output = run?.output_summary || setupText("run.noOutput");
+  const runHistory = runs.length
+    ? runs.map((item) => {
+      const status = setupStatusInfo(item.status);
+      return `<button type="button" class="${item.uid === run?.uid ? "active" : ""}" data-setup-run="${escapeHtml(item.uid)}"><span><strong>${escapeHtml(formatSetupTimestamp(item.started_at))}</strong><small data-i18n-dynamic>${escapeHtml(setupScopeLabel(item.target_type))} · ${escapeHtml(item.target_key || setupText("currentProject"))}</small></span><span class="status-badge ${status.className}">${escapeHtml(status.label)}</span></button>`;
+    }).join("")
+    : `<div class="setup-list-empty">${setupHtml("run.noHistory")}</div>`;
+  const runDetails = run
+    ? `<div class="setup-run-summary-grid"><div><span>${setupHtml("run.status")}</span><strong><span class="status-badge ${runStatus.className}">${escapeHtml(runStatus.label)}</span></strong></div><div><span>${setupHtml("run.exitCode")}</span><strong>${run.exit_code === null ? "-" : escapeHtml(run.exit_code)}</strong></div><div><span>${setupHtml("run.target")}</span><strong data-i18n-dynamic>${escapeHtml(setupScopeLabel(run.target_type))} · ${escapeHtml(run.target_key || setupText("currentProject"))}</strong></div><div><span>${setupHtml("run.startedAt")}</span><strong>${escapeHtml(formatSetupTimestamp(run.started_at))}</strong></div><div><span>${setupHtml("run.duration")}</span><strong>${escapeHtml(formatSetupDuration(run.duration_ms))}</strong></div></div><section class="setup-run-output setup-script-run-output"><header><strong>${setupHtml("run.shellOutput")}</strong><span>${escapeHtml(formatSetupTimestamp(run.finished_at || run.started_at))}</span></header><div><label>stdout / stderr</label><pre data-i18n-dynamic>${escapeHtml(output)}</pre></div>${run.error ? `<div class="error"><label>${setupHtml("run.error")}</label><pre data-i18n-dynamic>${escapeHtml(run.error)}</pre></div>` : ""}</section>`
+    : `<div class="setup-panel-empty"><strong>${setupHtml("run.noTrial")}</strong><span>${setupHtml("run.noTrialHint")}</span></div>`;
   return `
     <div class="setup-modal-backdrop" data-setup-backdrop="runs">
       <section class="setup-modal setup-run-modal setup-script-run-modal" role="dialog" aria-modal="true" aria-labelledby="setupRunModalTitle">
-        <header class="setup-modal-header"><div><h3 id="setupRunModalTitle">执行详情</h3><p>${escapeHtml(script?.name || "准备脚本")} · 试运行历史与 Shell 日志</p></div><div class="setup-run-header-actions"><button class="secondary-button" id="setupRefreshRuns" type="button" ${setup.isRunning ? "disabled" : ""}>刷新</button><button class="primary-button" id="setupTrialRun" type="button" ${!script || setup.isRunning ? "disabled" : ""}>${setup.isRunning ? "试运行中" : "试运行"}</button><button class="setup-close-button" id="setupRunModalClose" type="button">关闭</button></div></header>
+        <header class="setup-modal-header"><div><h3 id="setupRunModalTitle">${setupHtml("run.title")}</h3><p><span data-i18n-dynamic>${escapeHtml(script?.name || setupText("list.title"))}</span> · ${setupHtml("run.subtitle")}</p></div><div class="setup-run-header-actions"><button class="secondary-button" id="setupRefreshRuns" type="button" ${setup.isRunning ? "disabled" : ""}>${setupHtml("action.refresh")}</button><button class="primary-button" id="setupTrialRun" type="button" ${!script || setup.isRunning ? "disabled" : ""}>${setupHtml(setup.isRunning ? "action.trialRunning" : "action.trialRun")}</button><button class="setup-close-button" id="setupRunModalClose" type="button">${setupHtml("action.close")}</button></div></header>
         ${setup.notice ? `<div class="setup-modal-notice ${escapeHtml(setup.noticeType)}">${escapeHtml(setup.notice)}</div>` : ""}
-        <div class="setup-run-layout"><aside class="setup-run-history"><header><strong>执行历史</strong><span>${runs.length} 次</span></header><div class="setup-history-list">${runs.length ? runs.map((item) => { const status = setupStatusInfo(item.status); return `<button type="button" class="${item.uid === run?.uid ? "active" : ""}" data-setup-run="${escapeHtml(item.uid)}"><span><strong>${escapeHtml(formatSetupTimestamp(item.started_at))}</strong><small>${escapeHtml(setupScopeLabel(item.target_type))} · ${escapeHtml(item.target_key || "当前项目")}</small></span><span class="status-badge ${status.className}">${escapeHtml(status.label)}</span></button>`; }).join("") : '<div class="setup-list-empty">暂无执行记录</div>'}</div></aside><main class="setup-run-detail">${run ? `<div class="setup-run-summary-grid"><div><span>执行状态</span><strong><span class="status-badge ${runStatus.className}">${escapeHtml(runStatus.label)}</span></strong></div><div><span>退出码</span><strong>${run.exit_code === null ? "-" : escapeHtml(run.exit_code)}</strong></div><div><span>执行目标</span><strong>${escapeHtml(setupScopeLabel(run.target_type))} · ${escapeHtml(run.target_key || "当前项目")}</strong></div><div><span>开始时间</span><strong>${escapeHtml(formatSetupTimestamp(run.started_at))}</strong></div><div><span>总耗时</span><strong>${escapeHtml(formatSetupDuration(run.duration_ms))}</strong></div></div><section class="setup-run-output setup-script-run-output"><header><strong>Shell 输出</strong><span>${escapeHtml(formatSetupTimestamp(run.finished_at || run.started_at))}</span></header><div><label>stdout / stderr</label><pre>${escapeHtml(output)}</pre></div>${run.error ? `<div class="error"><label>错误信息</label><pre>${escapeHtml(run.error)}</pre></div>` : ""}</section>` : '<div class="setup-panel-empty"><strong>暂无试运行</strong><span>点击右上角“试运行”验证当前准备脚本。</span></div>'}</main></div>
+        <div class="setup-run-layout"><aside class="setup-run-history"><header><strong>${setupHtml("run.history")}</strong><span>${setupHtml("run.count", { count: runs.length })}</span></header><div class="setup-history-list">${runHistory}</div></aside><main class="setup-run-detail">${runDetails}</main></div>
       </section>
     </div>`;
 }
@@ -637,21 +681,28 @@ function renderSetupScriptsPanel() {
     const matchesStatus = setup.scriptStatusFilter === "all" || (setup.scriptStatusFilter === "enabled" ? script.enabled : !script.enabled);
     return matchesQuery && matchesStatus;
   });
+  const rows = scripts.length
+    ? scripts.map((script) => {
+      const latestRun = getLatestSetupScriptRun(script.uid);
+      const latestStatus = setupStatusInfo(latestRun?.status);
+      return `<tr><td><strong data-i18n-dynamic>${escapeHtml(script.name)}</strong><small data-i18n-dynamic>${escapeHtml(script.description || setupText("list.noDescription"))}</small></td><td>${renderSetupBindingSummary(script.uid)}</td><td>${setupHtml("list.timeoutSeconds", { seconds: script.timeout_seconds })}</td><td>${latestRun ? `<span class="setup-run-cell"><span class="status-badge ${latestStatus.className}">${escapeHtml(latestStatus.label)}</span><small>${escapeHtml(formatSetupTimestamp(latestRun.started_at))}</small></span>` : "-"}</td><td><span class="status-badge ${script.enabled ? "success" : "cancelled"}">${setupHtml(script.enabled ? "status.enabled" : "status.disabled")}</span></td><td><div class="setup-row-actions"><button type="button" data-setup-trial-script="${escapeHtml(script.uid)}">${setupHtml("action.trialRun")}</button><button type="button" data-setup-open-runs="${escapeHtml(script.uid)}">${setupHtml("run.title")}</button><button type="button" data-setup-edit-script="${escapeHtml(script.uid)}">${setupHtml("action.edit")}</button><button class="danger" type="button" data-setup-delete-script="${escapeHtml(script.uid)}">${setupHtml("action.delete")}</button></div></td></tr>`;
+    }).join("")
+    : `<tr><td class="setup-table-empty" colspan="6">${setupHtml("list.empty")}</td></tr>`;
   return `
     <section class="setup-management-panel setup-scripts-panel">
-      <div class="setup-management-header"><div><h3>准备脚本</h3><p>准备脚本在 OpenCode 页面探索和测试执行前运行，用于环境初始化、数据准备、服务启动等操作。</p></div><button class="primary-button" id="setupNewScript" type="button">新建准备脚本</button></div>
-      <div class="setup-list-toolbar setup-script-list-toolbar"><label class="setup-toolbar-search" for="setupScriptSearch"><span>搜索</span><input id="setupScriptSearch" type="search" value="${escapeHtml(setup.scriptQuery)}" placeholder="搜索脚本名称" autocomplete="off" /></label><label for="setupScriptStatusFilter"><span>状态</span><select id="setupScriptStatusFilter"><option value="all">全部</option><option value="enabled" ${setup.scriptStatusFilter === "enabled" ? "selected" : ""}>已启用</option><option value="disabled" ${setup.scriptStatusFilter === "disabled" ? "selected" : ""}>已停用</option></select></label><span class="setup-toolbar-fill"></span><button class="secondary-button" id="setupRefreshAll" type="button">刷新</button></div>
-      <div class="setup-table-wrap"><table class="setup-data-table setup-scripts-table"><thead><tr><th>脚本名称</th><th>绑定范围</th><th>超时时间</th><th>最近执行</th><th>状态</th><th class="setup-actions-column">操作</th></tr></thead><tbody>${scripts.length ? scripts.map((script) => { const latestRun = getLatestSetupScriptRun(script.uid); const latestStatus = setupStatusInfo(latestRun?.status); return `<tr><td><strong>${escapeHtml(script.name)}</strong><small>${escapeHtml(script.description || "暂无说明")}</small></td><td>${renderSetupBindingSummary(script.uid)}</td><td>${escapeHtml(script.timeout_seconds)} 秒</td><td>${latestRun ? `<span class="setup-run-cell"><span class="status-badge ${latestStatus.className}">${escapeHtml(latestStatus.label)}</span><small>${escapeHtml(formatSetupTimestamp(latestRun.started_at))}</small></span>` : "-"}</td><td><span class="status-badge ${script.enabled ? "success" : "cancelled"}">${script.enabled ? "已启用" : "已停用"}</span></td><td><div class="setup-row-actions"><button type="button" data-setup-trial-script="${escapeHtml(script.uid)}">试运行</button><button type="button" data-setup-open-runs="${escapeHtml(script.uid)}">执行详情</button><button type="button" data-setup-edit-script="${escapeHtml(script.uid)}">编辑</button><button class="danger" type="button" data-setup-delete-script="${escapeHtml(script.uid)}">删除</button></div></td></tr>`; }).join("") : '<tr><td class="setup-table-empty" colspan="6">暂无匹配的准备脚本，请新建脚本或调整筛选条件。</td></tr>'}</tbody></table></div><div class="setup-table-footer">共 ${scripts.length} 条准备脚本</div>
+      <div class="setup-management-header"><div><h3>${setupHtml("list.title")}</h3><p>${setupHtml("list.description")}</p></div><button class="primary-button" id="setupNewScript" type="button">${setupHtml("action.new")}</button></div>
+      <div class="setup-list-toolbar setup-script-list-toolbar"><label class="setup-toolbar-search" for="setupScriptSearch"><span>${setupHtml("action.search")}</span><input id="setupScriptSearch" type="search" value="${escapeHtml(setup.scriptQuery)}" placeholder="${setupHtml("list.searchPlaceholder")}" autocomplete="off" /></label><label for="setupScriptStatusFilter"><span>${setupHtml("list.status")}</span><select id="setupScriptStatusFilter"><option value="all">${setupHtml("list.all")}</option><option value="enabled" ${setup.scriptStatusFilter === "enabled" ? "selected" : ""}>${setupHtml("status.enabled")}</option><option value="disabled" ${setup.scriptStatusFilter === "disabled" ? "selected" : ""}>${setupHtml("status.disabled")}</option></select></label><span class="setup-toolbar-fill"></span><button class="secondary-button" id="setupRefreshAll" type="button">${setupHtml("action.refresh")}</button></div>
+      <div class="setup-table-wrap"><table class="setup-data-table setup-scripts-table"><thead><tr><th>${setupHtml("field.name")}</th><th>${setupHtml("section.bindingScope")}</th><th>${setupHtml("field.timeout")}</th><th>${setupHtml("list.latestRun")}</th><th>${setupHtml("list.status")}</th><th class="setup-actions-column">${setupHtml("list.actions")}</th></tr></thead><tbody>${rows}</tbody></table></div><div class="setup-table-footer">${setupHtml("list.count", { count: scripts.length })}</div>
     </section>`;
 }
 
 function renderSetupPreparationMarkup() {
   const setup = setupState;
   if (setup.isLoading && !setup.loaded) {
-    return '<div class="project-settings-empty"><h3>正在读取准备脚本</h3></div>';
+    return `<div class="project-settings-empty"><h3>${setupHtml("list.loading")}</h3></div>`;
   }
   if (setup.error && !setup.loaded) {
-    return `<div class="project-settings-empty setup-load-error"><h3>准备脚本加载失败</h3><p>${escapeHtml(setup.error)}</p><button class="secondary-button" id="setupRetryLoad" type="button">重新加载</button></div>`;
+    return `<div class="project-settings-empty setup-load-error"><h3>${setupHtml("list.loadFailed")}</h3><p data-i18n-dynamic>${escapeHtml(setup.error)}</p><button class="secondary-button" id="setupRetryLoad" type="button">${setupHtml("action.reload")}</button></div>`;
   }
   return `
     <div class="setup-preparation-shell setup-script-preparation-shell">
@@ -739,7 +790,7 @@ function bindSetupPreparationEvents() {
   root.querySelector("#setupRefreshRuns")?.addEventListener("click", async () => {
     try {
       await loadSetupPreparationRuns(setup.runDetailScriptUid);
-      setSetupNotice("执行历史已刷新。", "success");
+      setSetupNotice(setupText("notice.historyRefreshed"), "success");
     } catch (error) {
       setSetupNotice(error.message, "error");
     }

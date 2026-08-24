@@ -240,6 +240,99 @@ class DeployRuntimeContractTests(unittest.TestCase):
         self.assertEqual(duplicate.returncode, 1)
         self.assertIn("duplicate COMPOSE_PROJECT_NAME", duplicate.stderr)
 
+    def test_configctl_initializes_quickstart_secrets_without_printing_them(self):
+        source = self.temp_path / "config.json"
+        environment_file = self.temp_path / ".env"
+        shutil.copy2(DEPLOY_DIR / "config.example.json", source)
+        shutil.copy2(REPOSITORY_ROOT / ".env.example", environment_file)
+        source.chmod(0o600)
+        environment_file.chmod(0o600)
+
+        result = self.run_configctl(
+            "initialize",
+            "--config",
+            source,
+            "--environment",
+            environment_file,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "initialized")
+        self.assertEqual(stat.S_IMODE(source.stat().st_mode), 0o600)
+        self.assertEqual(stat.S_IMODE(environment_file.stat().st_mode), 0o600)
+        assignments = dict(
+            line.split("=", 1)
+            for line in environment_file.read_text(encoding="utf-8").splitlines()
+            if line and not line.startswith("#") and "=" in line
+        )
+        secret_names = (
+            "PLATFORM_SESSION_SECRET",
+            "PLATFORM_ADMIN_PASSWORD",
+            "PLATFORM_DB_PASSWORD",
+            "OPENCODE_SERVER_PASSWORD",
+            "MYSQL_ROOT_PASSWORD",
+        )
+        generated = {name: assignments[name] for name in secret_names}
+        self.assertTrue(all(generated.values()))
+        self.assertEqual(len(set(generated.values())), len(secret_names))
+        config = json.loads(source.read_text(encoding="utf-8"))
+        self.assertEqual(
+            config["opencode_password"],
+            generated["OPENCODE_SERVER_PASSWORD"],
+        )
+        self.assertEqual(
+            config["platform_database"]["password"],
+            generated["PLATFORM_DB_PASSWORD"],
+        )
+        for secret in generated.values():
+            self.assertNotIn(secret, result.stdout + result.stderr)
+
+        repeated = self.run_configctl(
+            "initialize",
+            "--config",
+            source,
+            "--environment",
+            environment_file,
+        )
+        self.assertEqual(repeated.returncode, 0, repeated.stderr)
+        repeated_assignments = dict(
+            line.split("=", 1)
+            for line in environment_file.read_text(encoding="utf-8").splitlines()
+            if line and not line.startswith("#") and "=" in line
+        )
+        self.assertEqual(
+            {name: repeated_assignments[name] for name in secret_names},
+            generated,
+        )
+
+    def test_platform_compose_initializes_config_without_docker(self):
+        source = self.temp_path / "config.json"
+        environment_file = self.temp_path / ".env"
+        shutil.copy2(DEPLOY_DIR / "config.example.json", source)
+        shutil.copy2(REPOSITORY_ROOT / ".env.example", environment_file)
+        source.chmod(0o600)
+        environment_file.chmod(0o600)
+        environment = os.environ.copy()
+        environment.update(
+            {
+                "PLATFORM_CONFIG_FILE": str(source),
+                "PLATFORM_ENV_FILE": str(environment_file),
+            }
+        )
+
+        result = subprocess.run(
+            [str(PLATFORM_COMPOSE), "init-config"],
+            cwd=self.temp_path,
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "initialized")
+        self.assertNotIn("docker", result.stdout.lower() + result.stderr.lower())
+
     def test_platform_compose_validates_config_without_docker(self):
         source = self.temp_path / "config.json"
         self.write_source_config(source)

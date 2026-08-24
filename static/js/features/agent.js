@@ -257,6 +257,28 @@ function asArray(value) {
   return Array.isArray(value) ? value : [];
 }
 
+function normalizeAgentExecutionResultStatus(status) {
+  return status === "succeeded" ? "passed" : status || "unknown";
+}
+
+function buildAgentExecutionSummaryFromResults(scriptResults) {
+  const summary = { total: 0, passed: 0, failed: 0, skipped: 0, unknown: 0 };
+  Object.values(scriptResults || {}).forEach((status) => {
+    const normalized = normalizeAgentExecutionResultStatus(status);
+    summary.total += 1;
+    if (normalized === "passed") {
+      summary.passed += 1;
+    } else if (normalized === "failed") {
+      summary.failed += 1;
+    } else if (normalized === "skipped") {
+      summary.skipped += 1;
+    } else {
+      summary.unknown += 1;
+    }
+  });
+  return summary;
+}
+
 function isPlainObject(value) {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
@@ -1585,7 +1607,7 @@ function buildAgentLocalExecutionRecord(context) {
   const running = ["queued", "running"].includes(result.status || context.step?.status);
   const results = normalizedItems.map((item, index) => {
     const status = Object.prototype.hasOwnProperty.call(scriptResults, item.key)
-      ? normalizeExecutionResultStatus(scriptResults[item.key])
+      ? normalizeAgentExecutionResultStatus(scriptResults[item.key])
       : running
         ? "running"
         : "unknown";
@@ -1618,7 +1640,7 @@ function buildAgentLocalExecutionRecord(context) {
     execution_mode: result.execution_mode || EXECUTION_MODE.SERIAL_PER_FILE,
     suite_id: context.suiteUid,
     command: result.command || "",
-    summary: buildExecutionSummaryFromResults(materializedResults),
+    summary: buildAgentExecutionSummaryFromResults(materializedResults),
     total_files: Number(result.total_files) || results.length,
     completed_files:
       Number(result.completed_files) || results.filter((item) => item.status !== "running").length,

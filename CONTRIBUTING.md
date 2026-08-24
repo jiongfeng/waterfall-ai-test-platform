@@ -19,10 +19,9 @@
 
 ## 本地开发
 
-建议在 Linux 环境中开发。基础 Python 测试可使用：
+建议在 Linux 环境中开发。克隆仓库后，在仓库根目录运行基础 Python 测试：
 
 ```bash
-cd test-plan-viewer
 python3 -m venv .venv
 . .venv/bin/activate
 python -m pip install -r requirements.txt

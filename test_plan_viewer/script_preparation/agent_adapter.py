@@ -704,7 +704,11 @@ def finish_with_script_preparation_barrier(runtime, run_id, callback):
             return None
         if run.get("current_step") == "create_suite":
             create_step = runtime.get_agent_step_row(run_id, "create_suite") or {}
-            create_output = runtime.get_agent_step_output(run_id, "create_suite") or {}
+            create_output = (
+                runtime.get_agent_step_output(run_id, "create_suite") or {}
+                if create_step.get("status") == "succeeded"
+                else {}
+            )
             has_suite = bool(run.get("suite_uid")) or isinstance(
                 create_output.get("suite"), dict
             ) or bool(find_agent_suite(runtime, run_id))
