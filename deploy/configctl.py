@@ -7,6 +7,7 @@ import argparse
 import json
 import os
 import re
+from secrets import token_urlsafe
 import stat
 import sys
 import tempfile
@@ -27,6 +28,14 @@ PLACEHOLDER_VALUES = {
     "your-password",
     "your_password",
 }
+QUICKSTART_SECRET_NAMES = (
+    "PLATFORM_SESSION_SECRET",
+    "PLATFORM_ADMIN_PASSWORD",
+    "PLATFORM_DB_PASSWORD",
+    "OPENCODE_SERVER_PASSWORD",
+    "MYSQL_ROOT_PASSWORD",
+)
+QUICKSTART_SECRET_PATTERN = re.compile(r"^[A-Za-z0-9_.-]{1,256}$")
 
 
 class ConfigError(ValueError):
@@ -59,31 +68,7 @@ def _reject_nonstandard_number(value: str) -> object:
 
 
 def parse_and_validate(raw: bytes) -> dict[str, object]:
-    if not raw:
-        raise ConfigError("configuration file is empty")
-    if len(raw) > MAX_CONFIG_BYTES:
-        raise ConfigError(
-            f"configuration exceeds the {MAX_CONFIG_BYTES}-byte deployment limit"
-        )
-
-    try:
-        text = raw.decode("utf-8")
-    except UnicodeDecodeError as exc:
-        raise ConfigError("configuration must be valid UTF-8") from exc
-
-    try:
-        config = json.loads(
-            text,
-            object_pairs_hook=_unique_object,
-            parse_constant=_reject_nonstandard_number,
-        )
-    except json.JSONDecodeError as exc:
-        raise ConfigError(
-            f"invalid JSON at line {exc.lineno}, column {exc.colno}"
-        ) from exc
-
-    if not isinstance(config, dict):
-        raise ConfigError("configuration root must be a JSON object")
+    config = parse_json_object(raw)
 
     _require_nonempty_text(
         config.get("project_workspace_root"),
@@ -161,6 +146,32 @@ def parse_and_validate(raw: bytes) -> dict[str, object]:
             "platform_database.password",
         )
 
+    return config
+
+
+def parse_json_object(raw: bytes) -> dict[str, object]:
+    if not raw:
+        raise ConfigError("configuration file is empty")
+    if len(raw) > MAX_CONFIG_BYTES:
+        raise ConfigError(
+            f"configuration exceeds the {MAX_CONFIG_BYTES}-byte deployment limit"
+        )
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ConfigError("configuration must be valid UTF-8") from exc
+    try:
+        config = json.loads(
+            text,
+            object_pairs_hook=_unique_object,
+            parse_constant=_reject_nonstandard_number,
+        )
+    except json.JSONDecodeError as exc:
+        raise ConfigError(
+            f"invalid JSON at line {exc.lineno}, column {exc.colno}"
+        ) from exc
+    if not isinstance(config, dict):
+        raise ConfigError("configuration root must be a JSON object")
     return config
 
 
@@ -257,6 +268,95 @@ def read_secure_env_file(path: Path) -> bytes:
 
 def validate_env_file(path: Path) -> None:
     read_secure_env_file(path)
+
+
+def _atomic_write_private_file(path: Path, payload: bytes) -> None:
+    temporary_path: str | None = None
+    try:
+        descriptor, temporary_path = tempfile.mkstemp(
+            prefix=f".{path.name}.",
+            dir=path.parent,
+        )
+        with os.fdopen(descriptor, "wb", closefd=True) as output:
+            output.write(payload)
+            output.flush()
+            os.fsync(output.fileno())
+            os.fchmod(output.fileno(), 0o600)
+        os.replace(temporary_path, path)
+        temporary_path = None
+        directory_descriptor = os.open(
+            path.parent,
+            os.O_RDONLY | getattr(os, "O_DIRECTORY", 0),
+        )
+        try:
+            os.fsync(directory_descriptor)
+        finally:
+            os.close(directory_descriptor)
+    except OSError as exc:
+        raise ConfigError(f"cannot securely update private file: {path}") from exc
+    finally:
+        if temporary_path is not None:
+            try:
+                os.unlink(temporary_path)
+            except FileNotFoundError:
+                pass
+
+
+def initialize_quickstart_config(config_path: Path, environment_path: Path) -> None:
+    environment_text = read_secure_env_file(environment_path).decode("utf-8")
+    secret_values: dict[str, str] = {}
+    updated_lines: list[str] = []
+
+    for line_number, raw_line in enumerate(environment_text.splitlines(), start=1):
+        key, separator, value = raw_line.partition("=")
+        if key not in QUICKSTART_SECRET_NAMES:
+            updated_lines.append(raw_line)
+            continue
+        if not separator:
+            raise ConfigError(
+                f"{key} on environment line {line_number} has no '='"
+            )
+        if key in secret_values:
+            raise ConfigError(f"environment contains duplicate {key} entries")
+        value = value.strip()
+        if value and not QUICKSTART_SECRET_PATTERN.fullmatch(value):
+            raise ConfigError(
+                f"{key} must be unquoted URL-safe text before initialization"
+            )
+        if not value:
+            value = token_urlsafe(36)
+        secret_values[key] = value
+        updated_lines.append(f"{key}={value}")
+
+    missing = [
+        name for name in QUICKSTART_SECRET_NAMES if name not in secret_values
+    ]
+    if missing:
+        raise ConfigError(
+            "environment is missing required quickstart secret fields: "
+            + ", ".join(missing)
+        )
+
+    config = parse_json_object(read_secure_source(config_path))
+    database = config.get("platform_database")
+    if not isinstance(database, dict):
+        raise ConfigError("platform_database must be an object")
+    config["opencode_password"] = secret_values["OPENCODE_SERVER_PASSWORD"]
+    database["password"] = secret_values["PLATFORM_DB_PASSWORD"]
+
+    config_payload = (
+        json.dumps(config, ensure_ascii=False, indent=2, allow_nan=False) + "\n"
+    ).encode("utf-8")
+    parse_and_validate(config_payload)
+    environment_payload = (
+        "\n".join(updated_lines) + "\n"
+    ).encode("utf-8")
+
+    # Update the environment first. If the process is interrupted before the
+    # JSON replacement, rerunning this command preserves the generated values
+    # and completes the synchronization without rotating any secret.
+    _atomic_write_private_file(environment_path, environment_payload)
+    _atomic_write_private_file(config_path, config_payload)
 
 
 def resolve_compose_project(path: Path, default: str) -> str:
@@ -489,9 +589,13 @@ def validate_runtime_config(source: Path) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Validate and securely stage config.json for Docker Compose.",
+        description="Initialize, validate, and securely stage Docker configuration.",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
+
+    initialize_parser = subparsers.add_parser("initialize")
+    initialize_parser.add_argument("--config", type=Path, required=True)
+    initialize_parser.add_argument("--environment", type=Path, required=True)
 
     validate_parser = subparsers.add_parser("validate")
     validate_parser.add_argument("--source", type=Path, required=True)
@@ -518,7 +622,10 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     args = build_parser().parse_args()
     try:
-        if args.command == "validate":
+        if args.command == "initialize":
+            initialize_quickstart_config(args.config, args.environment)
+            result = "initialized"
+        elif args.command == "validate":
             validate_config(args.source)
             result = "validated"
         elif args.command == "validate-runtime":
@@ -529,7 +636,7 @@ def main() -> int:
             result = "validated"
         elif args.command == "compose-project":
             result = resolve_compose_project(args.source, args.default)
-        else:
+        elif args.command == "stage":
             stage_config(
                 args.source,
                 args.destination,
@@ -538,6 +645,8 @@ def main() -> int:
                 opencode_url=args.opencode_url,
             )
             result = "staged"
+        else:  # pragma: no cover - argparse restricts the command choices.
+            raise ConfigError(f"unsupported command: {args.command}")
     except ConfigError as exc:
         print(f"configctl: {exc}", file=sys.stderr)
         return 1
