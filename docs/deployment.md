@@ -207,10 +207,11 @@ Playwright 浏览器和生成工具会处理不可信页面及候选代码。当
 
 ## 执行开关
 
-- `PLATFORM_ALLOW_TEST_EXECUTION` 默认 `false`；只有完成仓库、目标、网络、挂载和
-  产物评审后才能显式设为 `true`。
-- `PLATFORM_ALLOW_HOST_SCRIPT_EXECUTION` 默认 `false`；公开 Compose 清单始终
-  禁用准备 shell。需要该能力时应维护经过专门评审的自定义部署。
+- 仓库快速开始在 `.env.example` 和 Compose 回退值中默认开启
+  `PLATFORM_ALLOW_TEST_EXECUTION` 与 `PLATFORM_ALLOW_HOST_SCRIPT_EXECUTION`，
+  仅适用于可信团队和隔离测试环境。
+- 公开、共享或存在不可信用户的部署必须把两个值显式设为 `false`，并重建平台
+  服务。需要执行能力时，应先完成仓库、目标、网络、挂载和产物评审。
 - 两个开关都只能由可信运维人员控制，不能暴露为普通用户配置。
 - 开启开关表示接受代码执行风险，不表示平台提供安全沙箱。
 

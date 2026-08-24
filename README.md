@@ -69,49 +69,14 @@ Code boundaries and extension rules are maintained in
 
 ## Docker quickstart (source checkout)
 
-A Public Beta release is installable only when that specific GitHub Release
-attaches a verified Linux/amd64 bundle and its Minisign/checksum material.
-An online bundle references the platform image by immutable GHCR digest. A
-complete offline bundle is attached only after redistribution of every included
-third-party image has been approved; if that asset is absent, the release is not
-a complete offline distribution. The source tree and NO-GO templates are not an
-installable bundle. Build and installation verification must consume the same
-platform image digest.
+This source-checkout quickstart is for isolated evaluation on Linux/amd64. It
+requires Docker Engine with Compose v2, Git, Python 3, and enough disk space for
+the images, browser, database, workspaces, and test artifacts. Use one
+consistent account for every command.
 
-A source checkout can still build the image locally from `deploy/Dockerfile`.
-The first build can take longer on a slow connection. The Playwright base image
-and direct application dependencies are pinned, and the project template uses
-its checked-in npm lock; some build-tool and transitive resolution still comes
-from upstream registries. A formal candidate is therefore identified by the
-one built image digest and its SBOM, not by a claim that a later source rebuild
-is byte-for-byte identical. Do not describe a locally rebuilt image as the
-release image unless its digest matches the release metadata.
-
-The commands below are for a source checkout. A Release bundle must follow the
-deployment guide's copyable [download, signature, outer-checksum, and safe
-`--extract-to` procedure](./docs/deployment.md#release-下载验证与安全解包). The
-verifier must come from the same trusted tag and copy directly from its private
-verified bytes into a destination that does not exist. The extracted bundle
-runs `./bin/preflight`, then `./bin/install --target ABSOLUTE_PATH`; the
-installed copy is managed only through `./bin/platform-compose`. Never
-substitute an older internal package for a missing Release asset.
-
-### Prerequisites
-
-- a Linux/amd64 host (the pinned source images and Release runtime are
-  single-platform amd64 artifacts);
-- Docker Engine with the Compose v2 plugin;
-- Git;
-- Python 3 for the local secret-generation snippet below;
-- enough disk space for the image, browser, MySQL volume, workspaces, and test
-  artifacts.
-
-Use one consistent operator identity for every command. It must already have
-access to the Docker daemon through an approved rootless setup, a dedicated
-Docker-group account, or a consistently applied `sudo` policy. Docker daemon
-access is effectively host-root authority. Do not mix privileged and
-unprivileged runs: that can leave `.runtime`, configuration, and generated
-files owned by different users.
+For signed Release verification, production-style deployment, backup, repair,
+and upgrade constraints, follow the complete [deployment
+guide](./docs/deployment.md).
 
 ### 1. Prepare configuration
 
@@ -121,52 +86,12 @@ From the repository root:
 cp deploy/config.example.json config.json
 cp .env.example .env
 chmod 600 config.json .env
+./deploy/platform-compose init-config
 ```
 
-Generate independent quickstart secrets without putting their values in command
-arguments. The snippet also copies the database and OpenCode service passwords
-into the local `config.json`, matching the application's file-based password
-fields:
-
-```bash
-python3 - <<'PY'
-from pathlib import Path
-from secrets import token_urlsafe
-import json
-
-path = Path(".env")
-config_path = Path("config.json")
-secret_names = {
-    "PLATFORM_SESSION_SECRET",
-    "PLATFORM_ADMIN_PASSWORD",
-    "PLATFORM_DB_PASSWORD",
-    "OPENCODE_SERVER_PASSWORD",
-    "MYSQL_ROOT_PASSWORD",
-}
-result = []
-secrets = {}
-for line in path.read_text(encoding="utf-8").splitlines():
-    name, separator, value = line.partition("=")
-    if separator and name in secret_names:
-        value = value or token_urlsafe(36)
-        secrets[name] = value
-        line = f"{name}={value}"
-    result.append(line)
-path.write_text("\n".join(result) + "\n", encoding="utf-8")
-
-config = json.loads(config_path.read_text(encoding="utf-8"))
-config["opencode_password"] = secrets["OPENCODE_SERVER_PASSWORD"]
-config["platform_database"]["password"] = secrets["PLATFORM_DB_PASSWORD"]
-config_path.write_text(
-    json.dumps(config, ensure_ascii=False, indent=2) + "\n",
-    encoding="utf-8",
-)
-PY
-```
-
-The generated administrator username is `admin`; its password is the local
-`PLATFORM_ADMIN_PASSWORD` value in `.env`. Both `.env` and `config.json` now
-contain secrets. Do not commit, paste, or upload either file.
+`init-config` fills blank quickstart secrets without printing them and copies
+the database and OpenCode passwords into `config.json`. Both files now contain
+secrets: do not commit, paste, upload, or share them.
 
 ### 2. Validate and start
 
@@ -177,105 +102,41 @@ contain secrets. Do not commit, paste, or upload either file.
 ./deploy/platform-compose ps
 ```
 
-`up --build` is the source-only path. The wrapper pulls only the missing MySQL
-image at its pinned linux/amd64 digest, builds the platform image once, and then
-starts both platform services with `--no-build --pull never`. The base runtime
-Compose file cannot build from source. The wrapper also derives one project
-identity from the mode-`0600` `.env` file and rejects a conflicting ambient
-`COMPOSE_PROJECT_NAME`.
+The first build may take several minutes. This quickstart supports a fresh
+installation only; `preflight-install` rejects an existing runtime or Compose
+project.
 
-The first command is the fresh-install guard for a source checkout. It uses the
-same secured project identity as every later wrapper command, requires an empty
-runtime target, and rejects existing containers, volumes, or networks owned by
-that project. Run it before the first `up`; normal management of an already
-installed current release uses `platform-compose` without rerunning the
-fresh-install check.
-
-When all three services are healthy, open
+When the services are healthy, open
 [http://127.0.0.1:5000](http://127.0.0.1:5000) and sign in as `admin`.
-You can then run `./deploy/platform-compose verify` to check health, the
-read-only container contract, config readability, and all four OpenCode XDG
-volumes plus their required data/state directories.
-
-Container health proves only that the platform, MySQL, and OpenCode service
-processes answer their local checks. It does **not** prove that a model provider
-is configured, authenticated, or able to complete inference. The UI and
-non-Agent features can be ready while Agent features are not. Before enabling
-Agent workflows, configure an organization-approved provider and complete one
-minimal authenticated inference smoke test without real test data or secrets.
+The password is the local `PLATFORM_ADMIN_PASSWORD` value in `.env`.
 
 The Docker example deliberately uses `https://test.example.invalid` as the
 target. Replace it in `config.json` with an authorized test-system URL before
-running or generating browser automation, then set that project's `username`
-and `password` fields to a dedicated test account.
-
-`platform-compose` is the only supported entry point for this stack. It
-validates the host `config.json` at mode `0600`, then stages canonical content
-at `deploy/.runtime/secrets/platform-config.json`. The runtime directories are
-mode `0700` and the staged file is mode `0444`; the private parent directory is
-what prevents other host users from reading it. This ignored runtime copy still
-contains secrets: do not edit or commit it, include it in a public/unencrypted
-backup, or share it as a diagnostic artifact. After editing the source config,
-keep it at `0600` and run `./deploy/platform-compose apply-config`.
-
-Direct `docker compose` commands are unsupported because they bypass config
-validation and staging.
+running browser automation. Configure an approved model provider and complete
+one credential-free inference smoke test before relying on Agent features.
 
 Useful commands:
 
 ```bash
+./deploy/platform-compose verify
 ./deploy/platform-compose logs --follow platform
 ./deploy/platform-compose down
 ```
 
-`down` keeps named volumes, and the wrapper rejects `-v` / `--volumes` because
-volume removal destroys MySQL data, workspaces, and service state.
-
-If OpenCode refuses to start because an existing config, data, cache, or state
-volume has the wrong owner or mode, do not delete or silently reuse the volume.
-First stop OpenCode and create one consistent, encrypted, access-controlled
-snapshot of all four OpenCode volumes. Record each volume identity and a
-SHA-256 of a non-secret sentinel before and after repair; snapshots can contain
-OAuth/provider configuration and logs and must never enter this repository or
-a public Issue. Then run:
-
-```bash
-./deploy/platform-compose repair-opencode-volumes
-./deploy/platform-compose verify
-```
-
-The explicit repair command resolves only volumes labelled for the secured
-Compose project, obtains the runtime UID/GID from the local platform image,
-repairs ownership and controlled directory modes, creates only missing controlled
-runtime directories, probes every volume as the
-non-root runtime user, and recreates OpenCode only after all probes pass. It
-stops OpenCode only after image, capability, project, and four-volume prechecks
-succeed. From that point onward, a repair or health failure leaves OpenCode
-stopped; a precheck failure does not change its prior state. Investigate or
-restore the four-volume snapshot. The legacy `repair-state` command remains
-state-volume-only.
-
-### 3. Review trusted execution defaults
-
-The bundled demo deployment enables setup-script and Playwright execution by
-default. Before deployment, review the target, repository, scripts, network,
-mounts, and artifact policy. To disable either capability, set:
+> **Trusted execution default:** The bundled demo enables setup-script and
+> Playwright execution. These capabilities run code and do not provide a
+> hostile-code sandbox. Use only trusted users, repositories, and isolated test
+> targets. For a public, shared, or otherwise untrusted deployment, set the
+> following values in `.env` and recreate the platform service:
 
 ```dotenv
 PLATFORM_ALLOW_HOST_SCRIPT_EXECUTION=false
 PLATFORM_ALLOW_TEST_EXECUTION=false
 ```
 
-Then recreate the platform service:
-
 ```bash
 ./deploy/platform-compose up --detach --force-recreate platform
 ```
-
-Setup scripts are arbitrary shell code, and generated Playwright tests are
-untrusted code until reviewed. Keeping either switch enabled is an acceptance
-of code execution, not a sandbox guarantee. Use `false` for public, shared, or
-otherwise untrusted deployments.
 
 ## Configuration and secrets
 
@@ -332,7 +193,7 @@ The supported deployment assumes:
 
 Playwright tests and setup scripts execute code. They share the application
 container's operating-system boundary and are **not** isolated from the
-platform as hostile code. Default-off switches and container restrictions
+platform as hostile code. Execution switches and container restrictions can
 reduce accidental exposure; they do not turn the container into a sandbox.
 Do not give untrusted users execution permissions, mount a Docker socket, or
 connect the platform to production credentials or production data.

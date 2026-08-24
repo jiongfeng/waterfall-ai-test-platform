@@ -115,11 +115,12 @@ Docker 包装脚本默认读取仓库根目录 `config.json`，也可用
 | `PLATFORM_COOKIE_SECURE` | HTTPS 部署必需 | 为会话 Cookie 设置 `Secure` |
 | `PLATFORM_BIND_ADDRESS` | Compose 可选 | 默认只绑定 `127.0.0.1` |
 | `PLATFORM_PORT` | Compose 可选 | 默认 `5000` |
-| `PLATFORM_ALLOW_TEST_EXECUTION` | 显式选择 | 允许执行可信 Playwright 代码 |
-| `PLATFORM_ALLOW_HOST_SCRIPT_EXECUTION` | 自定义部署显式选择 | 允许执行可信准备 shell |
+| `PLATFORM_ALLOW_TEST_EXECUTION` | 演示部署默认开启 | 允许执行可信 Playwright 代码；不可信部署设为 `false` |
+| `PLATFORM_ALLOW_HOST_SCRIPT_EXECUTION` | 演示部署默认开启 | 允许执行可信准备 shell；不可信部署设为 `false` |
 
-公开 Compose 清单把测试执行默认设为 `false`，并始终禁用宿主准备脚本。执行
-开关不是隔离措施；开启后，代码仍与平台共享容器操作系统边界。
+应用本身在没有环境变量时拒绝执行，但仓库快速开始通过 `.env.example` 和 Compose
+回退值显式开启两个能力。执行开关不是隔离措施；开启后，代码仍与平台共享容器
+操作系统边界。
 
 ### 文件中的连接与被测系统凭据
 

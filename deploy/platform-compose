@@ -38,6 +38,7 @@ Supported commands:
   stop [OPTIONS]     Stop services without removing containers or volumes.
   down [OPTIONS]     Remove containers and networks; -v/--volumes is forbidden.
   verify             Verify health and container hardening contracts.
+  init-config        Generate quickstart secrets and synchronize config.json.
   preflight-install  Verify a fresh source install using the secured project identity.
   validate-config    Validate the source config without staging it.
   apply-config       Stage config and force-recreate only the platform service.
@@ -793,7 +794,7 @@ main() {
     shift
 
     case "${command_name}" in
-        up | ps | logs | stop | down | verify | preflight-install | validate-config | apply-config | runtime-id | repair-opencode-volumes | repair-state | migrate-native-opencode | native-opencode-status)
+        up | ps | logs | stop | down | verify | init-config | preflight-install | validate-config | apply-config | runtime-id | repair-opencode-volumes | repair-state | migrate-native-opencode | native-opencode-status)
             ;;
         *)
             usage >&2
@@ -812,6 +813,13 @@ main() {
     fi
 
     require_command python3
+    if [[ "${command_name}" == "init-config" ]]; then
+        require_no_arguments "${command_name}" "$@"
+        python3 "${CONFIG_CONTROL}" initialize \
+            --config "${SOURCE_CONFIG}" \
+            --environment "${ENV_FILE}"
+        return
+    fi
     if [[ "${command_name}" == "validate-config" ]]; then
         require_no_arguments "${command_name}" "$@"
         python3 "${CONFIG_CONTROL}" validate --source "${SOURCE_CONFIG}"
