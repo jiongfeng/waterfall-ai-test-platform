@@ -14,7 +14,7 @@ class BrandIdentityTests(unittest.TestCase):
         login = (ROOT / "templates/login.html").read_text(encoding="utf-8")
         project = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
 
-        self.assertIn('<h1 align="center">Waterfall AI</h1>', readme)
+        self.assertIn('<h1 align="center">Waterfall AI Test</h1>', readme)
         self.assertIn(
             "Open-source visual test workbench for Playwright Test Agents",
             readme,
@@ -32,15 +32,17 @@ class BrandIdentityTests(unittest.TestCase):
             readme_zh,
         )
         self.assertIn(
-            "| Conversation-driven Playwright Test Agents | Waterfall AI |\n"
+            "| Conversation-driven Playwright Test Agents | Waterfall AI Test |\n"
             "| --- | --- |\n",
             readme,
         )
         self.assertIn(
-            "| Playwright Test Agents 的对话式使用方式 | Waterfall AI |\n"
+            "| Playwright Test Agents 的对话式使用方式 | Waterfall AI Test |\n"
             "| --- | --- |\n",
             readme_zh,
         )
+        self.assertNotRegex(readme, r"Waterfall AI(?! Test)")
+        self.assertNotRegex(readme_zh, r"Waterfall AI(?! Test)")
         self.assertIn("not affiliated with, sponsored by, or endorsed", readme)
         self.assertIn("Waterfall AI", index)
         self.assertIn("Agent-driven test automation platform", index)

@@ -1,6 +1,6 @@
 <p align="right"><a href="./README.zh-CN.md">简体中文</a></p>
 
-<h1 align="center">Waterfall AI</h1>
+<h1 align="center">Waterfall AI Test</h1>
 <p align="center"><strong>Open-source visual test workbench for Playwright Test Agents</strong></p>
 
 <p align="center">
@@ -26,10 +26,10 @@ https://github.com/user-attachments/assets/5aff4173-5871-4e76-a9bb-1460ab5ceb1a
 ## A visual workbench for Playwright Test Agents
 
 Playwright Test Agents primarily deliver results through conversations and file
-directories. Waterfall AI organizes those Agent capabilities into a stateful,
+directories. Waterfall AI Test organizes those Agent capabilities into a stateful,
 operable, and traceable testing workflow:
 
-| Conversation-driven Playwright Test Agents | Waterfall AI |
+| Conversation-driven Playwright Test Agents | Waterfall AI Test |
 | --- | --- |
 | Progress is hidden in chat history | Seven workflow stages and task states stay visible |
 | Deliverables are scattered across file directories | Visually manage modules, plans, scripts, suites, and reports |
@@ -41,7 +41,7 @@ operable, and traceable testing workflow:
 > single-tenant Linux/amd64 Docker deployments only. Fresh installation only;
 > not a hostile-code sandbox.
 
-Waterfall AI is an independent open-source project built with Playwright. It is
+Waterfall AI Test is an independent open-source project built with Playwright. It is
 not affiliated with, sponsored by, or endorsed by Microsoft or the Playwright
 project.
 
@@ -257,7 +257,7 @@ The project was renamed from `playwright-test-platform` to
 immutable `v0.1.0-beta.3` release intentionally keeps its original
 `playwright-test-platform-*` asset names and
 `ghcr.io/jiongfeng/playwright-test-platform` image reference; releases created
-after the rename use the Waterfall AI names. Runtime compatibility identifiers
+after the rename use the Waterfall AI Test names. Runtime compatibility identifiers
 such as the `playwright_platform` database, Python package paths, container
 paths, and existing session-cookie names remain unchanged.
 
