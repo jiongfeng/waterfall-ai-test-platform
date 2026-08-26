@@ -148,7 +148,7 @@ function notifyUnconfiguredProject() {
     projectMessage(
       "projectSettings.targetSystemRequired",
       {},
-      "当前项目尚未配置被测系统。请先填写被测系统地址并保存配置，然后生成 Seed。",
+      "This project does not have a target system. Enter the Target system URL, save the settings, and then generate a Seed.",
     ),
     "error",
   );

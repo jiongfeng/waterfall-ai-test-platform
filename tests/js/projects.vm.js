@@ -311,7 +311,7 @@ const feature = context.window.createProjectsFeature({
   assert.strictEqual(calls.persist, 1);
   feature.notifyUnconfiguredProject();
   assert.strictEqual(notices.at(-1).type, "error");
-  assert.match(notices.at(-1).message, /被测系统/);
+  assert.match(notices.at(-1).message, /target system/i);
   feature.openProjectCreateModal();
   assert.strictEqual(elements.newProjectLanguage.value, "zh-CN");
   elements.newProjectKey.value = "alpha";
