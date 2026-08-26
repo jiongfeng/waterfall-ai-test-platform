@@ -44,6 +44,7 @@ function element() {
 
 const state = {
   isEditing: false,
+  activeSection: "plans",
   project: {
     projects: [],
     currentKey: "",
@@ -145,7 +146,9 @@ const elements = {
   projectSelect: element(),
   manageProjectButton: element(),
   testSuiteProgressModal: element(),
+  projectSettingsPanel: element(),
 };
+elements.projectSettingsPanel.querySelector = () => element();
 for (const name of [
   "projectManageModal",
   "projectManageClose",
@@ -203,7 +206,8 @@ elements.projectManageTableBody.innerHTML = "";
 elements.projectManageTableBody.querySelector = () => null;
 
 const stored = new Map();
-const calls = { render: 0, hydrate: 0, load: 0, history: 0 };
+const calls = { render: 0, hydrate: 0, load: 0, history: 0, persist: 0 };
+const notices = [];
 const createdPayloads = [];
 const project = {
   project_id: 1,
@@ -234,7 +238,10 @@ const feature = context.window.createProjectsFeature({
   FormData: class {
     append() {}
   },
-  admin: { hasProjectSettingsPermission: () => true },
+  admin: {
+    hasProjectSettingsPermission: () => true,
+    hasMenu: (section) => section === "projectSettings",
+  },
   testSuites: {
     resetTestSuiteExecutionHistory: () => {
       calls.history += 1;
@@ -275,8 +282,12 @@ const feature = context.window.createProjectsFeature({
   renderContent: () => {
     calls.render += 1;
   },
-  setNotice: () => {},
+  setNotice: (message, type) => notices.push({ message, type }),
   escapeHtml: (value) => String(value ?? ""),
+  persistViewState: () => {
+    calls.persist += 1;
+  },
+  PROJECT_SETTINGS_SECTION: "projectSettings",
 });
 
 (async () => {
@@ -294,6 +305,13 @@ const feature = context.window.createProjectsFeature({
   assert.strictEqual(state.project.defaultLanguage, "zh-CN");
   assert.strictEqual(stored.get("current-project"), "alpha");
   assert.strictEqual(elements.projectSelect.children.length, 1);
+  assert.strictEqual(feature.hasConfiguredTargetSystem(), false);
+  assert.strictEqual(feature.routeUnconfiguredProjectToSettings(), true);
+  assert.strictEqual(state.activeSection, "projectSettings");
+  assert.strictEqual(calls.persist, 1);
+  feature.notifyUnconfiguredProject();
+  assert.strictEqual(notices.at(-1).type, "error");
+  assert.match(notices.at(-1).message, /target system/i);
   feature.openProjectCreateModal();
   assert.strictEqual(elements.newProjectLanguage.value, "zh-CN");
   elements.newProjectKey.value = "alpha";
@@ -307,8 +325,10 @@ const feature = context.window.createProjectsFeature({
     key: "beta",
     name: "Beta",
   });
+  state.activeSection = "plans";
   await feature.switchProject("beta");
   assert.strictEqual(state.project.currentKey, "beta");
+  assert.strictEqual(state.activeSection, "projectSettings");
   assert.strictEqual(state.plans.selectedModule, null);
   assert.strictEqual(state.requirements.activeTab, "preview");
   assert.strictEqual(state.projectSettings.activeTab, "basic");
@@ -316,6 +336,23 @@ const feature = context.window.createProjectsFeature({
   assert.strictEqual(calls.hydrate, 1);
   assert.strictEqual(calls.load, 1);
   assert.ok(calls.render >= 2);
+
+  await feature.switchProject("alpha");
+  assert.strictEqual(state.activeSection, "projectSettings");
+  assert.strictEqual(calls.load, 2);
+  assert.strictEqual(notices.at(-1).type, "error");
+
+  state.project.projects.find((item) => item.project_key === "alpha").target_system = {
+    base_url: "https://example.test",
+  };
+  state.project.projects.find((item) => item.project_key === "beta").target_system = {
+    base_url: "https://example.test",
+  };
+  state.activeSection = "plans";
+  await feature.switchProject("beta");
+  await feature.switchProject("alpha");
+  assert.strictEqual(state.activeSection, "plans");
+  assert.strictEqual(feature.hasConfiguredTargetSystem(), true);
   process.stdout.write("projects feature VM smoke: ok\n");
 })().catch((error) => {
   process.stderr.write(`${error.stack || error}\n`);

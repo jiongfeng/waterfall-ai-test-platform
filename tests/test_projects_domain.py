@@ -170,6 +170,29 @@ class ProjectModelTests(unittest.TestCase):
 
 
 class ProjectRepositoryTests(unittest.TestCase):
+    def test_seed_preserves_database_owned_target_system_settings(self):
+        cursor = Mock()
+        dependencies = make_repository_dependencies(
+            get_config_projects=lambda: [
+                {
+                    "project_key": "default",
+                    "name": "Default",
+                    "playwright_project_root": "/workspace/default",
+                    "target_system": {
+                        "base_url": "https://legacy-config.example",
+                    },
+                }
+            ],
+        )
+
+        repository.seed_platform_projects(cursor, {}, dependencies)
+
+        statement = cursor.execute.call_args_list[0].args[0]
+        self.assertIn(
+            "target_system_json = COALESCE(target_system_json, VALUES(target_system_json))",
+            statement,
+        )
+
     def test_disabled_database_uses_the_configuration_default(self):
         default_project = {
             "project_key": "configured",

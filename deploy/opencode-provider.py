@@ -15,6 +15,10 @@ from typing import Sequence
 
 
 MAX_CONFIG_BYTES = 64 * 1024
+MAX_RESOLVED_CONFIG_BYTES = 1024 * 1024
+CONFIG_SCHEMA = "https://opencode.ai/config.json"
+JSON_CONFIG_NAME = "opencode.json"
+JSONC_CONFIG_NAME = "opencode.jsonc"
 SMOKE_MARKER = "WATERFALL_AI_PROVIDER_OK"
 SMOKE_PROMPT = (
     f"Reply with exactly {SMOKE_MARKER} and nothing else. Do not use tools or inspect files."
@@ -23,6 +27,10 @@ SMOKE_PROMPT = (
 
 class ProviderError(RuntimeError):
     """A provider setup error that is safe to display."""
+
+
+class JsoncSyntaxError(ProviderError):
+    """A JSONC syntax error that show-model may resolve through OpenCode."""
 
 
 def validate_model_id(value: str) -> str:
@@ -54,19 +62,50 @@ def config_directory() -> Path:
 
 def config_path() -> Path:
     directory = config_directory()
-    json_path = directory / "opencode.json"
-    jsonc_path = directory / "opencode.jsonc"
-    if jsonc_path.exists() or jsonc_path.is_symlink():
+    json_path = directory / JSON_CONFIG_NAME
+    jsonc_path = directory / JSONC_CONFIG_NAME
+    json_present = json_path.exists() or json_path.is_symlink()
+    jsonc_present = jsonc_path.exists() or jsonc_path.is_symlink()
+    if json_present and jsonc_present:
         raise ProviderError(
-            "opencode.jsonc is present; update its model field manually instead of "
-            "creating a competing opencode.json"
+            "both opencode.json and opencode.jsonc are present; keep exactly one "
+            "OpenCode config file"
         )
+    if jsonc_present:
+        return jsonc_path
     return json_path
+
+
+def reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    payload: dict[str, object] = {}
+    for key, value in pairs:
+        if key in payload:
+            raise ProviderError(f"OpenCode config contains a duplicate key: {key}")
+        payload[key] = value
+    return payload
+
+
+def reject_nonfinite_number(value: str) -> None:
+    raise ProviderError(f"OpenCode config contains a non-finite number: {value}")
+
+
+def parse_json_object(text: str, *, invalid_message: str) -> dict[str, object]:
+    try:
+        payload = json.loads(
+            text,
+            object_pairs_hook=reject_duplicate_keys,
+            parse_constant=reject_nonfinite_number,
+        )
+    except json.JSONDecodeError as exc:
+        raise ProviderError(invalid_message) from exc
+    if not isinstance(payload, dict):
+        raise ProviderError("OpenCode config root must be a JSON object")
+    return payload
 
 
 def load_config(path: Path) -> dict[str, object]:
     if not path.exists() and not path.is_symlink():
-        return {"$schema": "https://opencode.ai/config.json"}
+        return {"$schema": CONFIG_SCHEMA}
     metadata = path.lstat()
     if not stat.S_ISREG(metadata.st_mode) or path.is_symlink():
         raise ProviderError(f"OpenCode config is not a regular file: {path}")
@@ -75,12 +114,30 @@ def load_config(path: Path) -> dict[str, object]:
     if metadata.st_size > MAX_CONFIG_BYTES:
         raise ProviderError(f"OpenCode config exceeds the {MAX_CONFIG_BYTES}-byte safety limit")
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        text = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as exc:
+        if path.name == JSONC_CONFIG_NAME:
+            raise JsoncSyntaxError(
+                "opencode.jsonc is not strict UTF-8 JSON; update its model field manually"
+            ) from exc
         raise ProviderError("OpenCode config is not valid UTF-8 JSON") from exc
-    if not isinstance(payload, dict):
-        raise ProviderError("OpenCode config root must be a JSON object")
-    return payload
+    try:
+        return parse_json_object(text, invalid_message="OpenCode config is not valid JSON")
+    except ProviderError as exc:
+        if path.name == JSONC_CONFIG_NAME and isinstance(exc.__cause__, json.JSONDecodeError):
+            raise JsoncSyntaxError(
+                "opencode.jsonc uses JSONC syntax; update its model field manually"
+            ) from exc
+        raise
+
+
+def fsync_directory(directory: Path) -> None:
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    descriptor = os.open(directory, flags)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
 
 
 def save_config(path: Path, payload: dict[str, object]) -> None:
@@ -102,23 +159,55 @@ def save_config(path: Path, payload: dict[str, object]) -> None:
             os.fsync(destination.fileno())
         os.replace(temporary, path)
         path.chmod(0o600)
+        fsync_directory(path.parent)
     finally:
         if temporary.exists():
             temporary.unlink()
+
+
+def migrate_jsonc_to_json(path: Path) -> Path:
+    target = path.with_name(JSON_CONFIG_NAME)
+    if target.exists() or target.is_symlink():
+        raise ProviderError(
+            "both opencode.json and opencode.jsonc are present; keep exactly one "
+            "OpenCode config file"
+        )
+    path.chmod(0o600)
+    os.replace(path, target)
+    fsync_directory(path.parent)
+    return target
 
 
 def set_model(model: str) -> None:
     selected = validate_model_id(model)
     path = config_path()
     payload = load_config(path)
+    if path.name == JSONC_CONFIG_NAME:
+        path = migrate_jsonc_to_json(path)
     payload["model"] = selected
     save_config(path, payload)
     print(f"OpenCode default model configured: {selected}")
 
 
+def resolved_config() -> dict[str, object]:
+    result = run_opencode(("debug", "config"), capture=True)
+    if result.returncode != 0:
+        raise ProviderError("OpenCode could not resolve the active JSONC configuration")
+    encoded = (result.stdout or "").encode("utf-8")
+    if len(encoded) > MAX_RESOLVED_CONFIG_BYTES:
+        raise ProviderError("OpenCode resolved configuration exceeds the safety limit")
+    return parse_json_object(
+        result.stdout or "",
+        invalid_message="OpenCode returned an invalid resolved configuration",
+    )
+
+
 def show_model() -> None:
     path = config_path()
-    payload = load_config(path)
+    try:
+        payload = load_config(path)
+    except JsoncSyntaxError:
+        payload = resolved_config()
     model = payload.get("model")
     if model is None:
         print("OpenCode default model: not configured")

@@ -115,6 +115,7 @@ Use OpenCode's interactive login, then select and verify an approved model:
 ./deploy/platform-compose opencode-auth-login
 ./deploy/platform-compose opencode-models PROVIDER_ID
 ./deploy/platform-compose opencode-set-model PROVIDER_ID/MODEL_ID
+./deploy/platform-compose opencode-model-status
 ./deploy/platform-compose opencode-provider-smoke PROVIDER_ID/MODEL_ID
 ```
 
@@ -126,6 +127,10 @@ flow documented by [OpenCode Providers](https://opencode.ai/docs/providers).
 Replace `PROVIDER_ID` and `MODEL_ID` with an ID printed by `opencode-models`.
 `opencode-auth-list` lists stored Provider names without printing secret values,
 and `opencode-model-status` shows the configured global default.
+If OpenCode created a strict-JSON `opencode.jsonc` during startup,
+`opencode-set-model` safely migrates it to `opencode.json` while preserving its
+other settings. A customized JSONC file that uses comments or trailing commas is
+left unchanged and must be edited manually.
 
 `OPENCODE_SERVER_PASSWORD` secures the platform-to-OpenCode HTTP service; it is
 not a model API key. Provider credentials and the global model configuration
@@ -137,9 +142,11 @@ When the services are healthy, open
 [http://127.0.0.1:5000](http://127.0.0.1:5000) and sign in as `admin`.
 The password is the local `PLATFORM_ADMIN_PASSWORD` value in `.env`.
 
-The Docker example deliberately uses `https://test.example.invalid` as the
-target. Replace it in `config.json` with an authorized test-system URL before
-running browser automation.
+When you enter any project without a target system, the platform opens Project
+settings and prompts you to enter an authorized, isolated test-system URL. Save
+that setting and generate a Seed before running browser automation. Configure
+an approved model provider and complete one credential-free inference smoke
+test before relying on Agent features.
 
 Useful commands:
 
@@ -166,10 +173,11 @@ PLATFORM_ALLOW_TEST_EXECUTION=false
 
 ## Configuration and secrets
 
-For compatibility, `config.json` stores the OpenCode password, platform database
-password, and each target system's login username and password. Keep the file
-outside source control, restrict it to the service account, and include it only
-in encrypted, access-controlled backups.
+`config.json` stores the OpenCode and platform database passwords. Target-system
+settings are maintained in Project settings and stored in the platform database,
+so config synchronization cannot overwrite UI changes. Keep both stores outside
+source control, restrict them to the service account, and include them only in
+encrypted, access-controlled backups.
 
 | Variable | Purpose |
 | --- | --- |

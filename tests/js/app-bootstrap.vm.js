@@ -122,7 +122,7 @@ async function fetchStub(url) {
     return jsonResponse({
       user: { username: "vm-user", display_name: "VM User" },
       permissions: ["menu.plans", "menu.projectSettings"],
-      menus: ["plans"],
+      menus: ["plans", "projectSettings"],
     });
   }
   if (requestUrl.includes("/api/projects")) {
@@ -150,7 +150,10 @@ async function fetchStub(url) {
 
 const windowObject = {
   WaterfallI18n: {
-    t: (key) => (key === "status.notGenerated" ? "Not generated" : key),
+    t: (key) => ({
+      "status.notGenerated": "Not generated",
+      "projectSettings.targetSystemRequired": "Configure this project's target system and generate a Seed.",
+    })[key] || key,
     source: (value) => value,
     log: (value) => value,
     getLocale: () => "en",
@@ -245,12 +248,22 @@ setTimeout(() => {
     "/api/auth/me",
     "/api/projects",
     "/api/platform-records",
-    "/api/modules",
+    "/api/project-settings",
   ]) {
     assert.ok(
       requests.some((url) => url.includes(endpoint)),
       `bootstrap did not request ${endpoint}`,
     );
   }
+  assert.strictEqual(
+    vm.runInContext("state.activeSection", context),
+    "projectSettings",
+    "an unconfigured project must open Project settings",
+  );
+  assert.strictEqual(
+    createElement("notice").textContent,
+    "Configure this project's target system and generate a Seed.",
+    "the redirect must explain why configuration is required",
+  );
   process.stdout.write("assembled frontend bootstrap VM smoke: ok\n");
 }, 50);

@@ -15,6 +15,9 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 PROVIDER_CONTROL = REPOSITORY_ROOT / "deploy" / "opencode-provider.py"
 NATIVE_OPENCODE_CONTROL = REPOSITORY_ROOT / "deploy" / "native-opencode.py"
 PLATFORM_COMPOSE = REPOSITORY_ROOT / "deploy" / "platform-compose"
+COMMENTED_JSONC_FIXTURE = (
+    REPOSITORY_ROOT / "tests" / "fixtures" / "opencode-commented.jsonc"
+)
 
 
 class OpenCodeProviderCommandTests(unittest.TestCase):
@@ -43,6 +46,13 @@ class OpenCodeProviderCommandTests(unittest.TestCase):
                     print("example/test-model")
                 elif sys.argv[1:3] == ["auth", "list"]:
                     print("example")
+                elif sys.argv[1:3] == ["debug", "config"]:
+                    print(
+                        os.environ.get(
+                            "FAKE_RESOLVED_CONFIG",
+                            '{"$schema":"https://opencode.ai/config.json"}',
+                        )
+                    )
                 elif sys.argv[1:2] == ["run"]:
                     if os.environ.get("FAKE_SMOKE_FAIL") == "1":
                         raise SystemExit(7)
@@ -107,22 +117,131 @@ class OpenCodeProviderCommandTests(unittest.TestCase):
         self.assertEqual(status.returncode, 0, status.stderr)
         self.assertIn("example/test-model", status.stdout)
 
-    def test_set_model_rejects_jsonc_and_invalid_model_ids(self):
+    def test_set_model_migrates_strict_jsonc_and_preserves_provider_config(self):
         config_directory = self.root / "config" / "opencode"
         config_directory.mkdir(parents=True, mode=0o700)
-        (config_directory / "opencode.jsonc").write_text(
-            '{"model": "example/old"} // keep this comment\n',
+        jsonc_config = config_directory / "opencode.jsonc"
+        jsonc_config.write_text(
+            json.dumps(
+                {
+                    "$schema": "https://opencode.ai/config.json",
+                    "model": "example/old",
+                    "provider": {"example": {"name": "Example"}},
+                }
+            ),
             encoding="utf-8",
         )
+        jsonc_config.chmod(0o640)
 
-        jsonc_result = self.run_provider("set-model", "example/new")
+        result = self.run_provider("set-model", "example/new")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        json_config = config_directory / "opencode.json"
+        self.assertFalse(jsonc_config.exists())
+        payload = json.loads(json_config.read_text(encoding="utf-8"))
+        self.assertEqual(payload["model"], "example/new")
+        self.assertEqual(payload["provider"]["example"]["name"], "Example")
+        self.assertEqual(stat.S_IMODE(json_config.stat().st_mode), 0o600)
+
+        status = self.run_provider("show-model")
+        self.assertEqual(status.returncode, 0, status.stderr)
+        self.assertEqual(status.stdout.strip(), "OpenCode default model: example/new")
+
+    def test_set_model_rejects_commented_jsonc_without_mutation(self):
+        config_directory = self.root / "config" / "opencode"
+        config_directory.mkdir(parents=True, mode=0o700)
+        jsonc_config = config_directory / "opencode.jsonc"
+        original = COMMENTED_JSONC_FIXTURE.read_bytes()
+        jsonc_config.write_bytes(original)
+        original_mode = stat.S_IMODE(jsonc_config.stat().st_mode)
+
+        result = self.run_provider("set-model", "example/new")
+
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("update its model field manually", result.stderr)
+        self.assertEqual(jsonc_config.read_bytes(), original)
+        self.assertEqual(stat.S_IMODE(jsonc_config.stat().st_mode), original_mode)
+        self.assertFalse((config_directory / "opencode.json").exists())
+
+        environment = self.environment.copy()
+        environment["FAKE_RESOLVED_CONFIG"] = json.dumps(
+            {
+                "model": "openai/gpt-5.3-codex-spark",
+                "provider": {"secret": "not-printed"},
+            }
+        )
+        status = self.run_provider("show-model", environment=environment)
+        self.assertEqual(status.returncode, 0, status.stderr)
+        self.assertEqual(
+            status.stdout.strip(),
+            "OpenCode default model: openai/gpt-5.3-codex-spark",
+        )
+        self.assertNotIn("secret", status.stdout + status.stderr)
+        resolved_call = json.loads(self.capture.read_text(encoding="utf-8"))
+        self.assertEqual(resolved_call["arguments"], ["debug", "config"])
+        self.assertNotEqual(Path(resolved_call["cwd"]), REPOSITORY_ROOT)
+
+    def test_set_model_rejects_invalid_model_ids(self):
         invalid_result = self.run_provider("set-model", "missing-provider")
 
-        self.assertEqual(jsonc_result.returncode, 1)
-        self.assertIn("update its model field manually", jsonc_result.stderr)
-        self.assertFalse((config_directory / "opencode.json").exists())
         self.assertEqual(invalid_result.returncode, 1)
         self.assertIn("provider/model", invalid_result.stderr)
+
+    def test_set_model_rejects_competing_config_files_without_mutation(self):
+        config_directory = self.root / "config" / "opencode"
+        config_directory.mkdir(parents=True, mode=0o700)
+        json_config = config_directory / "opencode.json"
+        jsonc_config = config_directory / "opencode.jsonc"
+        json_original = b'{"model":"example/json"}\n'
+        jsonc_original = b'{"model":"example/jsonc"}\n'
+        json_config.write_bytes(json_original)
+        jsonc_config.write_bytes(jsonc_original)
+
+        result = self.run_provider("set-model", "example/new")
+
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("both opencode.json and opencode.jsonc", result.stderr)
+        self.assertEqual(json_config.read_bytes(), json_original)
+        self.assertEqual(jsonc_config.read_bytes(), jsonc_original)
+
+    def test_set_model_rejects_duplicate_keys_without_migrating_jsonc(self):
+        config_directory = self.root / "config" / "opencode"
+        config_directory.mkdir(parents=True, mode=0o700)
+        jsonc_config = config_directory / "opencode.jsonc"
+        original = b'{"model":"example/old","model":"example/other"}\n'
+        jsonc_config.write_bytes(original)
+
+        result = self.run_provider("set-model", "example/new")
+
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("duplicate key: model", result.stderr)
+        self.assertEqual(jsonc_config.read_bytes(), original)
+        self.assertFalse((config_directory / "opencode.json").exists())
+
+    def test_set_model_rejects_symlink_and_oversized_configs(self):
+        config_directory = self.root / "config" / "opencode"
+        config_directory.mkdir(parents=True, mode=0o700)
+        external = self.root / "external.json"
+        external_original = b'{"model":"example/external"}\n'
+        external.write_bytes(external_original)
+        jsonc_config = config_directory / "opencode.jsonc"
+        jsonc_config.symlink_to(external)
+
+        symlink_result = self.run_provider("set-model", "example/new")
+
+        self.assertEqual(symlink_result.returncode, 1)
+        self.assertIn("not a regular file", symlink_result.stderr)
+        self.assertEqual(external.read_bytes(), external_original)
+        jsonc_config.unlink()
+
+        oversized = b'{"padding":"' + (b"x" * (64 * 1024)) + b'"}\n'
+        jsonc_config.write_bytes(oversized)
+        oversized_result = self.run_provider("set-model", "example/new")
+
+        self.assertEqual(oversized_result.returncode, 1)
+        self.assertIn("safety limit", oversized_result.stderr)
+        self.assertEqual(jsonc_config.read_bytes(), oversized)
+        self.assertFalse((config_directory / "opencode.json").exists())
 
     def test_models_and_smoke_use_isolated_working_directories(self):
         models_result = self.run_provider("models", "example")
@@ -174,6 +293,12 @@ class OpenCodeProviderCommandTests(unittest.TestCase):
 
     def test_native_provider_command_uses_the_isolated_runtime_roots(self):
         runtime = self.root / "runtime"
+        native_config_directory = runtime / "native-opencode/config/opencode"
+        native_config_directory.mkdir(parents=True, mode=0o700)
+        (native_config_directory / "opencode.jsonc").write_text(
+            '{"$schema":"https://opencode.ai/config.json"}\n',
+            encoding="utf-8",
+        )
         environment_file = self.root / ".env"
         environment_file.write_text(
             "OPENCODE_SERVER_PASSWORD=test-server-password\n",
@@ -209,6 +334,9 @@ class OpenCodeProviderCommandTests(unittest.TestCase):
         self.assertEqual(
             json.loads(config.read_text(encoding="utf-8"))["model"],
             "example/test-model",
+        )
+        self.assertFalse(
+            (runtime / "native-opencode/config/opencode/opencode.jsonc").exists()
         )
         self.assertFalse(
             (Path(self.environment["XDG_CONFIG_HOME"]) / "opencode/opencode.json").exists()

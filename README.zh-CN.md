@@ -98,6 +98,7 @@ chmod 600 config.json .env
 ./deploy/platform-compose opencode-auth-login
 ./deploy/platform-compose opencode-models PROVIDER_ID
 ./deploy/platform-compose opencode-set-model PROVIDER_ID/MODEL_ID
+./deploy/platform-compose opencode-model-status
 ./deploy/platform-compose opencode-provider-smoke PROVIDER_ID/MODEL_ID
 ```
 
@@ -109,6 +110,9 @@ chmod 600 config.json .env
 请把 `PROVIDER_ID` 和 `MODEL_ID` 替换为 `opencode-models` 输出的实际 ID。
 `opencode-auth-list` 只列出已保存的服务商名称，不打印秘密；
 `opencode-model-status` 显示已配置的全局默认模型。
+如果 OpenCode 启动时生成了严格 JSON 格式的 `opencode.jsonc`，
+`opencode-set-model` 会保留其中的其他配置并安全迁移为 `opencode.json`。如果定制
+JSONC 使用了注释或尾随逗号，命令会保持原文件不变，此时需人工更新。
 
 `OPENCODE_SERVER_PASSWORD` 只保护平台到 OpenCode 的 HTTP 服务，并不是模型
 API Key。服务商凭据和全局模型配置分别保存在 OpenCode 的持久化数据目录与配置
@@ -119,9 +123,10 @@ API Key。服务商凭据和全局模型配置分别保存在 OpenCode 的持久
 [http://127.0.0.1:5000](http://127.0.0.1:5000)，使用 `admin` 登录。
 密码是本机 `.env` 中的 `PLATFORM_ADMIN_PASSWORD`。
 
-Docker 示例故意把被测地址设为保留域名
-`https://test.example.invalid`。运行浏览器自动化前，必须在 `config.json` 中将其
-替换为已获授权的测试系统地址。
+进入任何尚未配置被测系统的项目时，平台都会自动打开项目配置页，并提示填写
+已获授权且隔离的测试系统地址。保存配置并生成 Seed 后再运行浏览器自动化。
+依赖 Agent 功能前，还应配置经批准的模型 Provider，并完成一次不含凭据的最小
+推理冒烟测试。
 
 常用命令：
 
@@ -147,9 +152,9 @@ PLATFORM_ALLOW_TEST_EXECUTION=false
 
 ## 配置与秘密
 
-为兼容原有行为，`config.json` 保存 OpenCode 密码、平台数据库密码，以及各被测
-系统的登录用户名和密码。该文件不得进入源码仓库，只允许服务账号读取，并且只
-能进入加密且访问受限的备份。
+`config.json` 保存 OpenCode 和平台数据库密码。被测系统信息通过项目配置页维护
+并保存在平台数据库中，因此配置同步不会覆盖网页修改。配置文件和数据库都不得
+进入源码仓库，只允许服务账号读取，并且只能进入加密且访问受限的备份。
 
 | 环境变量 | 用途 |
 | --- | --- |

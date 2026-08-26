@@ -105,7 +105,7 @@ def seed_platform_projects(cursor, config, dependencies):
               specs_dir = VALUES(specs_dir),
               tests_dir = VALUES(tests_dir),
               opencode_config_json = VALUES(opencode_config_json),
-              target_system_json = COALESCE(VALUES(target_system_json), target_system_json),
+              target_system_json = COALESCE(target_system_json, VALUES(target_system_json)),
               database_baseline_json = VALUES(database_baseline_json),
               plan_generation_json = COALESCE(VALUES(plan_generation_json), plan_generation_json),
               status = VALUES(status),

@@ -234,6 +234,7 @@ window.WaterfallTranslations["zh-CN"] = {
   "setupPreparation.list.loading": "正在读取准备脚本",
   "setupPreparation.list.loadFailed": "准备脚本加载失败",
   "projectSettings.saved": "项目配置已保存。",
+  "projectSettings.targetSystemRequired": "当前项目尚未配置被测系统。请先填写“被测系统地址”并保存配置，然后生成 Seed。",
   "projectSettings.seedGenerationFailed": "Seed 生成失败。",
   "projectSettings.seedGenerationComplete": "Seed 生成完成。",
   "projectSettings.seedModePersistenceWarning": "Seed 文件已生成，但类型元数据暂未写入数据库；系统将以 Seed 文件内容识别类型。",

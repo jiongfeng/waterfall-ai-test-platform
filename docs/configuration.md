@@ -73,13 +73,6 @@ Docker 包装脚本默认读取仓库根目录 `config.json`，也可用
       "playwright_project_root": "/data/playwright-projects/default",
       "specs_dir": "specs",
       "tests_dir": "tests",
-      "target_system": {
-        "base_url": "https://test.example.invalid",
-        "login_url": "/login",
-        "username": "",
-        "password": "",
-        "seed_mode": "login"
-      },
       "database_baseline": {
         "enabled": false
       },
@@ -94,8 +87,9 @@ Docker 包装脚本默认读取仓库根目录 `config.json`，也可用
 }
 ```
 
-`example.invalid` 是保留域名。运行自动化前必须改成已获授权、隔离且可恢复的
-测试系统地址。
+进入任何尚未配置被测系统的项目时，平台都会自动打开项目配置页，提示填写地址
+并聚焦地址字段。保存配置并生成 Seed 后再运行浏览器自动化。被测系统信息由网页
+维护并保存在平台数据库中，不写入 `config.json`。
 
 ## 运行时环境变量
 
@@ -122,26 +116,22 @@ Docker 包装脚本默认读取仓库根目录 `config.json`，也可用
 回退值显式开启两个能力。执行开关不是隔离措施；开启后，代码仍与平台共享容器
 操作系统边界。
 
-### 文件中的连接与被测系统凭据
+### 文件中的连接凭据与项目内被测系统凭据
 
-OpenCode、平台数据库和被测系统凭据按原有配置字段保存：
+OpenCode 和平台数据库凭据保存在 `config.json`：
 
 ```json
 {
   "opencode_password": "<OpenCode 服务密码>",
   "platform_database": {
     "password": "<平台数据库密码>"
-  },
-  "projects": [
-    {
-      "target_system": {
-        "username": "demo-user",
-        "password": "<专用测试密码>"
-      }
-    }
-  ]
+  }
 }
 ```
+
+被测系统地址和测试账号通过网页中的“项目配置”维护，并保存在平台数据库的项目
+记录中。不要再把 `target_system` 写回 `config.json`；旧配置即使暂时保留该字段，
+启动同步也只会用于初始化空记录，不会覆盖网页已经保存的值。
 
 页面清单沿用 `username` 和可选的 `password_ref` 元数据，例如：
 
@@ -179,9 +169,8 @@ Git 和执行产物。因此只能使用隔离非生产系统中的可撤销、�
    `auth.session_secret` 与 `auth.initial_admin_password`；未设置时读取文件值。
 4. 平台数据库密码从 `platform_database.password` 读取。
 5. OpenCode 密码从全局或项目级 `opencode_password` 读取。
-6. 被测系统凭据从项目的 `target_system.username` 和
-   `target_system.password` 读取。
-7. 项目级 OpenCode、被测系统、数据库基线和计划生成配置覆盖全局默认值。
+6. 被测系统凭据从平台数据库中的项目设置读取。
+7. 项目级 OpenCode、数据库基线和计划生成配置覆盖全局默认值。
 
 ## 项目配置
 
@@ -236,9 +225,13 @@ URL 不得内嵌用户名或密码。OpenCode/模型属于外部数据处理边�
 - `opencode-auth-list` 只显示 OpenCode 凭据文件记录的服务商，不显示秘密值；
   依赖环境变量或云 SDK 身份的服务商不一定出现在该列表中。
 - `opencode-models` 输出可用于配置的 `provider/model` ID。
-- `opencode-set-model` 原子更新全局 `opencode.json` 的 `model` 字段，并保留该
-  JSON 文件中的其他配置。若存在 `opencode.jsonc`，命令会拒绝生成竞争配置，
-  应人工更新 JSONC 中的 `model` 字段。
+- `opencode-set-model` 原子更新全局 `opencode.json` 的 `model` 字段，并保留其中
+  的其他配置。OpenCode 启动时自动生成的 `opencode.jsonc` 是严格 JSON，命令会
+  先校验并安全迁移为 `opencode.json`；如果 JSONC 使用了注释、尾随逗号等语法，
+  命令会保持原文件不变并要求人工更新。两个文件同时存在时命令会拒绝修改，避免
+  覆盖不明确的配置。
+- `opencode-model-status` 会直接读取严格 JSON 配置；对于带注释的 JSONC，则调用
+  OpenCode 解析最终配置，并且只输出默认模型 ID，不输出服务商配置或秘密值。
 - `opencode-provider-smoke` 在不读取项目文件的临时目录中执行固定提示词，要求
   模型返回验证标记；它验证真实推理，不等同于单纯的 OpenCode HTTP 健康检查。
 
@@ -364,7 +357,7 @@ Agent 流式输出采用固定的安全阈值：模型 delta 和高频工具 log
 ## 启动前检查
 
 - JSON 可以严格解析，没有重复项目 key；
-- 示例保留域名已替换为授权测试目标；
+- 要执行浏览器自动化的项目已在项目配置页填写获授权的隔离测试目标并生成 Seed；
 - 认证秘密和管理员密码相互独立并满足强度要求；
 - 实际配置文件未被 Git 跟踪、权限受限，仓库和待发布历史通过秘密扫描；
 - MySQL 账号只能访问平台数据库；
