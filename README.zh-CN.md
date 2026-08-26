@@ -101,10 +101,14 @@ chmod 600 config.json .env
 ./deploy/platform-compose opencode-provider-smoke PROVIDER_ID/MODEL_ID
 ```
 
-请把 `PROVIDER_ID` 和 `MODEL_ID` 替换为 `opencode-models` 输出的实际 ID。不同
-模型服务商可能要求输入 API Key，也可能启动 OAuth 登录。`opencode-auth-list`
-只列出已保存的服务商名称，不打印秘密；`opencode-model-status` 显示已配置的全局
-默认模型。各服务商的具体要求见 [OpenCode Providers 官方文档](https://opencode.ai/docs/providers)。
+`opencode-auth-login` 会启动 OpenCode 的交互式模型服务商认证流程。先选择要使用
+的 Provider，再按照该 Provider 的提示完成 OAuth 登录或输入 API Key。该流程与
+[OpenCode Providers 官方文档](https://opencode.ai/docs/providers)记录的各服务商
+认证方式一致。
+
+请把 `PROVIDER_ID` 和 `MODEL_ID` 替换为 `opencode-models` 输出的实际 ID。
+`opencode-auth-list` 只列出已保存的服务商名称，不打印秘密；
+`opencode-model-status` 显示已配置的全局默认模型。
 
 `OPENCODE_SERVER_PASSWORD` 只保护平台到 OpenCode 的 HTTP 服务，并不是模型
 API Key。服务商凭据和全局模型配置分别保存在 OpenCode 的持久化数据目录与配置
