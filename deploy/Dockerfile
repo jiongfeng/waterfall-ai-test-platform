@@ -76,6 +76,10 @@ RUN set -eu; \
         opencode --version; \
     rm -rf -- "${opencode_probe_root}"
 
+COPY --chown=root:root deploy/opencode-provider.py /usr/local/bin/platform-opencode-provider
+
+RUN chmod 0555 /usr/local/bin/platform-opencode-provider
+
 COPY --chown=pwuser:pwuser app.py requirements.txt LICENSE THIRD_PARTY_NOTICES.md ./
 COPY --chown=pwuser:pwuser test_plan_viewer/ ./test_plan_viewer/
 COPY --chown=pwuser:pwuser static/ ./static/

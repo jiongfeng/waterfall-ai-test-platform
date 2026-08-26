@@ -206,7 +206,7 @@ Git 和执行产物。因此只能使用隔离非生产系统中的可撤销、�
 
 ## OpenCode
 
-全局或项目级配置记录：
+平台连接 OpenCode 服务的全局或项目级配置记录：
 
 - `opencode_server_url`；
 - `opencode_username`，它是服务标识，不是密码；
@@ -214,6 +214,54 @@ Git 和执行产物。因此只能使用隔离非生产系统中的可撤销、�
 
 URL 不得内嵌用户名或密码。OpenCode/模型属于外部数据处理边界，发送需求、
 页面内容和日志前应完成授权与合规评估。
+
+上述三个字段只负责平台到 OpenCode HTTP 服务的连接与认证，不会配置模型
+服务商。特别是 `.env` 中的 `OPENCODE_SERVER_PASSWORD` 不是模型 API Key。
+
+### 模型服务商和默认模型
+
+常用模型服务商通过 OpenCode 官方认证流程配置：
+
+```bash
+./deploy/platform-compose opencode-auth-login
+./deploy/platform-compose opencode-auth-list
+./deploy/platform-compose opencode-models PROVIDER_ID
+./deploy/platform-compose opencode-set-model PROVIDER_ID/MODEL_ID
+./deploy/platform-compose opencode-model-status
+./deploy/platform-compose opencode-provider-smoke PROVIDER_ID/MODEL_ID
+```
+
+- `opencode-auth-login` 必须在交互式终端运行；OpenCode 会根据服务商要求提示
+  API Key 或 OAuth 登录。
+- `opencode-auth-list` 只显示 OpenCode 凭据文件记录的服务商，不显示秘密值；
+  依赖环境变量或云 SDK 身份的服务商不一定出现在该列表中。
+- `opencode-models` 输出可用于配置的 `provider/model` ID。
+- `opencode-set-model` 原子更新全局 `opencode.json` 的 `model` 字段，并保留该
+  JSON 文件中的其他配置。若存在 `opencode.jsonc`，命令会拒绝生成竞争配置，
+  应人工更新 JSONC 中的 `model` 字段。
+- `opencode-provider-smoke` 在不读取项目文件的临时目录中执行固定提示词，要求
+  模型返回验证标记；它验证真实推理，不等同于单纯的 OpenCode HTTP 健康检查。
+
+容器模式的全局模型配置位于持久卷中的
+`/home/pwuser/.config/opencode/opencode.json`，凭据位于持久数据卷中的
+`/home/pwuser/.local/share/opencode/auth.json`。macOS 原生模式分别使用：
+
+```text
+deploy/.runtime/native-opencode/config/opencode/opencode.json
+deploy/.runtime/native-opencode/data/opencode/auth.json
+```
+
+不要提交、上传或打印 `auth.json`；备份包含该文件时必须加密并限制访问。项目根
+目录的 `opencode.json` 优先级高于全局配置，因此项目级 `model` 或 Agent 级
+`model` 可以覆盖 `opencode-set-model` 设置的全局默认值。
+
+自定义兼容服务商可能还需要在 `opencode.json` 的 `provider` 节点配置 `npm`、
+`baseURL` 和模型清单。字段结构、服务商专用环境要求与认证方法以
+[OpenCode Providers](https://opencode.ai/docs/providers)、
+[OpenCode Config](https://opencode.ai/docs/config) 和
+[OpenCode Models](https://opencode.ai/docs/models) 为准。平台命令只封装稳定的
+认证、模型选择与验证流程，不会把未知服务商的秘密自动写入 `.env` 或
+`config.json`。
 
 ## 计划生成和超时
 

@@ -90,14 +90,34 @@ chmod 600 config.json .env
 首次构建可能需要几分钟。该快速开始只支持全新安装；如果运行目录或 Compose
 项目已经存在，`preflight-install` 会拒绝继续。
 
+### 3. 配置并验证模型服务商
+
+先使用 OpenCode 的交互式登录，再选择并验证经批准的模型：
+
+```bash
+./deploy/platform-compose opencode-auth-login
+./deploy/platform-compose opencode-models PROVIDER_ID
+./deploy/platform-compose opencode-set-model PROVIDER_ID/MODEL_ID
+./deploy/platform-compose opencode-provider-smoke PROVIDER_ID/MODEL_ID
+```
+
+请把 `PROVIDER_ID` 和 `MODEL_ID` 替换为 `opencode-models` 输出的实际 ID。不同
+模型服务商可能要求输入 API Key，也可能启动 OAuth 登录。`opencode-auth-list`
+只列出已保存的服务商名称，不打印秘密；`opencode-model-status` 显示已配置的全局
+默认模型。各服务商的具体要求见 [OpenCode Providers 官方文档](https://opencode.ai/docs/providers)。
+
+`OPENCODE_SERVER_PASSWORD` 只保护平台到 OpenCode 的 HTTP 服务，并不是模型
+API Key。服务商凭据和全局模型配置分别保存在 OpenCode 的持久化数据目录与配置
+目录中。只使用专用、最小权限的凭据，不要把模型 API Key 写入 `config.json` 或
+`.env`。
+
 服务健康后，打开
 [http://127.0.0.1:5000](http://127.0.0.1:5000)，使用 `admin` 登录。
 密码是本机 `.env` 中的 `PLATFORM_ADMIN_PASSWORD`。
 
 Docker 示例故意把被测地址设为保留域名
 `https://test.example.invalid`。运行浏览器自动化前，必须在 `config.json` 中将其
-替换为已获授权的测试系统地址。依赖 Agent 功能前，还应配置经批准的模型 Provider，
-并完成一次不含凭据的最小推理冒烟测试。
+替换为已获授权的测试系统地址。
 
 常用命令：
 

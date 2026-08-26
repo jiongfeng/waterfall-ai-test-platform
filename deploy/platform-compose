@@ -42,6 +42,17 @@ Supported commands:
   preflight-install  Verify a fresh source install using the secured project identity.
   validate-config    Validate the source config without staging it.
   apply-config       Stage config and force-recreate only the platform service.
+  opencode-auth-login
+                     Configure a model Provider using OpenCode's interactive login.
+  opencode-auth-list List Provider credentials known to OpenCode (never secret values).
+  opencode-models [PROVIDER]
+                     List model IDs, optionally filtered by Provider ID.
+  opencode-set-model PROVIDER/MODEL
+                     Set the persistent global default model.
+  opencode-model-status
+                     Show the persistent global default model.
+  opencode-provider-smoke PROVIDER/MODEL
+                     Run a credential-free inference and verify the response marker.
   migrate-native-opencode
                      Switch an existing macOS volume deployment to native OpenCode.
   native-opencode-status
@@ -71,6 +82,12 @@ require_no_arguments() {
     local command_name="$1"
     shift
     (( $# == 0 )) || fail "${command_name} does not accept arguments."
+}
+
+require_one_argument() {
+    local command_name="$1"
+    shift
+    (( $# == 1 )) || fail "${command_name} requires exactly one argument."
 }
 
 stage_runtime_config() {
@@ -194,6 +211,26 @@ run_native_opencode() {
     python3 "${NATIVE_OPENCODE_CONTROL}" "$@" \
         --runtime-root "${RUNTIME_ROOT}" \
         --env-file "${ENV_FILE}"
+}
+
+run_opencode_provider() {
+    local action="$1"
+    shift
+    local -a native_arguments=(provider --provider-action "${action}")
+
+    if (($#)); then
+        native_arguments+=(--provider-value "$1")
+    fi
+    if [[ "${OPENCODE_MODE}" == "native" ]]; then
+        run_native_opencode "${native_arguments[@]}"
+        return
+    fi
+    if [[ "${action}" == "auth-login" ]]; then
+        run_compose exec opencode /usr/local/bin/platform-opencode-provider "${action}"
+    else
+        run_compose exec --no-TTY --interactive=false opencode \
+            /usr/local/bin/platform-opencode-provider "${action}" "$@"
+    fi
 }
 
 start_native_opencode() {
@@ -794,7 +831,7 @@ main() {
     shift
 
     case "${command_name}" in
-        up | ps | logs | stop | down | verify | init-config | preflight-install | validate-config | apply-config | runtime-id | repair-opencode-volumes | repair-state | migrate-native-opencode | native-opencode-status)
+        up | ps | logs | stop | down | verify | init-config | preflight-install | validate-config | apply-config | runtime-id | repair-opencode-volumes | repair-state | migrate-native-opencode | native-opencode-status | opencode-auth-login | opencode-auth-list | opencode-models | opencode-set-model | opencode-model-status | opencode-provider-smoke)
             ;;
         *)
             usage >&2
@@ -837,7 +874,7 @@ main() {
         up | apply-config | migrate-native-opencode)
             stage_runtime_config
             ;;
-        ps | logs | stop | down | verify | runtime-id | repair-opencode-volumes | repair-state | native-opencode-status)
+        ps | logs | stop | down | verify | runtime-id | repair-opencode-volumes | repair-state | native-opencode-status | opencode-auth-login | opencode-auth-list | opencode-models | opencode-set-model | opencode-model-status | opencode-provider-smoke)
             reuse_or_stage_runtime_config
             ;;
     esac
@@ -875,6 +912,30 @@ main() {
                 || fail "Native OpenCode failed to start."
             run_compose up --detach --no-deps --force-recreate \
                 --no-build --pull never platform
+            ;;
+        opencode-auth-login)
+            require_no_arguments "${command_name}" "$@"
+            run_opencode_provider auth-login
+            ;;
+        opencode-auth-list)
+            require_no_arguments "${command_name}" "$@"
+            run_opencode_provider auth-list
+            ;;
+        opencode-models)
+            (( $# <= 1 )) || fail "${command_name} accepts at most one Provider ID."
+            run_opencode_provider models "$@"
+            ;;
+        opencode-set-model)
+            require_one_argument "${command_name}" "$@"
+            run_opencode_provider set-model "$1"
+            ;;
+        opencode-model-status)
+            require_no_arguments "${command_name}" "$@"
+            run_opencode_provider show-model
+            ;;
+        opencode-provider-smoke)
+            require_one_argument "${command_name}" "$@"
+            run_opencode_provider smoke "$1"
             ;;
         runtime-id)
             require_no_arguments "${command_name}" "$@"

@@ -107,14 +107,37 @@ The first build may take several minutes. This quickstart supports a fresh
 installation only; `preflight-install` rejects an existing runtime or Compose
 project.
 
+### 3. Configure and verify a model Provider
+
+Use OpenCode's interactive login, then select and verify an approved model:
+
+```bash
+./deploy/platform-compose opencode-auth-login
+./deploy/platform-compose opencode-models PROVIDER_ID
+./deploy/platform-compose opencode-set-model PROVIDER_ID/MODEL_ID
+./deploy/platform-compose opencode-provider-smoke PROVIDER_ID/MODEL_ID
+```
+
+Replace `PROVIDER_ID` and `MODEL_ID` with an ID printed by `opencode-models`.
+The login may request an API key or open an OAuth flow, depending on the
+Provider. `opencode-auth-list` lists stored Provider names without printing
+secret values, and `opencode-model-status` shows the configured global default.
+See [OpenCode Providers](https://opencode.ai/docs/providers) for Provider-specific
+requirements.
+
+`OPENCODE_SERVER_PASSWORD` secures the platform-to-OpenCode HTTP service; it is
+not a model API key. Provider credentials and the global model configuration
+are stored in the persistent OpenCode data and config locations respectively.
+Use only a dedicated, least-privilege credential and do not copy its value into
+`config.json` or `.env`.
+
 When the services are healthy, open
 [http://127.0.0.1:5000](http://127.0.0.1:5000) and sign in as `admin`.
 The password is the local `PLATFORM_ADMIN_PASSWORD` value in `.env`.
 
 The Docker example deliberately uses `https://test.example.invalid` as the
 target. Replace it in `config.json` with an authorized test-system URL before
-running browser automation. Configure an approved model provider and complete
-one credential-free inference smoke test before relying on Agent features.
+running browser automation.
 
 Useful commands:
 
