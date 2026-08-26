@@ -137,9 +137,11 @@ When the services are healthy, open
 [http://127.0.0.1:5000](http://127.0.0.1:5000) and sign in as `admin`.
 The password is the local `PLATFORM_ADMIN_PASSWORD` value in `.env`.
 
-The Docker example deliberately uses `https://test.example.invalid` as the
-target. Replace it in `config.json` with an authorized test-system URL before
-running browser automation.
+When you enter any project without a target system, the platform opens Project
+settings and prompts you to enter an authorized, isolated test-system URL. Save
+that setting and generate a Seed before running browser automation. Configure
+an approved model provider and complete one credential-free inference smoke
+test before relying on Agent features.
 
 Useful commands:
 
@@ -166,10 +168,11 @@ PLATFORM_ALLOW_TEST_EXECUTION=false
 
 ## Configuration and secrets
 
-For compatibility, `config.json` stores the OpenCode password, platform database
-password, and each target system's login username and password. Keep the file
-outside source control, restrict it to the service account, and include it only
-in encrypted, access-controlled backups.
+`config.json` stores the OpenCode and platform database passwords. Target-system
+settings are maintained in Project settings and stored in the platform database,
+so config synchronization cannot overwrite UI changes. Keep both stores outside
+source control, restrict them to the service account, and include them only in
+encrypted, access-controlled backups.
 
 | Variable | Purpose |
 | --- | --- |

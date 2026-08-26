@@ -73,13 +73,6 @@ Docker 包装脚本默认读取仓库根目录 `config.json`，也可用
       "playwright_project_root": "/data/playwright-projects/default",
       "specs_dir": "specs",
       "tests_dir": "tests",
-      "target_system": {
-        "base_url": "https://test.example.invalid",
-        "login_url": "/login",
-        "username": "",
-        "password": "",
-        "seed_mode": "login"
-      },
       "database_baseline": {
         "enabled": false
       },
@@ -94,8 +87,9 @@ Docker 包装脚本默认读取仓库根目录 `config.json`，也可用
 }
 ```
 
-`example.invalid` 是保留域名。运行自动化前必须改成已获授权、隔离且可恢复的
-测试系统地址。
+进入任何尚未配置被测系统的项目时，平台都会自动打开项目配置页，提示填写地址
+并聚焦地址字段。保存配置并生成 Seed 后再运行浏览器自动化。被测系统信息由网页
+维护并保存在平台数据库中，不写入 `config.json`。
 
 ## 运行时环境变量
 
@@ -122,26 +116,22 @@ Docker 包装脚本默认读取仓库根目录 `config.json`，也可用
 回退值显式开启两个能力。执行开关不是隔离措施；开启后，代码仍与平台共享容器
 操作系统边界。
 
-### 文件中的连接与被测系统凭据
+### 文件中的连接凭据与项目内被测系统凭据
 
-OpenCode、平台数据库和被测系统凭据按原有配置字段保存：
+OpenCode 和平台数据库凭据保存在 `config.json`：
 
 ```json
 {
   "opencode_password": "<OpenCode 服务密码>",
   "platform_database": {
     "password": "<平台数据库密码>"
-  },
-  "projects": [
-    {
-      "target_system": {
-        "username": "demo-user",
-        "password": "<专用测试密码>"
-      }
-    }
-  ]
+  }
 }
 ```
+
+被测系统地址和测试账号通过网页中的“项目配置”维护，并保存在平台数据库的项目
+记录中。不要再把 `target_system` 写回 `config.json`；旧配置即使暂时保留该字段，
+启动同步也只会用于初始化空记录，不会覆盖网页已经保存的值。
 
 页面清单沿用 `username` 和可选的 `password_ref` 元数据，例如：
 
@@ -179,9 +169,8 @@ Git 和执行产物。因此只能使用隔离非生产系统中的可撤销、�
    `auth.session_secret` 与 `auth.initial_admin_password`；未设置时读取文件值。
 4. 平台数据库密码从 `platform_database.password` 读取。
 5. OpenCode 密码从全局或项目级 `opencode_password` 读取。
-6. 被测系统凭据从项目的 `target_system.username` 和
-   `target_system.password` 读取。
-7. 项目级 OpenCode、被测系统、数据库基线和计划生成配置覆盖全局默认值。
+6. 被测系统凭据从平台数据库中的项目设置读取。
+7. 项目级 OpenCode、数据库基线和计划生成配置覆盖全局默认值。
 
 ## 项目配置
 
@@ -364,7 +353,7 @@ Agent 流式输出采用固定的安全阈值：模型 delta 和高频工具 log
 ## 启动前检查
 
 - JSON 可以严格解析，没有重复项目 key；
-- 示例保留域名已替换为授权测试目标；
+- 要执行浏览器自动化的项目已在项目配置页填写获授权的隔离测试目标并生成 Seed；
 - 认证秘密和管理员密码相互独立并满足强度要求；
 - 实际配置文件未被 Git 跟踪、权限受限，仓库和待发布历史通过秘密扫描；
 - MySQL 账号只能访问平台数据库；

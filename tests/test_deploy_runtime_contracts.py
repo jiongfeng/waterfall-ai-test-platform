@@ -34,6 +34,11 @@ class DeployRuntimeContractTests(unittest.TestCase):
         )
         return config
 
+    def test_quickstart_leaves_target_system_to_project_settings(self):
+        config = self.valid_config()
+
+        self.assertNotIn("target_system", config["projects"][0])
+
     def write_source_config(self, path, config=None, mode=0o600):
         payload = self.valid_config() if config is None else config
         path.write_text(

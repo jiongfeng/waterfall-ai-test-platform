@@ -204,6 +204,7 @@ const feature = context.window.createProjectSettingsFeature({
         project: {
           project_key: "alpha",
           name: "Alpha",
+          is_default: false,
         },
         target_system: {
           base_url: "https://target.example",
@@ -303,6 +304,7 @@ assert.strictEqual(
   assert.ok(renderCalls >= 1);
 
   feature.renderProjectSettingsPanel();
+  assert.match(projectSettingsPanel.innerHTML, /id="projectTargetBaseUrl"[^>]*required/);
   assert.match(projectSettingsPanel.innerHTML, /id="projectSeedGenerateToggle"/);
   assert.match(projectSettingsPanel.innerHTML, /data-seed-mode="visit_only"/);
   assert.match(projectSettingsPanel.innerHTML, /data-seed-mode="login"/);

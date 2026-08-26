@@ -439,7 +439,7 @@ function renderProjectSettingsPanel() {
         <div class="admin-form-grid project-settings-grid">
           <label class="form-field">
             <span>${t("projectSettings.targetBaseUrl")}</span>
-            <input id="projectTargetBaseUrl" type="url" value="${escapeHtml(target.base_url)}" placeholder="http://127.0.0.1:8080" />
+            <input id="projectTargetBaseUrl" type="url" value="${escapeHtml(target.base_url)}" placeholder="http://127.0.0.1:8080" required aria-required="true" />
           </label>
           <label class="form-field">
             <span>${t("projectSettings.loginUrl")}</span>

@@ -1948,6 +1948,8 @@ const projectsFeature = createProjectsFeature({
   renderContent,
   setNotice,
   escapeHtml,
+  persistViewState,
+  PROJECT_SETTINGS_SECTION: SECTION.PROJECT_SETTINGS,
 });
 const {
   normalizeProject,
@@ -1955,6 +1957,8 @@ const {
   renderProjectSelect,
   loadProjects,
   switchProject,
+  routeUnconfiguredProjectToSettings,
+  notifyUnconfiguredProject,
 } = projectsFeature;
 projectsFeature.bindProjectManagementEvents();
 
@@ -4089,9 +4093,13 @@ async function bootstrap() {
   renderContent();
   await hydratePlatformRecords();
   ensureAllowedActiveSection();
+  const requiresTargetSystem = routeUnconfiguredProjectToSettings();
   renderSideList();
   renderContent();
   await loadActiveSection();
+  if (requiresTargetSystem) {
+    notifyUnconfiguredProject();
+  }
   // Some modal and panel markup exists before the locale observer starts.
   // Run one final pass after initial hydration so hidden controls cannot keep
   // their source-language copy until they are opened or re-rendered.

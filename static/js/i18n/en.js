@@ -234,6 +234,7 @@ window.WaterfallTranslations.en = {
   "setupPreparation.list.loading": "Loading setup scripts",
   "setupPreparation.list.loadFailed": "Could not load setup scripts",
   "projectSettings.saved": "Project settings saved.",
+  "projectSettings.targetSystemRequired": "This project does not have a target system. Enter the Target system URL, save the settings, and then generate a Seed.",
   "projectSettings.seedGenerationFailed": "Seed generation failed.",
   "projectSettings.seedGenerationComplete": "Seed generation completed.",
   "projectSettings.seedModePersistenceWarning": "The Seed file was generated, but its type metadata could not be saved; the platform will detect the type from the Seed file.",

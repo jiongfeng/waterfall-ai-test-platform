@@ -83,8 +83,10 @@ function createProjectsFeature(deps) {
     renderContent,
     setNotice,
     escapeHtml,
+    persistViewState = () => {},
+    PROJECT_SETTINGS_SECTION = "projectSettings",
   } = deps;
-  const { hasProjectSettingsPermission } = admin;
+  const { hasProjectSettingsPermission, hasMenu } = admin;
   const { resetTestSuiteExecutionHistory } = testSuites;
   const { isAnyScriptJobRunning } = jobs;
 
@@ -113,6 +115,46 @@ function normalizeProject(project) {
     is_default: Boolean(project.is_default),
     is_system: Boolean(project.is_system),
   };
+}
+
+function hasConfiguredTargetSystem(project = state.project.current) {
+  return Boolean(
+    project &&
+      isPlainObject(project.target_system) &&
+      typeof project.target_system.base_url === "string" &&
+      project.target_system.base_url.trim(),
+  );
+}
+
+function routeUnconfiguredProjectToSettings() {
+  const project = state.project.current;
+  if (
+    !project ||
+    hasConfiguredTargetSystem(project) ||
+    !(hasMenu?.(PROJECT_SETTINGS_SECTION) ?? hasProjectSettingsPermission())
+  ) {
+    return false;
+  }
+
+  state.isEditing = false;
+  state.activeSection = PROJECT_SETTINGS_SECTION;
+  state.projectSettings.activeTab = PROJECT_SETTINGS_VIEW_TAB.BASIC;
+  persistViewState();
+  return true;
+}
+
+function notifyUnconfiguredProject() {
+  setNotice(
+    projectMessage(
+      "projectSettings.targetSystemRequired",
+      {},
+      "当前项目尚未配置被测系统。请先填写被测系统地址并保存配置，然后生成 Seed。",
+    ),
+    "error",
+  );
+  elements.projectSettingsPanel
+    ?.querySelector?.("#projectTargetBaseUrl")
+    ?.focus?.();
 }
 
 function resetProjectScopedState() {
@@ -937,16 +979,23 @@ async function switchProject(projectKey) {
     return;
   }
   resetProjectScopedState();
+  const requiresTargetSystem = routeUnconfiguredProjectToSettings();
   setNotice("");
   renderProjectSelect();
   renderSideList();
   renderContent();
   await hydratePlatformRecords();
   await loadActiveSection();
+  if (requiresTargetSystem) {
+    notifyUnconfiguredProject();
+  }
 }
 
 return {
   normalizeProject,
+  hasConfiguredTargetSystem,
+  routeUnconfiguredProjectToSettings,
+  notifyUnconfiguredProject,
   resetProjectScopedState,
   renderProjectSelect,
   loadProjects,

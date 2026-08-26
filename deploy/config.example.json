@@ -35,13 +35,6 @@
       "playwright_project_root": "/data/playwright-projects/default",
       "specs_dir": "specs",
       "tests_dir": "tests",
-      "target_system": {
-        "base_url": "https://test.example.invalid",
-        "login_url": "/login",
-        "username": "",
-        "password": "",
-        "seed_mode": "login"
-      },
       "database_baseline": {
         "enabled": false
       },

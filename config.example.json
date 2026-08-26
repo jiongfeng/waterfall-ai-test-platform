@@ -35,13 +35,6 @@
       "playwright_project_root": "./examples/demo-workspace",
       "specs_dir": "specs",
       "tests_dir": "tests",
-      "target_system": {
-        "base_url": "http://127.0.0.1:3000",
-        "login_url": "/login",
-        "username": "",
-        "password": "",
-        "seed_mode": "login"
-      },
       "database_baseline": {
         "enabled": false
       },
