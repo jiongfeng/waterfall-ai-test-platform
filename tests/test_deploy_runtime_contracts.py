@@ -540,8 +540,9 @@ class DeployRuntimeContractTests(unittest.TestCase):
         self.assertEqual(compose.count("- ALL"), 2)
         self.assertEqual(
             wrapper.count("run_compose exec --no-TTY --interactive=false"),
-            3,
+            4,
         )
+        self.assertIn("/usr/local/bin/platform-opencode-provider", wrapper)
         self.assertIn("profiles:", compose)
         self.assertIn("container-opencode", compose)
         self.assertIn("PLATFORM_PROJECTS_MOUNT_TYPE", compose)

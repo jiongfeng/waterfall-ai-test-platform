@@ -42,6 +42,14 @@ PATH_COLUMNS = (
     ("test_run_artifacts", "path"),
     ("test_run_results", "script_path"),
 )
+PROVIDER_ACTIONS = (
+    "auth-login",
+    "auth-list",
+    "models",
+    "set-model",
+    "show-model",
+    "smoke",
+)
 
 
 class NativeOpenCodeError(RuntimeError):
@@ -210,6 +218,31 @@ def run_server(runtime_root: Path, env_file: Path, binary: Path) -> None:
         [str(binary), "serve", "--hostname", HOST, "--port", str(PORT)],
         environment,
     )
+
+
+def run_provider_command(
+    runtime_root: Path,
+    env_file: Path,
+    binary: Path,
+    action: str,
+    value: str | None,
+) -> int:
+    helper = Path(__file__).with_name("opencode-provider.py").resolve()
+    if not helper.is_file() or helper.is_symlink():
+        raise NativeOpenCodeError(f"OpenCode provider helper is unavailable: {helper}")
+    arguments = [sys.executable, str(helper), action]
+    if value is not None:
+        arguments.append(value)
+    environment = build_environment(runtime_root, env_file)
+    environment["PATH"] = f"{binary.parent}{os.pathsep}{environment.get('PATH', '')}"
+    environment["WATERFALL_OPENCODE_BINARY"] = str(binary)
+    result = subprocess.run(
+        arguments,
+        cwd=runtime_root / "data/playwright-workspaces",
+        env=environment,
+        check=False,
+    )
+    return result.returncode
 
 
 def plist_payload(
@@ -564,6 +597,7 @@ def build_parser() -> argparse.ArgumentParser:
             "status",
             "verify",
             "manifest",
+            "provider",
             "migrate-volumes",
             "migrate-database",
         ),
@@ -577,6 +611,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--projects-root", type=Path)
     parser.add_argument("--workspaces-root", type=Path)
     parser.add_argument("--reverse", action="store_true")
+    parser.add_argument("--provider-action", choices=PROVIDER_ACTIONS)
+    parser.add_argument("--provider-value")
     return parser
 
 
@@ -615,6 +651,25 @@ def main() -> int:
         binary = resolve_binary(args.opencode_binary)
         if args.command == "run":
             run_server(runtime_root, env_file, binary)
+        elif args.command == "provider":
+            if args.provider_action is None:
+                raise NativeOpenCodeError("provider requires --provider-action")
+            value_required = args.provider_action in {"models", "set-model", "smoke"}
+            if value_required and args.provider_value is None and args.provider_action != "models":
+                raise NativeOpenCodeError(
+                    f"provider action {args.provider_action} requires --provider-value"
+                )
+            if not value_required and args.provider_value is not None:
+                raise NativeOpenCodeError(
+                    f"provider action {args.provider_action} does not accept a value"
+                )
+            return run_provider_command(
+                runtime_root,
+                env_file,
+                binary,
+                args.provider_action,
+                args.provider_value,
+            )
         elif args.command == "start":
             start(
                 runtime_root,
