@@ -115,6 +115,7 @@ Use OpenCode's interactive login, then select and verify an approved model:
 ./deploy/platform-compose opencode-auth-login
 ./deploy/platform-compose opencode-models PROVIDER_ID
 ./deploy/platform-compose opencode-set-model PROVIDER_ID/MODEL_ID
+./deploy/platform-compose opencode-model-status
 ./deploy/platform-compose opencode-provider-smoke PROVIDER_ID/MODEL_ID
 ```
 
@@ -126,6 +127,10 @@ flow documented by [OpenCode Providers](https://opencode.ai/docs/providers).
 Replace `PROVIDER_ID` and `MODEL_ID` with an ID printed by `opencode-models`.
 `opencode-auth-list` lists stored Provider names without printing secret values,
 and `opencode-model-status` shows the configured global default.
+If OpenCode created a strict-JSON `opencode.jsonc` during startup,
+`opencode-set-model` safely migrates it to `opencode.json` while preserving its
+other settings. A customized JSONC file that uses comments or trailing commas is
+left unchanged and must be edited manually.
 
 `OPENCODE_SERVER_PASSWORD` secures the platform-to-OpenCode HTTP service; it is
 not a model API key. Provider credentials and the global model configuration

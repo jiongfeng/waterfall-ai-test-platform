@@ -225,9 +225,13 @@ URL 不得内嵌用户名或密码。OpenCode/模型属于外部数据处理边�
 - `opencode-auth-list` 只显示 OpenCode 凭据文件记录的服务商，不显示秘密值；
   依赖环境变量或云 SDK 身份的服务商不一定出现在该列表中。
 - `opencode-models` 输出可用于配置的 `provider/model` ID。
-- `opencode-set-model` 原子更新全局 `opencode.json` 的 `model` 字段，并保留该
-  JSON 文件中的其他配置。若存在 `opencode.jsonc`，命令会拒绝生成竞争配置，
-  应人工更新 JSONC 中的 `model` 字段。
+- `opencode-set-model` 原子更新全局 `opencode.json` 的 `model` 字段，并保留其中
+  的其他配置。OpenCode 启动时自动生成的 `opencode.jsonc` 是严格 JSON，命令会
+  先校验并安全迁移为 `opencode.json`；如果 JSONC 使用了注释、尾随逗号等语法，
+  命令会保持原文件不变并要求人工更新。两个文件同时存在时命令会拒绝修改，避免
+  覆盖不明确的配置。
+- `opencode-model-status` 会直接读取严格 JSON 配置；对于带注释的 JSONC，则调用
+  OpenCode 解析最终配置，并且只输出默认模型 ID，不输出服务商配置或秘密值。
 - `opencode-provider-smoke` 在不读取项目文件的临时目录中执行固定提示词，要求
   模型返回验证标记；它验证真实推理，不等同于单纯的 OpenCode HTTP 健康检查。
 
