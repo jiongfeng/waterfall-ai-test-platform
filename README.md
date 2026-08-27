@@ -23,6 +23,10 @@ https://github.com/user-attachments/assets/5aff4173-5871-4e76-a9bb-1460ab5ceb1a
   <a href="./docs/assets/waterfall-ai-introduction-en.mp4"><strong>▶ Watch the English introduction video (MP4)</strong></a>
 </p>
 
+<p align="center">
+  <a href="./docs/promotion/human-in-the-loop-playwright-test-agents.md"><strong>Read: Human-in-the-Loop Playwright Test Generation</strong></a>
+</p>
+
 ## A visual workbench for Playwright Test Agents
 
 Playwright Test Agents primarily deliver results through conversations and file
